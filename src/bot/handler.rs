@@ -36,6 +36,9 @@ pub trait EventHandler: Send + Sync + 'static {
 
     /// Fired when a developer dashboard test event is received.
     async fn on_test(&self, _client: &Client, _data: &serde_json::Value) {}
+
+    /// Fired when an unhandled, unrecognized, or newly added event type is received from Yapin'.
+    async fn on_unknown_event(&self, _client: &Client, _kind: &str, _data: &serde_json::Value) {}
 }
 
 /// A default no-op event handler.

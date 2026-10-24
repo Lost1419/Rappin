@@ -239,3 +239,80 @@ fn test_oauth2_authorization_url() {
 fn test_webhook_client_construct() {
     let _ = WebhookClient::new("https://www.yapin.gg/api/bot/v1/webhooks/dummy");
 }
+
+#[test]
+fn test_error_helper_methods() {
+    use rappin::error::YappinError;
+
+    let err_404 = YappinError::Api {
+        status: 404,
+        message: "Channel not found".to_string(),
+        retry_after: None,
+    };
+    assert_eq!(err_404.status_code(), Some(404));
+    assert!(err_404.is_not_found());
+    assert!(!err_404.is_rate_limit());
+    assert!(!err_404.is_server_error());
+
+    let err_429 = YappinError::RateLimited { retry_after: 5.5 };
+    assert_eq!(err_429.status_code(), Some(429));
+    assert!(err_429.is_rate_limit());
+    assert_eq!(err_429.retry_after(), Some(Duration::from_secs_f64(5.5)));
+
+    let err_503 = YappinError::Api {
+        status: 503,
+        message: "Server busy".to_string(),
+        retry_after: Some(2.0),
+    };
+    assert_eq!(err_503.status_code(), Some(503));
+    assert!(err_503.is_server_error());
+    assert_eq!(err_503.retry_after(), Some(Duration::from_secs(2)));
+
+    let err_unauth = YappinError::Unauthorized;
+    assert_eq!(err_unauth.status_code(), Some(401));
+    assert!(err_unauth.is_unauthorized());
+
+    let err_403 = YappinError::Api {
+        status: 403,
+        message: "Forbidden".to_string(),
+        retry_after: None,
+    };
+    assert!(err_403.is_forbidden());
+}
+
+#[test]
+fn test_event_fallback_resiliency() {
+    use rappin::models::{Event, EventData};
+    use serde_json::json;
+
+    // 1. Unrecognized event type should parse to EventData::Unknown
+    let raw = json!({
+        "id": 999,
+        "type": "some_future_yapin_feature",
+        "data": { "foo": "bar" }
+    });
+    let ev: Event = serde_json::from_value(raw).expect("deserializes raw event");
+    let parsed = ev.parse_data().expect("parses event data");
+    match parsed {
+        EventData::Unknown { kind, data } => {
+            assert_eq!(kind, "some_future_yapin_feature");
+            assert_eq!(data["foo"], "bar");
+        }
+        _ => panic!("Expected EventData::Unknown"),
+    }
+
+    // 2. Malformed known event payload should gracefully fall back to EventData::Unknown
+    let malformed_msg = json!({
+        "id": 1000,
+        "type": "message",
+        "data": { "invalid_id": "not a uuid" }
+    });
+    let ev2: Event = serde_json::from_value(malformed_msg).expect("deserializes raw event");
+    let parsed2 = ev2.parse_data().expect("parses event data");
+    match parsed2 {
+        EventData::Unknown { kind, .. } => {
+            assert_eq!(kind, "message");
+        }
+        _ => panic!("Expected fallback to EventData::Unknown on malformed payload"),
+    }
+}

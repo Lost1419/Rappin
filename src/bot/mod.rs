@@ -704,8 +704,11 @@ impl Bot {
                     h.on_test(self.handle.client(), &val).await;
                 }
             }
-            EventData::Unknown { kind, data: _ } => {
+            EventData::Unknown { kind, data } => {
                 debug!("Received unhandled event type: {}", kind);
+                if let Some(ref h) = self.handle.inner.event_handler {
+                    h.on_unknown_event(self.handle.client(), &kind, &data).await;
+                }
             }
         }
     }

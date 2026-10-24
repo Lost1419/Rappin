@@ -9,11 +9,13 @@ use crate::models::embed::Embed;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     /// Incremental event ID.
+    #[serde(default)]
     pub id: u64,
     /// Event type string (e.g. "message", "member_join", "interaction").
-    #[serde(rename = "type")]
+    #[serde(rename = "type", default)]
     pub kind: String,
     /// Event payload.
+    #[serde(default)]
     pub data: serde_json::Value,
     /// Event timestamp.
     #[serde(default)]
@@ -22,18 +24,115 @@ pub struct Event {
 
 impl Event {
     /// Attempts to parse the inner `data` JSON into a strongly typed `EventData`.
+    ///
+    /// If an event kind is unknown or its data schema cannot be deserialized,
+    /// this gracefully falls back to [`EventData::Unknown`] rather than dropping the event loop.
     pub fn parse_data(&self) -> Result<EventData, serde_json::Error> {
         match self.kind.as_str() {
-            "message" => serde_json::from_value(self.data.clone()).map(EventData::Message),
-            "interaction" => serde_json::from_value(self.data.clone()).map(EventData::Interaction),
-            "member_join" => serde_json::from_value(self.data.clone()).map(EventData::MemberJoin),
-            "member_leave" => serde_json::from_value(self.data.clone()).map(EventData::MemberLeave),
-            "reaction_add" => serde_json::from_value(self.data.clone()).map(EventData::ReactionAdd),
-            "reaction_remove" => {
-                serde_json::from_value(self.data.clone()).map(EventData::ReactionRemove)
-            }
-            "voice_join" => serde_json::from_value(self.data.clone()).map(EventData::VoiceJoin),
-            "voice_leave" => serde_json::from_value(self.data.clone()).map(EventData::VoiceLeave),
+            "message" => match serde_json::from_value(self.data.clone()) {
+                Ok(msg) => Ok(EventData::Message(msg)),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse 'message' event: {}. Falling back to Unknown.",
+                        e
+                    );
+                    Ok(EventData::Unknown {
+                        kind: self.kind.clone(),
+                        data: self.data.clone(),
+                    })
+                }
+            },
+            "interaction" => match serde_json::from_value(self.data.clone()) {
+                Ok(inter) => Ok(EventData::Interaction(inter)),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse 'interaction' event: {}. Falling back to Unknown.",
+                        e
+                    );
+                    Ok(EventData::Unknown {
+                        kind: self.kind.clone(),
+                        data: self.data.clone(),
+                    })
+                }
+            },
+            "member_join" => match serde_json::from_value(self.data.clone()) {
+                Ok(ev) => Ok(EventData::MemberJoin(ev)),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse 'member_join' event: {}. Falling back to Unknown.",
+                        e
+                    );
+                    Ok(EventData::Unknown {
+                        kind: self.kind.clone(),
+                        data: self.data.clone(),
+                    })
+                }
+            },
+            "member_leave" => match serde_json::from_value(self.data.clone()) {
+                Ok(ev) => Ok(EventData::MemberLeave(ev)),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse 'member_leave' event: {}. Falling back to Unknown.",
+                        e
+                    );
+                    Ok(EventData::Unknown {
+                        kind: self.kind.clone(),
+                        data: self.data.clone(),
+                    })
+                }
+            },
+            "reaction_add" => match serde_json::from_value(self.data.clone()) {
+                Ok(ev) => Ok(EventData::ReactionAdd(ev)),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse 'reaction_add' event: {}. Falling back to Unknown.",
+                        e
+                    );
+                    Ok(EventData::Unknown {
+                        kind: self.kind.clone(),
+                        data: self.data.clone(),
+                    })
+                }
+            },
+            "reaction_remove" => match serde_json::from_value(self.data.clone()) {
+                Ok(ev) => Ok(EventData::ReactionRemove(ev)),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse 'reaction_remove' event: {}. Falling back to Unknown.",
+                        e
+                    );
+                    Ok(EventData::Unknown {
+                        kind: self.kind.clone(),
+                        data: self.data.clone(),
+                    })
+                }
+            },
+            "voice_join" => match serde_json::from_value(self.data.clone()) {
+                Ok(ev) => Ok(EventData::VoiceJoin(ev)),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse 'voice_join' event: {}. Falling back to Unknown.",
+                        e
+                    );
+                    Ok(EventData::Unknown {
+                        kind: self.kind.clone(),
+                        data: self.data.clone(),
+                    })
+                }
+            },
+            "voice_leave" => match serde_json::from_value(self.data.clone()) {
+                Ok(ev) => Ok(EventData::VoiceLeave(ev)),
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse 'voice_leave' event: {}. Falling back to Unknown.",
+                        e
+                    );
+                    Ok(EventData::Unknown {
+                        kind: self.kind.clone(),
+                        data: self.data.clone(),
+                    })
+                }
+            },
             "test" => Ok(EventData::Test(self.data.clone())),
             other => Ok(EventData::Unknown {
                 kind: other.to_string(),
