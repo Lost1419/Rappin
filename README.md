@@ -335,23 +335,6 @@ Connect with any LiveKit client to publish an audio stream.
 
 ---
 
-## 🔄 Uploading to GitHub
-
-To push this repository to your GitHub account:
-
-```sh
-# 1. Ensure the remote is configured:
-git remote add origin https://github.com/Lost1419/Rappin.git
-
-# 2. Rename branch to main if needed:
-git branch -M main
-
-# 3. Push to GitHub:
-git push -u origin main
-```
-
----
-
 ## 🛠️ Examples
 
 Check the `examples/` directory for ready-to-run examples:
