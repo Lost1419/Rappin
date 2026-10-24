@@ -1,4 +1,4 @@
-//! # rappin
+//! # rappin-rs
 //!
 //! An idiomatic, asynchronous Rust client and bot framework for the [Yapin'](https://www.yapin.gg) Bot API.
 //!

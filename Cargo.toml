@@ -1,5 +1,5 @@
 [package]
-name = "rappin"
+name = "rappin-rs"
 version = "0.1.0"
 edition = "2021"
 description = "Fast, idiomatic Rust client and bot framework for Yapin’ (yapin.gg)"
@@ -9,6 +9,10 @@ homepage = "https://github.com/Lost1419/Rappin"
 readme = "README.md"
 keywords = ["yapin", "bot", "api", "chat", "async"]
 categories = ["api-bindings", "asynchronous"]
+
+[lib]
+name = "rappin"
+path = "src/lib.rs"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

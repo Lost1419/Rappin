@@ -730,7 +730,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rappin"
+name = "rappin-rs"
 version = "0.1.0"
 dependencies = [
  "async-trait",
