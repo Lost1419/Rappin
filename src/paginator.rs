@@ -14,6 +14,20 @@ pub struct Paginator {
 
 impl Paginator {
     /// Creates a new Paginator with a list of embeds to display across pages.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::models::embed::Embed;
+    /// use rappin::paginator::Paginator;
+    ///
+    /// let pages = vec![
+    ///     Embed::new().title("Page 1"),
+    ///     Embed::new().title("Page 2"),
+    /// ];
+    /// let paginator = Paginator::new(pages);
+    /// assert_eq!(paginator.total_pages(), 2);
+    /// ```
     pub fn new(embeds: impl IntoIterator<Item = Embed>) -> Self {
         let unique = Uuid::new_v4().simple().to_string();
         Self {
@@ -115,6 +129,16 @@ pub struct ConfirmDialog {
 }
 
 impl ConfirmDialog {
+    /// Creates a new interactive confirmation prompt.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::paginator::ConfirmDialog;
+    ///
+    /// let dialog = ConfirmDialog::new("Are you sure?")
+    ///     .with_labels("Yes", "No");
+    /// ```
     pub fn new(content: impl Into<String>) -> Self {
         let unique = Uuid::new_v4().simple().to_string();
         Self {

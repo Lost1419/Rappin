@@ -91,11 +91,31 @@ pub struct Client {
 
 impl Client {
     /// Creates a new `Client` with default settings and the given bot token.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Client;
+    ///
+    /// let client = Client::new("yb_sample_token");
+    /// assert_eq!(client.token(), "yb_sample_token");
+    /// ```
     pub fn new(token: impl Into<String>) -> Self {
         ClientBuilder::new(token).build()
     }
 
     /// Creates a builder to customize the client.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Client;
+    ///
+    /// let client = Client::builder("yb_sample_token")
+    ///     .max_retries(5)
+    ///     .build();
+    /// assert_eq!(client.token(), "yb_sample_token");
+    /// ```
     pub fn builder(token: impl Into<String>) -> ClientBuilder {
         ClientBuilder::new(token)
     }
@@ -271,6 +291,20 @@ impl Client {
     // -----------------------------------------------------------------------
 
     /// Fetches the profile of the authenticated bot (`GET /me`).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let client = Client::new("yb_token");
+    ///     let me = client.get_me().await?;
+    ///     println!("Bot username: {}", me.username);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_me(&self) -> Result<BotProfile> {
         let profile = self
             .request_json::<BotProfile, ()>(Method::GET, "/me", None)
@@ -313,6 +347,19 @@ impl Client {
     }
 
     /// Updates the bot's status and activity text (`PUT /me/status`).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let client = Client::new("yb_token");
+    ///     client.set_status(BotStatus::Online, Some("Working in Rust 🦀")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn set_status(&self, status: BotStatus, activity: Option<&str>) -> Result<()> {
         let req = StatusUpdateRequest {
             status,
@@ -391,6 +438,24 @@ impl Client {
     // -----------------------------------------------------------------------
 
     /// Lists all servers the bot is currently in (`GET /servers`).
+    ///
+    /// Also populates the in-memory cache.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let client = Client::new("yb_token");
+    ///     let servers = client.get_servers().await?;
+    ///     for server in servers {
+    ///         println!("Joined server: {}", server.name);
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_servers(&self) -> Result<Vec<Server>> {
         #[derive(Deserialize)]
         struct Resp {
@@ -404,6 +469,21 @@ impl Client {
     }
 
     /// Fetches details for a specific server (`GET /servers/{id}`).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    /// use uuid::Uuid;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let client = Client::new("yb_token");
+    ///     let server = client.get_server(Uuid::new_v4()).await?;
+    ///     println!("Server name: {}", server.name);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_server(&self, server_id: Uuid) -> Result<Server> {
         #[derive(Deserialize)]
         struct Resp {
@@ -743,6 +823,21 @@ impl Client {
     }
 
     /// Obtains a LiveKit ticket to join a server voice channel (`POST /servers/{id}/voice/join`).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    /// use uuid::Uuid;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let client = Client::new("yb_token");
+    ///     let ticket = client.join_voice(Uuid::new_v4(), Uuid::new_v4()).await?;
+    ///     println!("LiveKit endpoint: {}", ticket.url);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn join_voice(&self, server_id: Uuid, channel_id: Uuid) -> Result<VoiceTicket> {
         #[derive(Serialize)]
         struct Req {
@@ -877,6 +972,23 @@ impl Client {
     }
 
     /// Posts a message into a channel (`POST /channels/{id}/messages`).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    /// use uuid::Uuid;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let client = Client::new("yb_token");
+    ///     let channel_id = Uuid::new_v4();
+    ///     let msg = CreateMessage::new("Hello from Rappin!");
+    ///     let sent = client.send_message(channel_id, &msg).await?;
+    ///     println!("Sent message ID: {}", sent.id);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn send_message(&self, channel_id: Uuid, message: &CreateMessage) -> Result<Message> {
         #[derive(Deserialize)]
         struct Resp {
@@ -893,6 +1005,23 @@ impl Client {
     }
 
     /// Convenience shortcut to post a Components V2 layout message.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    /// use uuid::Uuid;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let client = Client::new("yb_token");
+    ///     let channel_id = Uuid::new_v4();
+    ///     let container = Container::new()
+    ///         .add(TextDisplay::new("# Announcement\nWelcome to our channel!"));
+    ///     client.send_layout(channel_id, vec![container], None).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn send_layout(
         &self,
         channel_id: Uuid,
@@ -1092,6 +1221,21 @@ impl Client {
     }
 
     /// Opens or finds an existing direct message channel with a user (`POST /users/{id}/dm`).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    /// use uuid::Uuid;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let client = Client::new("yb_token");
+    ///     let dm_channel_id = client.create_dm(Uuid::new_v4()).await?;
+    ///     client.send_message(dm_channel_id, &CreateMessage::new("Hello in DMs!")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn create_dm(&self, user_id: Uuid) -> Result<Uuid> {
         #[derive(Deserialize)]
         struct Resp {

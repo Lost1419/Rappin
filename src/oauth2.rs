@@ -52,6 +52,16 @@ impl OAuth2Client {
     }
 
     /// Generates the authorization URL to redirect users to Yapin' for login.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::oauth2::OAuth2Client;
+    ///
+    /// let client = OAuth2Client::new("client_id", "secret", "https://example.com/callback");
+    /// let url = client.authorization_url(&["identify", "servers"], Some("state_123"));
+    /// assert!(url.starts_with("https://www.yapin.gg/oauth/authorize?"));
+    /// ```
     pub fn authorization_url(&self, scopes: &[&str], state: Option<&str>) -> String {
         let scope_str = scopes.join(" ");
         let mut url = format!(

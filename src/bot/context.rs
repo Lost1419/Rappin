@@ -93,6 +93,17 @@ impl MessageContext {
     }
 
     /// Replies to this message quoting it (`reply_to`).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    ///
+    /// async fn on_ping(ctx: MessageContext) -> Result<()> {
+    ///     ctx.reply("pong! 🏓").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn reply(&self, content: impl Into<String>) -> Result<Message> {
         let msg = CreateMessage::reply(content, self.event.id);
         self.client.send_message(self.event.channel_id, &msg).await
@@ -109,6 +120,17 @@ impl MessageContext {
     }
 
     /// Posts a message into the same channel without quoting.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    ///
+    /// async fn on_hello(ctx: MessageContext) -> Result<()> {
+    ///     ctx.say("Hello everyone in the channel!").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn say(&self, content: impl Into<String>) -> Result<Message> {
         let msg = CreateMessage::new(content);
         self.client.send_message(self.event.channel_id, &msg).await
@@ -141,6 +163,21 @@ impl MessageContext {
     /// Sends an interactive multi-page embed message.
     ///
     /// Returns the sent `Message` and the `Paginator` helper.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    ///
+    /// async fn show_help(ctx: MessageContext) -> Result<()> {
+    ///     let pages = vec![
+    ///         Embed::new().title("Page 1").description("Commands"),
+    ///         Embed::new().title("Page 2").description("Configuration"),
+    ///     ];
+    ///     let (_msg, paginator) = ctx.send_paginated(pages).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn send_paginated(
         &self,
         embeds: impl IntoIterator<Item = crate::models::embed::Embed>,
@@ -154,6 +191,17 @@ impl MessageContext {
     /// Sends an interactive confirmation prompt with Confirm and Cancel buttons.
     ///
     /// Returns the sent `Message` and the `ConfirmDialog` helper.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    ///
+    /// async fn ask_reset(ctx: MessageContext) -> Result<()> {
+    ///     let (_msg, dialog) = ctx.send_confirm("Are you sure you want to reset settings?").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn send_confirm(
         &self,
         content: impl Into<String>,
@@ -248,6 +296,17 @@ impl InteractionContext {
     }
 
     /// Sends an ephemeral message visible only to the person who clicked.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    ///
+    /// async fn on_secret_click(ctx: InteractionContext) -> Result<()> {
+    ///     ctx.ephemeral("🤫 Only you can see this message!").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn ephemeral(&self, content: impl Into<String>) -> Result<()> {
         let callback = InteractionCallback::ephemeral(content);
         self.client
@@ -256,6 +315,17 @@ impl InteractionContext {
     }
 
     /// Updates the message the clicked button is on.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    ///
+    /// async fn on_vote(ctx: InteractionContext) -> Result<()> {
+    ///     ctx.update("✅ Thank you for voting!").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn update(&self, content: impl Into<String>) -> Result<()> {
         let callback = InteractionCallback::update(content);
         self.client

@@ -12,6 +12,8 @@ async fn test_bot_builder_configuration() {
         .command("ping", "Check ping", |_ctx| async move { Ok(()) })
         .command("roll", "Roll dice", |_ctx| async move { Ok(()) })
         .button("vote:", |_ctx| async move { Ok(()) })
+        .on_command_error(|_ctx, _err| async move {})
+        .on_button_error(|_ctx, _err| async move {})
         .build();
 
     assert_eq!(bot.client().token(), "yb_dummy_token_123");

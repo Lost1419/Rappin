@@ -37,11 +37,32 @@ impl Cooldown {
     }
 
     /// Creates a per-user cooldown.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    /// use rappin::cooldown::{Cooldown, CooldownType};
+    ///
+    /// let cd = Cooldown::user(Duration::from_secs(30));
+    /// assert_eq!(cd.kind(), CooldownType::User);
+    /// assert_eq!(cd.duration(), Duration::from_secs(30));
+    /// ```
     pub fn user(duration: Duration) -> Self {
         Self::new(CooldownType::User, duration)
     }
 
     /// Creates a per-channel cooldown.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    /// use rappin::cooldown::{Cooldown, CooldownType};
+    ///
+    /// let cd = Cooldown::channel(Duration::from_secs(10));
+    /// assert_eq!(cd.kind(), CooldownType::Channel);
+    /// ```
     pub fn channel(duration: Duration) -> Self {
         Self::new(CooldownType::Channel, duration)
     }
@@ -51,7 +72,7 @@ impl Cooldown {
         Self::new(CooldownType::Server, duration)
     }
 
-    /// Creates a global cooldown.
+    /// Creates a global cooldown across all servers and users.
     pub fn global(duration: Duration) -> Self {
         Self::new(CooldownType::Global, duration)
     }

@@ -37,6 +37,18 @@ struct ButtonDef {
 
 type CogFactoryFn = Arc<dyn Fn() -> Box<dyn Cog> + Send + Sync>;
 
+pub type CommandErrorHandlerFn = Arc<
+    dyn Fn(MessageContext, YappinError) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
+
+pub type ButtonErrorHandlerFn = Arc<
+    dyn Fn(InteractionContext, YappinError) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
+
 struct BotState {
     client: Arc<Client>,
     prefixes: Vec<String>,
@@ -45,6 +57,8 @@ struct BotState {
     cogs: RwLock<HashMap<String, Arc<dyn Cog>>>,
     cog_factories: RwLock<HashMap<String, CogFactoryFn>>,
     event_handler: Option<Arc<dyn EventHandler>>,
+    command_error_handler: Option<CommandErrorHandlerFn>,
+    button_error_handler: Option<ButtonErrorHandlerFn>,
     ignore_bots: bool,
     sync_commands: bool,
     log: bool,
@@ -285,6 +299,8 @@ pub struct BotBuilder {
     buttons: Vec<ButtonDef>,
     cogs: Vec<Box<dyn Cog>>,
     event_handler: Option<Arc<dyn EventHandler>>,
+    command_error_handler: Option<CommandErrorHandlerFn>,
+    button_error_handler: Option<ButtonErrorHandlerFn>,
     ignore_bots: bool,
     sync_commands: bool,
     log: bool,
@@ -300,6 +316,8 @@ impl BotBuilder {
             buttons: Vec::new(),
             cogs: Vec::new(),
             event_handler: None,
+            command_error_handler: None,
+            button_error_handler: None,
             ignore_bots: true,
             sync_commands: true,
             log: true,
@@ -413,6 +431,48 @@ impl BotBuilder {
         self
     }
 
+    /// Registers a custom error handler for commands that return an `Err`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    ///
+    /// let bot = Bot::builder("yb_token")
+    ///     .on_command_error(|ctx, err| async move {
+    ///         let _ = ctx.reply(format!("⚠️ Command failed: {err}")).await;
+    ///     });
+    /// ```
+    pub fn on_command_error<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(MessageContext, YappinError) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.command_error_handler = Some(Arc::new(move |ctx, err| Box::pin(handler(ctx, err))));
+        self
+    }
+
+    /// Registers a custom error handler for button interactions that return an `Err`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::prelude::*;
+    ///
+    /// let bot = Bot::builder("yb_token")
+    ///     .on_button_error(|ctx, err| async move {
+    ///         let _ = ctx.ephemeral(format!("⚠️ Button failed: {err}")).await;
+    ///     });
+    /// ```
+    pub fn on_button_error<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(InteractionContext, YappinError) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.button_error_handler = Some(Arc::new(move |ctx, err| Box::pin(handler(ctx, err))));
+        self
+    }
+
     /// Whether to ignore messages authored by other bots (default `true`).
     pub fn ignore_bots(mut self, ignore: bool) -> Self {
         self.ignore_bots = ignore;
@@ -443,6 +503,8 @@ impl BotBuilder {
             cogs: RwLock::new(HashMap::new()),
             cog_factories: RwLock::new(HashMap::new()),
             event_handler: self.event_handler,
+            command_error_handler: self.command_error_handler,
+            button_error_handler: self.button_error_handler,
             ignore_bots: self.ignore_bots,
             sync_commands: self.sync_commands,
             log: self.log,
@@ -780,9 +842,14 @@ impl Bot {
 
                 if allow {
                     let cmd_ctx = ctx.clone();
+                    let err_handler = self.handle.inner.command_error_handler.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handler(cmd_ctx).await {
-                            error!("Command /{} error: {}", cmd_name, e);
+                        if let Err(e) = handler(cmd_ctx.clone()).await {
+                            if let Some(ref on_err) = err_handler {
+                                on_err(cmd_ctx, e).await;
+                            } else {
+                                error!("Command /{} error: {}", cmd_name, e);
+                            }
                         }
                     });
                 }
@@ -812,9 +879,14 @@ impl Bot {
             if custom_id.starts_with(&btn.prefix) {
                 let handler = btn.handler.clone();
                 let btn_ctx = ctx.clone();
+                let err_handler = self.handle.inner.button_error_handler.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handler(btn_ctx).await {
-                        error!("Button interaction error: {}", e);
+                    if let Err(e) = handler(btn_ctx.clone()).await {
+                        if let Some(ref on_err) = err_handler {
+                            on_err(btn_ctx, e).await;
+                        } else {
+                            error!("Button interaction error: {}", e);
+                        }
                     }
                 });
             }

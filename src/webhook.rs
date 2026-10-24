@@ -18,6 +18,14 @@ pub struct WebhookClient {
 
 impl WebhookClient {
     /// Creates a new WebhookClient with a given webhook URL.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::webhook::WebhookClient;
+    ///
+    /// let webhook = WebhookClient::new("https://www.yapin.gg/api/bot/v1/webhooks/your_token");
+    /// ```
     pub fn new(url: impl Into<String>) -> Self {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
@@ -80,6 +88,19 @@ impl WebhookClient {
     }
 
     /// Sends simple text content through the webhook.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use rappin::webhook::WebhookClient;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let webhook = WebhookClient::new("https://www.yapin.gg/api/bot/v1/webhooks/token");
+    ///     webhook.send_content("Deployment complete! 🚀").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn send_content(&self, content: impl Into<String>) -> Result<Message> {
         self.send(&CreateMessage::new(content)).await
     }

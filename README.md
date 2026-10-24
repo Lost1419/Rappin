@@ -78,7 +78,7 @@ Add `rappin-rs` and `tokio` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.1"
+rappin-rs = "0.1.2"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -249,6 +249,31 @@ let bot = Bot::builder(token)
             Ok(())
         },
     )
+    .build();
+```
+
+---
+
+## 🛡️ Global Error Handling
+
+Easily catch and handle command and button failures across your entire bot:
+
+```rust
+let bot = Bot::builder(token)
+    // Custom command error handler
+    .on_command_error(|ctx, err| async move {
+        if err.is_not_found() {
+            let _ = ctx.reply("❌ The requested item was not found.").await;
+        } else if let Some(wait) = err.retry_after() {
+            let _ = ctx.reply(format!("⏳ Rate limited! Please wait {:.1}s.", wait.as_secs_f32())).await;
+        } else {
+            let _ = ctx.reply(format!("⚠️ An error occurred: {err}")).await;
+        }
+    })
+    // Custom button click error handler
+    .on_button_error(|ctx, err| async move {
+        let _ = ctx.ephemeral(format!("⚠️ Failed to process button: {err}")).await;
+    })
     .build();
 ```
 

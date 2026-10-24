@@ -49,6 +49,15 @@ impl YappinError {
     }
 
     /// Checks if this error represents a rate limit (HTTP 429).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::error::YappinError;
+    ///
+    /// let err = YappinError::RateLimited { retry_after: 2.5 };
+    /// assert!(err.is_rate_limit());
+    /// ```
     pub fn is_rate_limit(&self) -> bool {
         matches!(self, Self::RateLimited { .. }) || matches!(self, Self::Api { status: 429, .. })
     }
@@ -78,6 +87,19 @@ impl YappinError {
     }
 
     /// Checks if this error represents a resource not found (HTTP 404).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::error::YappinError;
+    ///
+    /// let err = YappinError::Api {
+    ///     status: 404,
+    ///     message: "Channel not found".to_string(),
+    ///     retry_after: None,
+    /// };
+    /// assert!(err.is_not_found());
+    /// ```
     pub fn is_not_found(&self) -> bool {
         self.status_code() == Some(404)
     }
