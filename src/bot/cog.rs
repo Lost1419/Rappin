@@ -36,6 +36,34 @@ impl CogCommand {
             handler: Arc::new(move |ctx| Box::pin(handler(ctx))),
         }
     }
+
+    /// Creates a command with an automatic rate limit cooldown.
+    pub fn with_cooldown<F, Fut>(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        cooldown: crate::cooldown::Cooldown,
+        handler: F,
+    ) -> Self
+    where
+        F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let wrapped = move |ctx: MessageContext| {
+            let cd = cooldown.clone();
+            let fut = handler(ctx.clone());
+            async move {
+                if let Some(remaining) = cd.check(&ctx).await {
+                    let secs = remaining.as_secs_f32();
+                    let _ = ctx
+                        .reply(format!("⏳ You are on cooldown! Please wait {:.1}s.", secs))
+                        .await;
+                    return Ok(());
+                }
+                fut.await
+            }
+        };
+        Self::new(name, description, wrapped)
+    }
 }
 
 /// A button handler defined within a cog.
@@ -135,6 +163,27 @@ impl CogBuilder {
     {
         self.commands
             .push(CogCommand::new(name, description, handler));
+        self
+    }
+
+    /// Registers a cog command with an automatic rate limit cooldown.
+    pub fn command_with_cooldown<F, Fut>(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        cooldown: crate::cooldown::Cooldown,
+        handler: F,
+    ) -> Self
+    where
+        F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.commands.push(CogCommand::with_cooldown(
+            name,
+            description,
+            cooldown,
+            handler,
+        ));
         self
     }
 

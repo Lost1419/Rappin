@@ -8,6 +8,11 @@
 //! - **Complete API Coverage**: High-level and low-level methods for all 35 OpenAPI endpoints (messages, channels, servers, members, roles, categories, voice, bans, reactions, interactions).
 //! - **Rich Message & Layout Builders**: Type-safe builders for `Embed` cards, `Button` rows, and Components V2 layouts (`Container`, `Section`, `TextDisplay`, etc.).
 //! - **Bot Framework & Event Dispatcher**: Ergonomic command routing, prefix support (`!`, `/`), button click handlers, event listeners, and resilient long-polling with exponential backoff and rate limit handling.
+//! - **Modular Cogs System**: Live hot-reloading of bot commands, button listeners, and lifecycle hooks while the bot is running.
+//! - **In-Memory Cache Layer**: Thread-safe caching of bot profile, servers, and channels with zero network calls for repetitive lookups.
+//! - **Command Cooldowns**: Declarative rate limiting per user, channel, server, or globally.
+//! - **Interactive Paginator & Confirm Dialog**: Pre-built UI components for paging through embeds and binary confirmation prompts.
+//! - **Standalone Webhooks & OAuth2**: Lightweight `WebhookClient` for alerting/CI notifications and `OAuth2Client` for "Login with Yapin'".
 //! - **Asset CDN Helpers**: URL resolvers for avatars, banners, icons, and attachments (`https://files.yapper.website/...`).
 //!
 //! ## Quickstart: Building a Bot
@@ -70,22 +75,32 @@
 //! ```
 
 pub mod bot;
+pub mod cache;
 pub mod client;
+pub mod cooldown;
 pub mod error;
 pub mod models;
+pub mod oauth2;
+pub mod paginator;
 pub mod utils;
+pub mod webhook;
 
 pub use bot::{
     Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventHandler,
     InteractionContext, MessageContext,
 };
+pub use cache::Cache;
 pub use client::{Client, ClientBuilder};
+pub use cooldown::{Cooldown, CooldownType};
 pub use error::{Result, YappinError};
 pub use models::*;
+pub use oauth2::{OAuth2Client, OAuth2Token};
+pub use paginator::{ConfirmDialog, Paginator};
 pub use utils::{
     attachment_url, avatar_url, banner_url, icon_url, DEFAULT_API_BASE, DEFAULT_FILES_BASE,
     DEFAULT_SITE_BASE, IS_COMPONENTS_V2,
 };
+pub use webhook::WebhookClient;
 
 /// Commonly used types for building bots and interacting with Yapin'.
 pub mod prelude {
@@ -93,7 +108,9 @@ pub mod prelude {
         Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventHandler,
         InteractionContext, MessageContext,
     };
+    pub use crate::cache::Cache;
     pub use crate::client::{Client, ClientBuilder};
+    pub use crate::cooldown::{Cooldown, CooldownType};
     pub use crate::error::{Result, YappinError};
     pub use crate::models::component::{
         ActionRow, Button, ButtonStyle, Component, Container, FileDisplay, LayoutComponent,
@@ -103,5 +120,8 @@ pub mod prelude {
     pub use crate::models::message::{CreateMessage, EditMessage, Message};
     pub use crate::models::server::{Category, Member, Role, Server};
     pub use crate::models::user::{BotProfile, BotStatus, User};
+    pub use crate::oauth2::{OAuth2Client, OAuth2Token};
+    pub use crate::paginator::{ConfirmDialog, Paginator};
     pub use crate::utils::IS_COMPONENTS_V2;
+    pub use crate::webhook::WebhookClient;
 }

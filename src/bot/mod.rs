@@ -63,6 +63,11 @@ impl BotHandle {
         &self.inner.client
     }
 
+    /// Returns a reference to the client's internal in-memory cache.
+    pub fn cache(&self) -> &crate::cache::Cache {
+        self.inner.client.cache()
+    }
+
     /// Checks if a cog with the given name is currently loaded.
     pub async fn has_cog(&self, name: &str) -> bool {
         self.inner.cogs.read().await.contains_key(name)
@@ -341,6 +346,45 @@ impl BotBuilder {
         self
     }
 
+    /// Registers a command with an automatic rate limit cooldown.
+    pub fn command_with_cooldown<F, Fut>(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        cooldown: crate::cooldown::Cooldown,
+        handler: F,
+    ) -> Self
+    where
+        F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let name_str = name.into().to_lowercase();
+        let desc_str = description.into();
+        let wrapped_handler: CommandHandlerFn = Arc::new(move |ctx| {
+            let cd = cooldown.clone();
+            let fut = handler(ctx.clone());
+            Box::pin(async move {
+                if let Some(remaining) = cd.check(&ctx).await {
+                    let secs = remaining.as_secs_f32();
+                    let _ = ctx
+                        .reply(format!("⏳ You are on cooldown! Please wait {:.1}s.", secs))
+                        .await;
+                    return Ok(());
+                }
+                fut.await
+            })
+        });
+        self.commands.insert(
+            name_str,
+            CommandDef {
+                description: desc_str,
+                cog_name: None,
+                handler: wrapped_handler,
+            },
+        );
+        self
+    }
+
     /// Registers a handler for button clicks whose `custom_id` starts with `prefix`.
     pub fn button<F, Fut>(mut self, prefix: impl Into<String>, handler: F) -> Self
     where
@@ -432,6 +476,11 @@ impl Bot {
     /// Returns a reference to the underlying [`Client`].
     pub fn client(&self) -> &Client {
         self.handle.client()
+    }
+
+    /// Returns a reference to the bot's internal in-memory cache.
+    pub fn cache(&self) -> &crate::cache::Cache {
+        self.handle.cache()
     }
 
     /// Adds a cog to the bot. Can be called before or while the bot is running.

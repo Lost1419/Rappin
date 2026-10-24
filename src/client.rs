@@ -8,6 +8,7 @@ use tokio::time::sleep;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
+use crate::cache::Cache;
 use crate::error::{Result, YappinError};
 use crate::models::*;
 use crate::utils::DEFAULT_API_BASE;
@@ -18,6 +19,7 @@ pub struct ClientBuilder {
     base_url: String,
     max_retries: u32,
     http_client: Option<reqwest::Client>,
+    cache: Option<Arc<Cache>>,
 }
 
 impl ClientBuilder {
@@ -27,6 +29,7 @@ impl ClientBuilder {
             base_url: DEFAULT_API_BASE.to_string(),
             max_retries: 3,
             http_client: None,
+            cache: None,
         }
     }
 
@@ -45,6 +48,11 @@ impl ClientBuilder {
         self
     }
 
+    pub fn cache(mut self, cache: Arc<Cache>) -> Self {
+        self.cache = Some(cache);
+        self
+    }
+
     pub fn build(self) -> Client {
         let http = self.http_client.unwrap_or_else(|| {
             reqwest::Client::builder()
@@ -53,12 +61,15 @@ impl ClientBuilder {
                 .expect("failed to create default reqwest client")
         });
 
+        let cache = self.cache.unwrap_or_else(|| Arc::new(Cache::new()));
+
         Client {
             inner: Arc::new(ClientInner {
                 http,
                 token: self.token,
                 base_url: self.base_url,
                 max_retries: self.max_retries,
+                cache,
             }),
         }
     }
@@ -69,6 +80,7 @@ struct ClientInner {
     token: String,
     base_url: String,
     max_retries: u32,
+    cache: Arc<Cache>,
 }
 
 /// Asynchronous REST client for the Yapin' Bot API.
@@ -96,6 +108,11 @@ impl Client {
     /// Returns the base URL of the API.
     pub fn base_url(&self) -> &str {
         &self.inner.base_url
+    }
+
+    /// Returns a reference to the client's internal in-memory cache.
+    pub fn cache(&self) -> &Cache {
+        &self.inner.cache
     }
 
     // -----------------------------------------------------------------------
@@ -255,8 +272,11 @@ impl Client {
 
     /// Fetches the profile of the authenticated bot (`GET /me`).
     pub async fn get_me(&self) -> Result<BotProfile> {
-        self.request_json::<BotProfile, ()>(Method::GET, "/me", None)
-            .await
+        let profile = self
+            .request_json::<BotProfile, ()>(Method::GET, "/me", None)
+            .await?;
+        self.inner.cache.set_me(profile.clone()).await;
+        Ok(profile)
     }
 
     /// Updates the display name or biography of the bot (`PATCH /me`).
@@ -379,6 +399,7 @@ impl Client {
         let resp: Resp = self
             .request_json::<Resp, ()>(Method::GET, "/servers", None)
             .await?;
+        self.inner.cache.update_servers(resp.servers.clone()).await;
         Ok(resp.servers)
     }
 
@@ -391,6 +412,7 @@ impl Client {
         let resp: Resp = self
             .request_json::<Resp, ()>(Method::GET, &format!("/servers/{}", server_id), None)
             .await?;
+        self.inner.cache.update_server(resp.server.clone()).await;
         Ok(resp.server)
     }
 
@@ -646,8 +668,14 @@ impl Client {
             Some(ChannelKind::Voice) => format!("/servers/{}/channels?type=voice", server_id),
             None => format!("/servers/{}/channels", server_id),
         };
-        self.request_json::<ServerChannelsResponse, ()>(Method::GET, &path, None)
-            .await
+        let resp = self
+            .request_json::<ServerChannelsResponse, ()>(Method::GET, &path, None)
+            .await?;
+        self.inner
+            .cache
+            .update_channels(resp.channels.clone())
+            .await;
+        Ok(resp)
     }
 
     /// Creates a new channel in a server (`POST /servers/{id}/channels`).
@@ -667,6 +695,7 @@ impl Client {
                 Some(req),
             )
             .await?;
+        self.inner.cache.update_channel(resp.channel.clone()).await;
         Ok(resp.channel)
     }
 
@@ -757,6 +786,10 @@ impl Client {
         let resp: Resp = self
             .request_json::<Resp, ()>(Method::GET, &path, None)
             .await?;
+        self.inner
+            .cache
+            .update_channels(resp.channels.clone())
+            .await;
         Ok(resp.channels)
     }
 
@@ -789,6 +822,7 @@ impl Client {
                 Some(req),
             )
             .await?;
+        self.inner.cache.update_channel(resp.channel.clone()).await;
         Ok(resp.channel)
     }
 
@@ -801,6 +835,7 @@ impl Client {
                 None,
             )
             .await?;
+        self.inner.cache.remove_channel(&channel_id).await;
         Ok(())
     }
 

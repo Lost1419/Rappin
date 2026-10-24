@@ -47,6 +47,21 @@ impl MessageContext {
         self.bot.as_ref()
     }
 
+    /// Access the bot's in-memory cache.
+    pub fn cache(&self) -> &crate::cache::Cache {
+        self.client.cache()
+    }
+
+    /// Checks if this command invocation hits the specified cooldown.
+    ///
+    /// Returns `Some(remaining_duration)` if rate limited, or `None` if allowed.
+    pub async fn check_cooldown(
+        &self,
+        cooldown: &crate::cooldown::Cooldown,
+    ) -> Option<std::time::Duration> {
+        cooldown.check(self).await
+    }
+
     /// ID of the message.
     pub fn message_id(&self) -> Uuid {
         self.event.id
@@ -122,6 +137,32 @@ impl MessageContext {
             .delete_message(self.event.channel_id, self.event.id)
             .await
     }
+
+    /// Sends an interactive multi-page embed message.
+    ///
+    /// Returns the sent `Message` and the `Paginator` helper.
+    pub async fn send_paginated(
+        &self,
+        embeds: impl IntoIterator<Item = crate::models::embed::Embed>,
+    ) -> Result<(Message, crate::paginator::Paginator)> {
+        let paginator = crate::paginator::Paginator::new(embeds);
+        let msg = paginator.build_message(0);
+        let sent = self.reply_with(msg).await?;
+        Ok((sent, paginator))
+    }
+
+    /// Sends an interactive confirmation prompt with Confirm and Cancel buttons.
+    ///
+    /// Returns the sent `Message` and the `ConfirmDialog` helper.
+    pub async fn send_confirm(
+        &self,
+        content: impl Into<String>,
+    ) -> Result<(Message, crate::paginator::ConfirmDialog)> {
+        let dialog = crate::paginator::ConfirmDialog::new(content);
+        let msg = dialog.build_message();
+        let sent = self.reply_with(msg).await?;
+        Ok((sent, dialog))
+    }
 }
 
 /// Context provided to button click / interaction handlers.
@@ -140,6 +181,23 @@ impl InteractionContext {
     /// Access the bot handle to manage cogs or bot state dynamically.
     pub fn bot(&self) -> Option<&BotHandle> {
         self.bot.as_ref()
+    }
+
+    /// Access the bot's in-memory cache.
+    pub fn cache(&self) -> &crate::cache::Cache {
+        self.client.cache()
+    }
+
+    /// Updates the interaction message with a new page from a paginator.
+    pub async fn update_paginator(
+        &self,
+        paginator: &crate::paginator::Paginator,
+        page: usize,
+    ) -> Result<()> {
+        let callback = paginator.build_update(page);
+        self.client
+            .respond_interaction(&self.event.id, &self.event.token, &callback)
+            .await
     }
 
     /// The interaction ID.

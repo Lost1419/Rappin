@@ -62,6 +62,10 @@ Rappin is designed around modern asynchronous Rust with `tokio` and `reqwest`:
   - Direct messages (`/users/{id}/dm`)
 - **Dual Mode**: Use either the declarative `Bot` long-polling engine or the standalone `Client` for REST scripting.
 - **Dynamic Cogs & Hot-Reloading**: Group commands and interactions into modular cogs that can be added, removed, or reloaded while the bot is running without dropping connections.
+- **In-Memory Cache**: Built-in thread-safe cache for bot profile, servers, and channels with zero network latency for repeated reads.
+- **Command Cooldowns**: Declarative rate limiting per user, channel, server, or globally.
+- **Interactive Paginator & Confirm Dialog**: Pre-built UI navigation components for browsing through multi-page embeds and binary yes/no confirmation prompts.
+- **Standalone Webhook & OAuth2 Clients**: Lightweight `WebhookClient` for CI/CD alerts and `OAuth2Client` for "Login with Yapin'".
 - **Components V2 Support**: Full support for Yapin's modern layout system (`Container`, `Section`, `TextDisplay`, `Thumbnail`, `MediaGallery`, `Separator`, `FileDisplay`).
 - **CDN Helpers**: Helper methods to resolve avatar, banner, icon, and attachment paths to their complete CDN URLs (`https://files.yapper.website/...`).
 
@@ -209,6 +213,143 @@ When a cog is added, removed, or reloaded, Rappin automatically synchronizes the
 
 ---
 
+## ⏱️ Command Cooldowns & Rate Limiting
+
+Easily protect your commands from spam with built-in cooldowns:
+
+```rust
+use std::time::Duration;
+use rappin::prelude::*;
+
+let bot = Bot::builder(token)
+    // Cooldown per-user (e.g. daily reward, generative AI prompt)
+    .command_with_cooldown(
+        "daily",
+        "Claim your daily reward",
+        Cooldown::user(Duration::from_secs(86400)),
+        |ctx| async move {
+            ctx.reply("🎁 Claimed daily coins!").await?;
+            Ok(())
+        },
+    )
+    // Cooldown per-channel or per-server
+    .command_with_cooldown(
+        "trivia",
+        "Start a trivia game in this channel",
+        Cooldown::channel(Duration::from_secs(30)),
+        |ctx| async move {
+            ctx.reply("🧠 Trivia started!").await?;
+            Ok(())
+        },
+    )
+    .build();
+```
+
+---
+
+## ⚡ In-Memory Cache
+
+Rappin automatically maintains a thread-safe in-memory cache of your bot's profile, joined servers, and channels:
+
+```rust
+// Access the cache from any command or interaction context
+let servers = ctx.cache().get_servers().await;
+let channels = ctx.cache().get_channels_for_server(&server_id).await;
+
+if let Some(bot_user) = ctx.cache().get_me().await {
+    println!("Bot display name: {:?}", bot_user.display_name);
+}
+```
+
+Calls to `get_me()`, `get_servers()`, and `get_server_channels()` populate and keep the cache up to date automatically.
+
+---
+
+## 📖 Interactive UI: Paginator & Confirm Dialog
+
+### 1. Multi-Page Embed Paginator
+
+Easily create browseable menus with previous/next buttons and page count indicators:
+
+```rust
+let pages = vec![
+    Embed::new().title("Page 1").description("First page content"),
+    Embed::new().title("Page 2").description("Second page content"),
+    Embed::new().title("Page 3").description("Third page content"),
+];
+
+// Automatically builds message with buttons and sends it
+let (_msg, paginator) = ctx.send_paginated(pages).await?;
+```
+
+Handle pagination updates in your button router:
+
+```rust
+bot.button("pg_", |ctx| async move {
+    // Extract target page from button custom_id (e.g. "pg_1234:2")
+    if let Some(page) = paginator.parse_page_from_custom_id(ctx.custom_id()) {
+        ctx.update_paginator(&paginator, page).await?;
+    }
+    Ok(())
+});
+```
+
+### 2. Confirm / Cancel Dialogs
+
+Quickly prompt users for confirmation before destructive actions:
+
+```rust
+let (_msg, dialog) = ctx.send_confirm("Are you sure you want to reset the settings?").await?;
+```
+
+---
+
+## 🪝 Standalone Webhooks & OAuth2
+
+### 1. Webhook Client
+
+Send messages or embed cards from external systems (GitHub Actions, GitLab CI, Grafana) without running a bot:
+
+```rust
+use rappin::webhook::WebhookClient;
+use rappin::models::embed::Embed;
+
+let webhook = WebhookClient::new("https://www.yapin.gg/api/bot/v1/webhooks/your_token");
+
+// Send simple text
+webhook.send_content("🚀 Build #142 passed!").await?;
+
+// Send rich embed card
+webhook.send_embed(
+    Embed::new()
+        .title("Deployment Complete")
+        .description("Production has been updated to v1.4.0.")
+        .color(0x57F287)
+).await?;
+```
+
+### 2. "Login with Yapin’" OAuth2 Client
+
+Implement web authentication:
+
+```rust
+use rappin::oauth2::OAuth2Client;
+
+let oauth = OAuth2Client::new("client_id", "client_secret", "https://app.com/callback");
+
+// 1. Redirect user to Yapin' authorization page
+let login_url = oauth.authorization_url(&["identify", "servers"], Some("random_state_csrf"));
+
+// 2. Exchange redirect authorization code for access token
+let token = oauth.exchange_code(&code).await?;
+
+// 3. Fetch user profile
+let user = oauth.get_user_profile(&token.access_token).await?;
+println!("Logged in as: {}#{}", user.username, user.id);
+```
+
+---
+
 ## 🌐 Quick Start: Standalone REST Client
 
 If you want to use the API directly without running a background bot loop:
@@ -341,6 +482,7 @@ Check the `examples/` directory for ready-to-run examples:
 
 - `cargo run --example ping_bot`: Complete interactive bot responding to `/ping`, `/roll`, and button selections.
 - `cargo run --example cogs_bot`: Modular bot demonstrating dynamic Cog loading and real-time reloading.
+- `cargo run --example advanced_bot`: Showcase of command cooldowns, in-memory cache, multi-page paginator, and confirmation dialogs.
 - `cargo run --example embeds_and_buttons`: Building rich Embed cards and Components V2 containers.
 - `cargo run --example api_client`: Interacting directly with the REST API.
 
