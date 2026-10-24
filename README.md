@@ -1,7 +1,7 @@
 # Rappin 🦀
 
 [![GitHub](https://img.shields.io/badge/github-Lost1419/Rappin-blue?logo=github)](https://github.com/Lost1419/Rappin)
-[![Crates.io](https://img.shields.io/crates/v/rappin-rs.svg)](https://crates.io/crates/rappin-rs)
+[![Crates.io](https://img.shields.io/crates/v/rappin-rs.svg?v=0.1.2)](https://crates.io/crates/rappin-rs)
 [![Docs.rs](https://docs.rs/rappin-rs/badge.svg)](https://docs.rs/rappin-rs)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 
