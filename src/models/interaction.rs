@@ -100,8 +100,9 @@ impl InteractionCallback {
     }
 
     pub fn component(mut self, component: impl Into<Component>) -> Self {
-        self.components.get_or_insert_with(Vec::new).push(component.into());
+        self.components
+            .get_or_insert_with(Vec::new)
+            .push(component.into());
         self
     }
 }
-

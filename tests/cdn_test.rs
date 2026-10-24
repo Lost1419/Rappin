@@ -22,7 +22,12 @@ fn test_all_cdn_buckets() {
 
 #[test]
 fn test_root_path_on_main_domain() {
-    assert_eq!(avatar_url("/icon-white.svg"), "https://www.yapin.gg/icon-white.svg");
-    assert_eq!(icon_url("/default-icon.png"), "https://www.yapin.gg/default-icon.png");
+    assert_eq!(
+        avatar_url("/icon-white.svg"),
+        "https://www.yapin.gg/icon-white.svg"
+    );
+    assert_eq!(
+        icon_url("/default-icon.png"),
+        "https://www.yapin.gg/default-icon.png"
+    );
 }
-

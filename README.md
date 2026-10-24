@@ -35,12 +35,17 @@ Rappin is designed around modern asynchronous Rust with `tokio` and `reqwest`:
 │           ┌────────────────────────┐  ┌──────────────────┐   │ │
 │           │ Slash & Prefix Router  │  │  Button Callback │   │ │
 │           │   (/ping, !roll, ...)  │  │   (vote:yes, ...)│   │ │
-│           └────────────────────────┘  └──────────────────┘   │ │
+│           └───────────▲────────────┘  └────────▲─────────┘   │ │
+│                       │                        │             │ │
+│                 ┌─────┴────────────────────────┴─────┐       │ │
+│                 │   Dynamic Cogs & Hot-Reloading     │       │ │
+│                 │ (Add/remove/update while running)  │       │ │
+│                 └────────────────────────────────────┘       │ │
 └────────────────────────────────────────────────────────────────┘
 ```
 
 1. **Authentication**: Bots authenticate using `Authorization: Bot <token>` generated in Yapin’ Settings → Developer.
-2. **Command Synchronization**: When you register commands (e.g. `bot.command("ping", ...)`), Rappin automatically registers them with Yapin’ (`PUT /commands`), making them show up in the `/` slash menu for all server members.
+2. **Command Synchronization**: When you register commands (e.g. `bot.command("ping", ...)` or via a `Cog`), Rappin automatically registers them with Yapin’ (`PUT /commands`), making them show up in the `/` slash menu for all server members.
 3. **Long Polling Loop**: Instead of requiring open firewall ports or webhooks, bots fetch their own events with `GET /events?after=<last>&wait=25`. Rappin transparently handles connection drops, exponential backoff, event deduplication, and HTTP 429 (`Retry-After`) / HTTP 503 (`busy`) rate limits.
 4. **Context-Driven Handlers**: Every command handler receives a `MessageContext` that makes replying trivial (`ctx.reply("pong")`, `ctx.author_mention()`, `ctx.argv`). Every button click receives an `InteractionContext` (`ctx.reply()`, `ctx.ephemeral()`, `ctx.update()`).
 
@@ -56,6 +61,7 @@ Rappin is designed around modern asynchronous Rust with `tokio` and `reqwest`:
   - Voice channels (obtain LiveKit tickets with E2EE metadata)
   - Direct messages (`/users/{id}/dm`)
 - **Dual Mode**: Use either the declarative `Bot` long-polling engine or the standalone `Client` for REST scripting.
+- **Dynamic Cogs & Hot-Reloading**: Group commands and interactions into modular cogs that can be added, removed, or reloaded while the bot is running without dropping connections.
 - **Components V2 Support**: Full support for Yapin's modern layout system (`Container`, `Section`, `TextDisplay`, `Thumbnail`, `MediaGallery`, `Separator`, `FileDisplay`).
 - **CDN Helpers**: Helper methods to resolve avatar, banner, icon, and attachment paths to their complete CDN URLs (`https://files.yapper.website/...`).
 
@@ -126,6 +132,80 @@ async fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+---
+
+## 🧩 Cogs & Live Hot-Reloading
+
+Cogs allow splitting commands, button interactions, and event listeners into isolated modules that can be added, removed, or reloaded in real time **while the bot is still running**, with zero downtime.
+
+### 1. Creating a Cog
+
+Implement the `Cog` trait:
+
+```rust
+use async_trait::async_trait;
+use rappin::prelude::*;
+
+pub struct ModerationCog;
+
+#[async_trait]
+impl Cog for ModerationCog {
+    fn name(&self) -> &str {
+        "moderation"
+    }
+
+    // Optional guard: return false to abort execution (e.g. check permissions)
+    async fn check(&self, _ctx: &MessageContext) -> bool {
+        true
+    }
+
+    fn commands(&self) -> Vec<CogCommand> {
+        vec![
+            CogCommand::new("kick", "Kick a user", |ctx| async move {
+                ctx.reply("User kicked.").await?;
+                Ok(())
+            }),
+            CogCommand::new("timeout", "Timeout a user", |ctx| async move {
+                ctx.reply("User timed out.").await?;
+                Ok(())
+            }),
+        ]
+    }
+}
+```
+
+Or build one dynamically with `CogBuilder`:
+
+```rust
+let fun_cog = CogBuilder::new("fun")
+    .command("joke", "Tell a joke", |ctx| async move {
+        ctx.reply("Why do programmers prefer dark mode? Because light attracts bugs!").await?;
+        Ok(())
+    })
+    .build();
+```
+
+### 2. Updating Cogs at Runtime
+
+Because `Bot` provides a cloneable `BotHandle` (accessible through `bot.handle()` or `ctx.bot()`), you can reload or add cogs on the fly without restarting the process:
+
+```rust
+let bot = Bot::builder(token)
+    .cog(ModerationCog)
+    .command("reload", "Reload a cog live", |ctx| async move {
+        if let Some(bot) = ctx.bot() {
+            bot.reload_cog(ModerationCog).await?;
+            ctx.reply("✅ Moderation cog reloaded live!").await?;
+        }
+        Ok(())
+    })
+    .build();
+
+bot.run().await?;
+```
+
+When a cog is added, removed, or reloaded, Rappin automatically synchronizes the new command list with Yapin' (`PUT /commands`), immediately updating the server's slash command menu!
 
 ---
 
@@ -277,6 +357,7 @@ git push -u origin main
 Check the `examples/` directory for ready-to-run examples:
 
 - `cargo run --example ping_bot`: Complete interactive bot responding to `/ping`, `/roll`, and button selections.
+- `cargo run --example cogs_bot`: Modular bot demonstrating dynamic Cog loading and real-time reloading.
 - `cargo run --example embeds_and_buttons`: Building rich Embed cards and Components V2 containers.
 - `cargo run --example api_client`: Interacting directly with the REST API.
 

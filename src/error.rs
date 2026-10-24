@@ -38,4 +38,3 @@ pub enum YappinError {
 
 /// A specialized Result type for Yapin' operations.
 pub type Result<T> = std::result::Result<T, YappinError>;
-

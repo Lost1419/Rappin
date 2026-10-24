@@ -181,4 +181,3 @@ pub struct Image {
     pub path: String,
     pub url: String,
 }
-

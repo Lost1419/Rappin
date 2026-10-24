@@ -75,7 +75,10 @@ pub mod error;
 pub mod models;
 pub mod utils;
 
-pub use bot::{Bot, BotBuilder, EventHandler, InteractionContext, MessageContext};
+pub use bot::{
+    Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventHandler,
+    InteractionContext, MessageContext,
+};
 pub use client::{Client, ClientBuilder};
 pub use error::{Result, YappinError};
 pub use models::*;
@@ -86,7 +89,10 @@ pub use utils::{
 
 /// Commonly used types for building bots and interacting with Yapin'.
 pub mod prelude {
-    pub use crate::bot::{Bot, BotBuilder, EventHandler, InteractionContext, MessageContext};
+    pub use crate::bot::{
+        Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventHandler,
+        InteractionContext, MessageContext,
+    };
     pub use crate::client::{Client, ClientBuilder};
     pub use crate::error::{Result, YappinError};
     pub use crate::models::component::{

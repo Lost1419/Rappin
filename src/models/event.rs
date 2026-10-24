@@ -29,7 +29,9 @@ impl Event {
             "member_join" => serde_json::from_value(self.data.clone()).map(EventData::MemberJoin),
             "member_leave" => serde_json::from_value(self.data.clone()).map(EventData::MemberLeave),
             "reaction_add" => serde_json::from_value(self.data.clone()).map(EventData::ReactionAdd),
-            "reaction_remove" => serde_json::from_value(self.data.clone()).map(EventData::ReactionRemove),
+            "reaction_remove" => {
+                serde_json::from_value(self.data.clone()).map(EventData::ReactionRemove)
+            }
             "voice_join" => serde_json::from_value(self.data.clone()).map(EventData::VoiceJoin),
             "voice_leave" => serde_json::from_value(self.data.clone()).map(EventData::VoiceLeave),
             "test" => Ok(EventData::Test(self.data.clone())),
@@ -171,4 +173,3 @@ pub struct VoiceEvent {
     #[serde(default)]
     pub server_id: Option<Uuid>,
 }
-

@@ -2,9 +2,7 @@ use async_trait::async_trait;
 
 use crate::bot::context::{InteractionContext, MessageContext};
 use crate::client::Client;
-use crate::models::{
-    BotProfile, MemberJoinEvent, MemberLeaveEvent, ReactionEvent, VoiceEvent,
-};
+use crate::models::{BotProfile, MemberJoinEvent, MemberLeaveEvent, ReactionEvent, VoiceEvent};
 
 /// Trait for receiving dispatched Yapin' events.
 #[async_trait]
@@ -45,4 +43,3 @@ pub struct NoopEventHandler;
 
 #[async_trait]
 impl EventHandler for NoopEventHandler {}
-

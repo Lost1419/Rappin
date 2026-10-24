@@ -89,7 +89,10 @@ impl CreateMessage {
     }
 
     /// Creates a Components V2 layout message (sets flag 32768, components is the layout).
-    pub fn layout(components: impl IntoIterator<Item = impl Into<Component>>, reply_to: Option<Uuid>) -> Self {
+    pub fn layout(
+        components: impl IntoIterator<Item = impl Into<Component>>,
+        reply_to: Option<Uuid>,
+    ) -> Self {
         Self {
             content: None,
             reply_to,
@@ -115,7 +118,9 @@ impl CreateMessage {
     }
 
     pub fn component(mut self, component: impl Into<Component>) -> Self {
-        self.components.get_or_insert_with(Vec::new).push(component.into());
+        self.components
+            .get_or_insert_with(Vec::new)
+            .push(component.into());
         self
     }
 

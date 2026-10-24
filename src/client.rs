@@ -142,7 +142,11 @@ impl Client {
                 if retries > 0 && retry_after <= 60.0 {
                     warn!(
                         "Yapin' API {} (retry_after: {:.1}s), waiting...",
-                        if is_busy { "busy (503)" } else { "rate limited (429)" },
+                        if is_busy {
+                            "busy (503)"
+                        } else {
+                            "rate limited (429)"
+                        },
                         retry_after
                     );
                     sleep(Duration::from_secs_f64(retry_after)).await;
@@ -251,7 +255,8 @@ impl Client {
 
     /// Fetches the profile of the authenticated bot (`GET /me`).
     pub async fn get_me(&self) -> Result<BotProfile> {
-        self.request_json::<BotProfile, ()>(Method::GET, "/me", None).await
+        self.request_json::<BotProfile, ()>(Method::GET, "/me", None)
+            .await
     }
 
     /// Updates the display name or biography of the bot (`PATCH /me`).
@@ -293,7 +298,9 @@ impl Client {
             status,
             activity: activity.map(|s| s.to_string()),
         };
-        let _: OkResponse = self.request_json(Method::PUT, "/me/status", Some(&req)).await?;
+        let _: OkResponse = self
+            .request_json(Method::PUT, "/me/status", Some(&req))
+            .await?;
         Ok(())
     }
 
@@ -418,7 +425,9 @@ impl Client {
         struct Resp {
             members: Vec<Member>,
         }
-        let resp: Resp = self.request_json::<Resp, ()>(Method::GET, clean, None).await?;
+        let resp: Resp = self
+            .request_json::<Resp, ()>(Method::GET, clean, None)
+            .await?;
         Ok(resp.members)
     }
 
@@ -459,7 +468,10 @@ impl Client {
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
                 Method::PUT,
-                &format!("/servers/{}/members/{}/roles/{}", server_id, user_id, role_id),
+                &format!(
+                    "/servers/{}/members/{}/roles/{}",
+                    server_id, user_id, role_id
+                ),
                 None,
             )
             .await?;
@@ -471,7 +483,10 @@ impl Client {
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
                 Method::DELETE,
-                &format!("/servers/{}/members/{}/roles/{}", server_id, user_id, role_id),
+                &format!(
+                    "/servers/{}/members/{}/roles/{}",
+                    server_id, user_id, role_id
+                ),
                 None,
             )
             .await?;
@@ -507,7 +522,12 @@ impl Client {
     }
 
     /// Bans a user from a server (`POST /servers/{id}/bans`).
-    pub async fn ban_member(&self, server_id: Uuid, user_id: Uuid, reason: Option<&str>) -> Result<()> {
+    pub async fn ban_member(
+        &self,
+        server_id: Uuid,
+        user_id: Uuid,
+        reason: Option<&str>,
+    ) -> Result<()> {
         let req = BanRequest {
             user_id,
             reason: reason.map(|s| s.to_string()),
@@ -583,7 +603,12 @@ impl Client {
     }
 
     /// Renames a category (`PATCH /servers/{id}/categories/{cid}`).
-    pub async fn edit_category(&self, server_id: Uuid, category_id: Uuid, name: &str) -> Result<()> {
+    pub async fn edit_category(
+        &self,
+        server_id: Uuid,
+        category_id: Uuid,
+        name: &str,
+    ) -> Result<()> {
         #[derive(Serialize)]
         struct Req<'a> {
             name: &'a str,
@@ -729,7 +754,9 @@ impl Client {
         struct Resp {
             channels: Vec<Channel>,
         }
-        let resp: Resp = self.request_json::<Resp, ()>(Method::GET, &path, None).await?;
+        let resp: Resp = self
+            .request_json::<Resp, ()>(Method::GET, &path, None)
+            .await?;
         Ok(resp.channels)
     }
 
@@ -756,7 +783,11 @@ impl Client {
             channel: Channel,
         }
         let resp: Resp = self
-            .request_json(Method::PATCH, &format!("/channels/{}", channel_id), Some(req))
+            .request_json(
+                Method::PATCH,
+                &format!("/channels/{}", channel_id),
+                Some(req),
+            )
             .await?;
         Ok(resp.channel)
     }
@@ -764,7 +795,11 @@ impl Client {
     /// Deletes a channel (`DELETE /channels/{id}`).
     pub async fn delete_channel(&self, channel_id: Uuid) -> Result<()> {
         let _: OkResponse = self
-            .request_json::<OkResponse, ()>(Method::DELETE, &format!("/channels/{}", channel_id), None)
+            .request_json::<OkResponse, ()>(
+                Method::DELETE,
+                &format!("/channels/{}", channel_id),
+                None,
+            )
             .await?;
         Ok(())
     }

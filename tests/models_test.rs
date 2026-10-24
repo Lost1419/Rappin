@@ -1,8 +1,7 @@
 use chrono::Utc;
+use rappin::models::*;
 use serde_json::json;
 use uuid::Uuid;
-use rappin::prelude::*;
-use rappin::models::*;
 
 #[test]
 fn test_user_deserialization_and_helpers() {
@@ -21,10 +20,7 @@ fn test_user_deserialization_and_helpers() {
         user.avatar_url().unwrap(),
         "https://files.yapper.website/avatars/avatars/alice.png"
     );
-    assert_eq!(
-        user.mention(),
-        "<@11111111-2222-3333-4444-555555555555>"
-    );
+    assert_eq!(user.mention(), "<@11111111-2222-3333-4444-555555555555>");
 }
 
 #[test]
@@ -131,7 +127,9 @@ fn test_create_and_edit_message_builders() {
 
     let create = CreateMessage::reply("Hey there!", msg_id)
         .embed(Embed::new().title("Notice"))
-        .action_row(ActionRow::new(vec![Button::secondary("Dismiss", "dismiss")]));
+        .action_row(ActionRow::new(vec![Button::secondary(
+            "Dismiss", "dismiss",
+        )]));
 
     let val = serde_json::to_value(&create).unwrap();
     assert_eq!(val["content"], "Hey there!");

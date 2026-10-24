@@ -32,10 +32,19 @@ fn test_message_context_argv_splitting() {
 
     let msg: MessageEvent = serde_json::from_value(raw).unwrap();
     let client = std::sync::Arc::new(Client::new("token"));
-    let ctx = MessageContext::new(client, msg, Some("roll".to_string()), "20 advantage".to_string());
+    let ctx = MessageContext::new(
+        client,
+        msg,
+        Some("roll".to_string()),
+        "20 advantage".to_string(),
+        None,
+    );
 
     assert_eq!(ctx.command.as_deref(), Some("roll"));
     assert_eq!(ctx.args, "20 advantage");
     assert_eq!(ctx.argv, vec!["20", "advantage"]);
-    assert_eq!(ctx.author_mention(), "<@33333333-3333-3333-3333-333333333333>");
+    assert_eq!(
+        ctx.author_mention(),
+        "<@33333333-3333-3333-3333-333333333333>"
+    );
 }

@@ -9,6 +9,9 @@ use crate::models::interaction::InteractionCallback;
 use crate::models::message::{CreateMessage, Message};
 use crate::models::{InteractionEvent, MessageEvent};
 
+// Forward declaration of BotHandle
+use super::BotHandle;
+
 /// Context provided to command and message handlers.
 #[derive(Clone)]
 pub struct MessageContext {
@@ -17,10 +20,17 @@ pub struct MessageContext {
     pub command: Option<String>,
     pub args: String,
     pub argv: Vec<String>,
+    pub bot: Option<BotHandle>,
 }
 
 impl MessageContext {
-    pub fn new(client: Arc<Client>, event: MessageEvent, command: Option<String>, args: String) -> Self {
+    pub fn new(
+        client: Arc<Client>,
+        event: MessageEvent,
+        command: Option<String>,
+        args: String,
+        bot: Option<BotHandle>,
+    ) -> Self {
         let argv = args.split_whitespace().map(String::from).collect();
         Self {
             client,
@@ -28,7 +38,13 @@ impl MessageContext {
             command,
             args,
             argv,
+            bot,
         }
+    }
+
+    /// Access the bot handle to manage cogs or bot state dynamically.
+    pub fn bot(&self) -> Option<&BotHandle> {
+        self.bot.as_ref()
     }
 
     /// ID of the message.
@@ -72,7 +88,9 @@ impl MessageContext {
         if message.reply_to.is_none() {
             message.reply_to = Some(self.event.id);
         }
-        self.client.send_message(self.event.channel_id, &message).await
+        self.client
+            .send_message(self.event.channel_id, &message)
+            .await
     }
 
     /// Posts a message into the same channel without quoting.
@@ -111,11 +129,17 @@ impl MessageContext {
 pub struct InteractionContext {
     pub client: Arc<Client>,
     pub event: InteractionEvent,
+    pub bot: Option<BotHandle>,
 }
 
 impl InteractionContext {
-    pub fn new(client: Arc<Client>, event: InteractionEvent) -> Self {
-        Self { client, event }
+    pub fn new(client: Arc<Client>, event: InteractionEvent, bot: Option<BotHandle>) -> Self {
+        Self { client, event, bot }
+    }
+
+    /// Access the bot handle to manage cogs or bot state dynamically.
+    pub fn bot(&self) -> Option<&BotHandle> {
+        self.bot.as_ref()
     }
 
     /// The interaction ID.
@@ -211,4 +235,3 @@ impl InteractionContext {
             .await
     }
 }
-

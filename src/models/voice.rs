@@ -39,7 +39,10 @@ pub struct MoveMemberRequest {
 
 impl MoveMemberRequest {
     pub fn new(user_id: Uuid, channel_id: Uuid) -> Self {
-        Self { user_id, channel_id }
+        Self {
+            user_id,
+            channel_id,
+        }
     }
 }
 
@@ -71,4 +74,3 @@ pub struct DisconnectMemberResponse {
     #[serde(default)]
     pub channel_id: Option<Uuid>,
 }
-

@@ -162,7 +162,12 @@ impl Embed {
         self
     }
 
-    pub fn field(mut self, name: impl Into<String>, value: impl Into<String>, inline: bool) -> Self {
+    pub fn field(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<String>,
+        inline: bool,
+    ) -> Self {
         let field = EmbedField::new(name, value, inline);
         self.fields.get_or_insert_with(Vec::new).push(field);
         self
@@ -193,4 +198,3 @@ impl Embed {
         self
     }
 }
-

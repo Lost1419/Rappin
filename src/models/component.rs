@@ -67,9 +67,7 @@ impl Button {
     }
 
     pub fn link(label: impl Into<String>, url: impl Into<String>) -> Self {
-        Self::new(ButtonStyle::Link)
-            .with_label(label)
-            .with_url(url)
+        Self::new(ButtonStyle::Link).with_label(label).with_url(url)
     }
 
     pub fn with_label(mut self, label: impl Into<String>) -> Self {

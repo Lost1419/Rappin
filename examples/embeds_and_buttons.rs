@@ -6,13 +6,13 @@
 //! cargo run --example embeds_and_buttons
 //! ```
 
-use std::env;
 use rappin::prelude::*;
+use std::env;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let token = env::var("YAPPER_BOT_TOKEN")
-        .unwrap_or_else(|_| "PASTE_YOUR_BOT_TOKEN_HERE".to_string());
+    let token =
+        env::var("YAPPER_BOT_TOKEN").unwrap_or_else(|_| "PASTE_YOUR_BOT_TOKEN_HERE".to_string());
 
     let bot = Bot::builder(token)
         .command("card", "Send a rich embed card", |ctx| async move {
@@ -37,25 +37,32 @@ async fn main() -> Result<()> {
             ctx.reply_with(msg).await?;
             Ok(())
         })
-        .command("v2", "Send a modern Components V2 layout", |ctx| async move {
-            let layout = Container::new()
-                .accent(EmbedColor::BLUE)
-                .add(TextDisplay::new("# Announcement\nWelcome to our community!"))
-                .add(Separator::divider())
-                .add(
-                    Section::new("Join our verified members pool by clicking below:")
-                        .accessory(Button::success("Verify Identity", "verify:now")),
-                );
+        .command(
+            "v2",
+            "Send a modern Components V2 layout",
+            |ctx| async move {
+                let layout = Container::new()
+                    .accent(EmbedColor::BLUE)
+                    .add(TextDisplay::new(
+                        "# Announcement\nWelcome to our community!",
+                    ))
+                    .add(Separator::divider())
+                    .add(
+                        Section::new("Join our verified members pool by clicking below:")
+                            .accessory(Button::success("Verify Identity", "verify:now")),
+                    );
 
-            ctx.send_layout(vec![layout]).await?;
-            Ok(())
-        })
+                ctx.send_layout(vec![layout]).await?;
+                Ok(())
+            },
+        )
         .button("stat:refresh", |ctx| async move {
             ctx.ephemeral("Stats refreshed just now!").await?;
             Ok(())
         })
         .button("verify:now", |ctx| async move {
-            ctx.ephemeral("Verification submitted! An admin will review shortly.").await?;
+            ctx.ephemeral("Verification submitted! An admin will review shortly.")
+                .await?;
             Ok(())
         })
         .build();
@@ -64,4 +71,3 @@ async fn main() -> Result<()> {
     bot.run().await?;
     Ok(())
 }
-

@@ -164,4 +164,3 @@ pub struct ServerChannelsResponse {
     #[serde(default)]
     pub categories: Vec<Category>,
 }
-

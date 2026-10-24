@@ -6,16 +6,16 @@
 //! cargo run --example ping_bot
 //! ```
 
-use std::env;
 use rappin::prelude::*;
+use std::env;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Enable tracing/logging
     tracing_subscriber::fmt::init();
 
-    let token = env::var("YAPPER_BOT_TOKEN")
-        .unwrap_or_else(|_| "PASTE_YOUR_BOT_TOKEN_HERE".to_string());
+    let token =
+        env::var("YAPPER_BOT_TOKEN").unwrap_or_else(|_| "PASTE_YOUR_BOT_TOKEN_HERE".to_string());
 
     let bot = Bot::builder(token)
         .prefix("!")
@@ -33,35 +33,41 @@ async fn main() -> Result<()> {
                 .clamp(2, 1000);
 
             // Simple pseudo-random die roll
-            let roll = 1 + (std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .subsec_nanos()
-                % sides);
+            let roll = 1
+                + (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos()
+                    % sides);
 
             ctx.reply(format!("🎲 Rolled: {roll} (d{sides})")).await?;
             Ok(())
         })
-        .command("menu", "Show an interactive menu with buttons", |ctx| async move {
-            let row = ActionRow::new(vec![
-                Button::success("Apples", "vote:apples").with_emoji("🍎"),
-                Button::primary("Oranges", "vote:oranges").with_emoji("🍊"),
-                Button::danger("Cancel", "vote:cancel"),
-                Button::link("Yapin' Devs", "https://www.yapin.gg/developers"),
-            ]);
+        .command(
+            "menu",
+            "Show an interactive menu with buttons",
+            |ctx| async move {
+                let row = ActionRow::new(vec![
+                    Button::success("Apples", "vote:apples").with_emoji("🍎"),
+                    Button::primary("Oranges", "vote:oranges").with_emoji("🍊"),
+                    Button::danger("Cancel", "vote:cancel"),
+                    Button::link("Yapin' Devs", "https://www.yapin.gg/developers"),
+                ]);
 
-            let msg = CreateMessage::reply("Which fruit do you prefer?", ctx.message_id())
-                .action_row(row);
+                let msg = CreateMessage::reply("Which fruit do you prefer?", ctx.message_id())
+                    .action_row(row);
 
-            ctx.reply_with(msg).await?;
-            Ok(())
-        })
+                ctx.reply_with(msg).await?;
+                Ok(())
+            },
+        )
         .button("vote:", |ctx| async move {
             let choice = ctx.custom_id().strip_prefix("vote:").unwrap_or("unknown");
             if choice == "cancel" {
                 ctx.update("Selection cancelled.").await?;
             } else {
-                ctx.ephemeral(format!("You voted for **{choice}**!")).await?;
+                ctx.ephemeral(format!("You voted for **{choice}**!"))
+                    .await?;
             }
             Ok(())
         })
@@ -71,4 +77,3 @@ async fn main() -> Result<()> {
     bot.run().await?;
     Ok(())
 }
-
