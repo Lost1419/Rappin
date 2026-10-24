@@ -214,7 +214,7 @@ impl Client {
                     .http
                     .request(method.clone(), &url)
                     .header(header::AUTHORIZATION, format!("Bot {}", self.inner.token))
-                    .header(header::USER_AGENT, "yappin-rs/0.1.0");
+                    .header(header::USER_AGENT, "rappin-rs/0.1.1");
 
                 if let Some(ref data) = body_data {
                     req = req
