@@ -31,6 +31,81 @@ pub struct WorkerContext {
     active: Arc<AtomicBool>,
 }
 impl WorkerContext {
+    pub fn parse<A: crate::commands::FromArgs>(&self) -> Result<A> {
+        let mut args = crate::commands::Arguments::new(self.args())?;
+        let value = A::parse(&mut args)?;
+        args.finish()?;
+        Ok(value)
+    }
+    async fn wait_request(
+        &self,
+        filter: crate::collectors::EventFilter,
+        timeout: std::time::Duration,
+        prompt: Option<CreateMessage>,
+    ) -> Result<crate::Event> {
+        self.ensure_active()?;
+        let mut connection = self.connection.lock().await;
+        self.ensure_active()?;
+        if connection.poisoned {
+            return Err(protocol::protocol_error());
+        }
+        let timeout_ms = u64::try_from(timeout.as_millis())
+            .map_err(|_| YappinError::validation("timeout", "timeout is too large"))?;
+        connection.poisoned = true;
+        protocol::write(
+            &mut connection.output,
+            &Wire::Wait {
+                filter,
+                timeout_ms,
+                prompt,
+                channel: self.channel_id(),
+            },
+        )
+        .await?;
+        match protocol::read(&mut connection.input).await? {
+            Wire::EventResult { event, error } => {
+                connection.poisoned = false;
+                if let Some(error) = error {
+                    return Err(YappinError::Config(error));
+                }
+                event.map(|e| *e).ok_or_else(protocol::protocol_error)
+            }
+            _ => Err(protocol::protocol_error()),
+        }
+    }
+    pub async fn wait_for_event(
+        &self,
+        filter: crate::collectors::EventFilter,
+        timeout: std::time::Duration,
+    ) -> Result<crate::Event> {
+        self.wait_request(filter, timeout, None).await
+    }
+    /// The parent registers the waiter before posting the prompt, preventing fast-answer races.
+    pub async fn prompt_for_reply(
+        &self,
+        prompt: impl Into<String>,
+        timeout: std::time::Duration,
+    ) -> Result<crate::MessageEvent> {
+        let channel = self
+            .channel_id()
+            .ok_or_else(|| YappinError::Config("event has no channel".into()))?;
+        let filter = crate::collectors::EventFilter {
+            kind: Some("message".into()),
+            channel_id: Some(channel),
+            author_id: Some(
+                self.author_id()
+                    .ok_or_else(|| YappinError::Config("event has no author".into()))?,
+            ),
+            ..Default::default()
+        };
+        let message = if let Some(event) = self.event.message() {
+            CreateMessage::reply(prompt, event.id)
+        } else {
+            CreateMessage::new(prompt)
+        };
+        let event = self.wait_request(filter, timeout, Some(message)).await?;
+        serde_json::from_value(event.data).map_err(Into::into)
+    }
     pub fn args(&self) -> &str {
         self.event.args()
     }
@@ -165,6 +240,37 @@ pub struct WorkerCog {
     listeners: HashMap<Listener, Handler>,
 }
 impl WorkerCog {
+    pub fn command_typed<A, F, Fut>(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        handler: F,
+    ) -> Self
+    where
+        A: crate::commands::FromArgs,
+        F: Fn(WorkerContext, A) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let name = name.into();
+        let description = description.into();
+        self.manifest.help.push(crate::commands::CommandInfo {
+            name: name.clone(),
+            description: description.clone(),
+            aliases: vec![],
+            arguments: A::describe(),
+        });
+        let handler = Arc::new(handler);
+        self.command(name, description, move |ctx| {
+            let handler = handler.clone();
+            async move {
+                match ctx.parse::<A>() {
+                    Ok(args) => handler(ctx, args).await,
+                    Err(YappinError::Command(error)) => ctx.reply(error.to_string()).await,
+                    Err(error) => Err(error),
+                }
+            }
+        })
+    }
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             manifest: Manifest {
@@ -172,6 +278,7 @@ impl WorkerCog {
                 commands: vec![],
                 buttons: vec![],
                 listeners: vec![],
+                help: vec![],
             },
             commands: HashMap::new(),
             buttons: HashMap::new(),

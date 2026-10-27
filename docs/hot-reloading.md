@@ -38,7 +38,7 @@ edition = "2021"
 default-run = "my-bot"
 
 [dependencies]
-rappin = { package = "rappin-rs", version = "0.1.6", features = ["hot-reload"] }
+rappin = { package = "rappin-rs", version = "0.1.7", features = ["hot-reload"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -123,3 +123,11 @@ Runtime crashes, protocol errors, and handler timeouts follow the bot's normal h
 The parent keeps the bot token. Workers receive event data, including interaction callback tokens when applicable, and the results of their requested API operations. The parent redacts its bot token from API values and errors before returning them. Worker environments are cleared and rebuilt from a small runtime allowlist; Cargo receives additional toolchain variables but does not inherit bot or registry-token environment variables.
 
 Worker code, dependencies, Cargo configuration, and build scripts must be trusted. These are ordinary same-user processes with API capabilities and filesystem access, not an OS sandbox. Environment isolation does not prevent malicious source from reading same-user credential files or performing destructive API calls. Restrict source/build paths and any reload command to the operator; never load executable paths from chat input.
+
+## Typed commands and event waits (0.1.7)
+
+The 0.1.7 worker SDK adds `command_typed` / `WorkerContext::parse`, live help
+metadata, `prompt_for_reply`, and `wait_for_event`. The parent registers prompt
+waiters before posting and owns the authenticated transport. See the
+[Rust workflow guide](rust-bots.md#hot-workers) for bounds, cancellation, and
+protocol compatibility. The worker example includes `roll` and `question`.

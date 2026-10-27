@@ -54,6 +54,10 @@ impl ClientBuilder {
         self.cache = Some(cache);
         self
     }
+    pub fn lookup_cache(mut self, policy: crate::cache::CachePolicy) -> Self {
+        self.cache = Some(Arc::new(Cache::with_lookup_policy(policy)));
+        self
+    }
 
     pub fn build(self) -> Client {
         let http = self.http_client.unwrap_or_else(|| {
@@ -73,12 +77,24 @@ impl ClientBuilder {
                 base_url: self.base_url,
                 max_retries: self.max_retries,
                 cache,
+                events: crate::collectors::EventHub::default(),
+                rate_limits: crate::rate_limits::RateLimits::default(),
+                requests: tokio::sync::watch::channel(None).0,
+                interactions: crate::interactions::Registry::default(),
+                auto_ack_tasks: std::sync::Mutex::new(Vec::new()),
+                auto_ack_slots: Arc::new(tokio::sync::Semaphore::new(128)),
             }),
         }
     }
 }
 
 struct ClientInner {
+    events: crate::collectors::EventHub,
+    rate_limits: crate::rate_limits::RateLimits,
+    requests: tokio::sync::watch::Sender<Option<crate::diagnostics::RequestObservation>>,
+    interactions: crate::interactions::Registry,
+    auto_ack_slots: Arc<tokio::sync::Semaphore>,
+    auto_ack_tasks: std::sync::Mutex<Vec<tokio::task::AbortHandle>>,
     http: reqwest::Client,
     token: String,
     base_url: String,
@@ -139,21 +155,134 @@ impl Client {
         &self.inner.cache
     }
 
+    pub fn events(&self) -> &crate::collectors::EventHub {
+        &self.inner.events
+    }
+    pub fn last_request(&self) -> Option<crate::diagnostics::RequestObservation> {
+        self.inner.requests.borrow().clone()
+    }
+    pub fn subscribe_requests(
+        &self,
+    ) -> tokio::sync::watch::Receiver<Option<crate::diagnostics::RequestObservation>> {
+        self.inner.requests.subscribe()
+    }
+    pub(crate) fn interaction_registry(&self) -> &crate::interactions::Registry {
+        &self.inner.interactions
+    }
+    pub(crate) fn auto_ack_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        self.inner.auto_ack_slots.clone().try_acquire_owned().ok()
+    }
+    pub(crate) fn track_auto_ack(&self, task: tokio::task::AbortHandle) {
+        let mut tasks = self
+            .inner
+            .auto_ack_tasks
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(task);
+    }
+    pub(crate) fn cancel_auto_ack(&self) {
+        let tasks = std::mem::take(
+            &mut *self
+                .inner
+                .auto_ack_tasks
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()),
+        );
+        for task in tasks {
+            task.abort();
+        }
+    }
+    pub(crate) async fn receive_event(&self, event: crate::Event) {
+        if matches!(event.kind.as_str(), "member_join" | "member_leave") {
+            if let (Some(server), Some(user)) = (
+                event.data["server_id"]
+                    .as_str()
+                    .and_then(|s| Uuid::parse_str(s).ok()),
+                event.data["user_id"]
+                    .as_str()
+                    .and_then(|s| Uuid::parse_str(s).ok()),
+            ) {
+                self.cache().invalidate_member(server, user).await;
+            }
+        }
+        self.events().publish(event);
+    }
+
+    /// Explicitly choose whether a fresh, bounded member snapshot may satisfy this lookup.
+    pub async fn fetch_member(
+        &self,
+        server: Uuid,
+        user: Uuid,
+        freshness: crate::cache::Freshness,
+    ) -> Result<MemberDetail> {
+        if freshness == crate::cache::Freshness::PreferCache {
+            if let Some(cached) = self.cache().get_member(server, user).await {
+                return Ok(cached.value);
+            }
+        }
+        self.get_member(server, user).await
+    }
+    pub async fn fetch_roles(
+        &self,
+        server: Uuid,
+        freshness: crate::cache::Freshness,
+    ) -> Result<Vec<Role>> {
+        if freshness == crate::cache::Freshness::PreferCache {
+            if let Some(cached) = self.cache().get_roles(server).await {
+                return Ok(cached.value);
+            }
+        }
+        self.get_roles(server).await
+    }
+
     // -----------------------------------------------------------------------
     // Core HTTP request execution with automatic rate limit / retry handling
     // -----------------------------------------------------------------------
 
-    async fn execute_with_retry<F, Fut>(&self, mut operation: F) -> Result<Response>
+    async fn execute_with_retry<F, Fut>(
+        &self,
+        method: &Method,
+        path: &str,
+        mut operation: F,
+    ) -> Result<Response>
     where
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = std::result::Result<Response, reqwest::Error>>,
     {
         let mut retries = self.inner.max_retries;
+        let started = tokio::time::Instant::now();
+        let key = crate::rate_limits::key(method, path);
+        let is_message = crate::rate_limits::message_send(method, path);
+        let route = crate::rate_limits::route_template(path);
+        let mut wait = Duration::ZERO;
+        let mut attempts = 0;
 
         loop {
-            let res = operation()
-                .await
-                .map_err(|e| YappinError::Http(e.without_url()))?;
+            wait += self.inner.rate_limits.wait(key, is_message).await;
+            attempts += 1;
+            let res = operation().await;
+            let status = res.as_ref().ok().map(|res| res.status().as_u16());
+            let label = if matches!(
+                method.as_str(),
+                "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+            ) {
+                method.as_str()
+            } else {
+                "OTHER"
+            };
+            self.inner
+                .requests
+                .send_replace(Some(crate::diagnostics::RequestObservation {
+                    method: label.into(),
+                    route: route.clone(),
+                    status,
+                    duration: started.elapsed(),
+                    rate_limit_wait: wait,
+                    attempts,
+                }));
+            tracing::debug!(method=label,route=%route,status,elapsed_ms=started.elapsed().as_millis() as u64,attempts,"REST response headers");
+            let res = res.map_err(|e| YappinError::Http(e.without_url()))?;
             let status = res.status();
 
             if status.is_success() {
@@ -168,8 +297,7 @@ impl Client {
                 .headers()
                 .get("Retry-After")
                 .and_then(|h| h.to_str().ok())
-                .and_then(|v| v.parse::<f64>().ok())
-                .filter(|v| v.is_finite() && *v >= 0.0);
+                .and_then(crate::rate_limits::retry_after);
             let body_bytes = res.bytes().await.unwrap_or_default();
             let err_json: serde_json::Value =
                 serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null);
@@ -187,9 +315,21 @@ impl Client {
                 StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
             ) {
                 if let Some(delay) = retry_header {
-                    if retries > 0 && delay <= 60.0 {
-                        warn!(status = status.as_u16(), delay, "API asked us to retry");
-                        sleep(Duration::from_secs_f64(delay)).await;
+                    if delay <= Duration::from_secs(60) {
+                        let global = is_message
+                            && (err_json["global"] == true
+                                || msg.to_ascii_lowercase().contains("overall"));
+                        self.inner.rate_limits.delay(key, delay, global).await;
+                    }
+                    if retries > 0 && delay <= Duration::from_secs(60) {
+                        warn!(
+                            status = status.as_u16(),
+                            delay_ms = delay.as_millis() as u64,
+                            "API asked us to retry"
+                        );
+                        let waiting = tokio::time::Instant::now();
+                        sleep(delay).await;
+                        wait += waiting.elapsed();
                         retries -= 1;
                         continue;
                     }
@@ -198,7 +338,7 @@ impl Client {
             return Err(YappinError::Api {
                 status: status.as_u16(),
                 message: crate::security::scrub(&msg, &[&self.inner.token]),
-                retry_after: retry_header,
+                retry_after: retry_header.map(|d| d.as_secs_f64()),
             });
         }
     }
@@ -219,8 +359,49 @@ impl Client {
             None => None,
         };
 
+        let callback = method == Method::POST
+            && path.starts_with("/interactions/")
+            && path.ends_with("/callback");
+        let kind = if callback {
+            body_data
+                .as_ref()
+                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
+                .and_then(|body| body["type"].as_str().map(str::to_owned))
+        } else {
+            None
+        };
+        let tracked = if callback {
+            Some(self.inner.interactions.entry(path)?)
+        } else {
+            None
+        };
+        let mut tracked = match &tracked {
+            Some(entry) => Some(entry.lock().await),
+            None => None,
+        };
+        let previous = tracked.as_ref().map(|entry| entry.state);
+        if let Some(entry) = &mut tracked {
+            use crate::interactions::ResponsePhase;
+            if tokio::time::Instant::now() >= entry.expires {
+                return Err(YappinError::validation(
+                    "interaction",
+                    "interaction expired",
+                ));
+            }
+            if entry.state.phase == ResponsePhase::Uncertain {
+                return Err(YappinError::validation(
+                    "interaction",
+                    "previous response outcome is uncertain; do not blindly retry",
+                ));
+            }
+            if kind.as_deref() == Some("ack") && entry.state.phase != ResponsePhase::Unanswered {
+                return serde_json::from_value(serde_json::json!({})).map_err(Into::into);
+            }
+            // A cancelled request leaves Uncertain rather than permitting a duplicate initial response.
+            entry.state.phase = ResponsePhase::Uncertain;
+        }
         let response = self
-            .execute_with_retry(|| {
+            .execute_with_retry(&method, path, || {
                 let mut req = self
                     .inner
                     .http
@@ -239,7 +420,47 @@ impl Client {
 
                 req.send()
             })
-            .await?;
+            .await;
+        if let Some(entry) = &mut tracked {
+            use crate::interactions::ResponsePhase;
+            match &response {
+                Ok(_) => {
+                    entry.state.phase = if kind.as_deref() == Some("ack") {
+                        ResponsePhase::Acknowledged
+                    } else {
+                        ResponsePhase::Responded
+                    };
+                    entry.state.responses = entry.state.responses.saturating_add(1);
+                }
+                Err(YappinError::Api { .. } | YappinError::Unauthorized) => {
+                    if let Some(previous) = previous {
+                        entry.state = previous;
+                    }
+                }
+                _ => (),
+            }
+        }
+        drop(tracked);
+        let response = response?;
+
+        if !matches!(method, Method::GET | Method::HEAD) {
+            let parts: Vec<_> = path
+                .split('?')
+                .next()
+                .unwrap_or(path)
+                .trim_matches('/')
+                .split('/')
+                .collect();
+            if parts.first() == Some(&"servers")
+                && parts.get(2).is_some_and(|part| {
+                    matches!(*part, "members" | "roles" | "kick" | "bans" | "timeouts")
+                })
+            {
+                if let Some(server) = parts.get(1).and_then(|id| Uuid::parse_str(id).ok()) {
+                    self.cache().invalidate_server_lookups(server).await;
+                }
+            }
+        }
 
         let bytes = response
             .bytes()
@@ -269,7 +490,7 @@ impl Client {
         debug!(%method, %content_type, "Yapin binary request");
 
         let response = self
-            .execute_with_retry(|| {
+            .execute_with_retry(&method, path, || {
                 self.inner
                     .http
                     .request(method.clone(), url.clone())
@@ -535,6 +756,9 @@ impl Client {
         let resp: Resp = self
             .request_json::<Resp, ()>(Method::GET, &format!("/servers/{}/roles", server_id), None)
             .await?;
+        self.cache()
+            .update_roles(server_id, resp.roles.clone())
+            .await;
         Ok(resp.roles)
     }
 
@@ -582,6 +806,9 @@ impl Client {
                 None,
             )
             .await?;
+        self.cache()
+            .update_member(server_id, user_id, resp.member.clone())
+            .await;
         Ok(resp.member)
     }
 

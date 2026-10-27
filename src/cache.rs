@@ -5,6 +5,95 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::models::{BotProfile, Channel, Server};
+use crate::models::{MemberDetail, Role};
+use std::{hash::Hash, time::Duration};
+use tokio::time::Instant;
+
+/// Bounds for each member/role lookup cache. The default disables lookup caching.
+#[derive(Debug, Clone, Copy)]
+pub struct CachePolicy {
+    pub capacity: usize,
+    pub ttl: Duration,
+}
+impl Default for CachePolicy {
+    fn default() -> Self {
+        Self {
+            capacity: 0,
+            ttl: Duration::ZERO,
+        }
+    }
+}
+impl CachePolicy {
+    pub fn new(capacity: usize, ttl: Duration) -> Self {
+        Self { capacity, ttl }
+    }
+}
+/// Explicitly choose a fresh request or an unexpired cached snapshot.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Freshness {
+    #[default]
+    Refresh,
+    PreferCache,
+}
+#[derive(Debug, Clone)]
+pub struct Cached<T> {
+    pub value: T,
+    fetched_at: Instant,
+}
+impl<T> Cached<T> {
+    pub fn age(&self) -> Duration {
+        self.fetched_at.elapsed()
+    }
+}
+#[derive(Clone)]
+struct Lookup<K, V> {
+    policy: CachePolicy,
+    values: Arc<tokio::sync::Mutex<HashMap<K, Cached<V>>>>,
+}
+impl<K, V> Default for Lookup<K, V> {
+    fn default() -> Self {
+        Self {
+            policy: CachePolicy::default(),
+            values: Arc::default(),
+        }
+    }
+}
+impl<K: Eq + Hash + Clone, V: Clone> Lookup<K, V> {
+    fn new(policy: CachePolicy) -> Self {
+        Self {
+            policy,
+            ..Self::default()
+        }
+    }
+    async fn get(&self, key: &K) -> Option<Cached<V>> {
+        let mut values = self.values.lock().await;
+        values.retain(|_, v| v.age() < self.policy.ttl);
+        values.get(key).cloned()
+    }
+    async fn insert(&self, key: K, value: V) {
+        if self.policy.capacity == 0 || self.policy.ttl.is_zero() {
+            return;
+        }
+        let mut values = self.values.lock().await;
+        values.retain(|_, v| v.age() < self.policy.ttl);
+        if !values.contains_key(&key) && values.len() >= self.policy.capacity {
+            if let Some(oldest) = values
+                .iter()
+                .min_by_key(|(_, v)| v.fetched_at)
+                .map(|(k, _)| k.clone())
+            {
+                values.remove(&oldest);
+            }
+        }
+        values.insert(
+            key,
+            Cached {
+                value,
+                fetched_at: Instant::now(),
+            },
+        );
+    }
+}
 
 /// Thread-safe in-memory cache for Yapin' entities (servers, channels, bot profile).
 #[derive(Clone, Default)]
@@ -12,11 +101,44 @@ pub struct Cache {
     servers: Arc<RwLock<HashMap<Uuid, Server>>>,
     channels: Arc<RwLock<HashMap<Uuid, Channel>>>,
     me: Arc<RwLock<Option<BotProfile>>>,
+    members: Lookup<(Uuid, Uuid), MemberDetail>,
+    roles: Lookup<Uuid, Vec<Role>>,
 }
 
 impl Cache {
     pub fn new() -> Self {
         Self::default()
+    }
+    /// Lookup caching is disabled by default. Eviction is oldest insertion, with a hard capacity per cache.
+    pub fn with_lookup_policy(policy: CachePolicy) -> Self {
+        Self {
+            members: Lookup::new(policy),
+            roles: Lookup::new(policy),
+            ..Self::default()
+        }
+    }
+    pub async fn get_member(&self, server: Uuid, user: Uuid) -> Option<Cached<MemberDetail>> {
+        self.members.get(&(server, user)).await
+    }
+    pub async fn get_roles(&self, server: Uuid) -> Option<Cached<Vec<Role>>> {
+        self.roles.get(&server).await
+    }
+    pub(crate) async fn update_member(&self, server: Uuid, user: Uuid, value: MemberDetail) {
+        self.members.insert((server, user), value).await;
+    }
+    pub(crate) async fn update_roles(&self, server: Uuid, value: Vec<Role>) {
+        self.roles.insert(server, value).await;
+    }
+    pub async fn invalidate_server_lookups(&self, server: Uuid) {
+        self.members
+            .values
+            .lock()
+            .await
+            .retain(|(s, _), _| *s != server);
+        self.roles.values.lock().await.remove(&server);
+    }
+    pub async fn invalidate_member(&self, server: Uuid, user: Uuid) {
+        self.members.values.lock().await.remove(&(server, user));
     }
 
     /// Stores or updates a server in the cache.

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub(super) const VERSION: u32 = 1;
+pub(super) const VERSION: u32 = 2;
 const MAX_FRAME: u64 = 1024 * 1024;
 
 /// Optional listeners implemented by a worker in addition to commands and buttons.
@@ -90,6 +90,8 @@ pub(super) struct Manifest {
     pub commands: Vec<Command>,
     pub buttons: Vec<String>,
     pub listeners: Vec<Listener>,
+    #[serde(default)]
+    pub help: Vec<crate::commands::CommandInfo>,
 }
 impl Manifest {
     pub fn validate(&self) -> Result<()> {
@@ -106,6 +108,20 @@ impl Manifest {
             ));
         }
         crate::validation::validate_commands(&self.commands)?;
+        let mut help_names = std::collections::HashSet::new();
+        if self.help.iter().any(|info| {
+            !self
+                .commands
+                .iter()
+                .any(|command| command.name == info.name)
+                || !info.aliases.is_empty()
+                || !help_names.insert(&info.name)
+        }) {
+            return Err(YappinError::validation(
+                "cog.help",
+                "help entries require unique existing command names",
+            ));
+        }
         let mut seen = std::collections::HashSet::new();
         if self.buttons.len() > 100
             || self
@@ -131,6 +147,16 @@ impl Manifest {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(super) enum Wire {
+    Wait {
+        filter: crate::collectors::EventFilter,
+        timeout_ms: u64,
+        prompt: Option<crate::CreateMessage>,
+        channel: Option<uuid::Uuid>,
+    },
+    EventResult {
+        event: Option<Box<crate::Event>>,
+        error: Option<String>,
+    },
     Shutdown,
     Ready {
         protocol: u32,

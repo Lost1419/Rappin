@@ -20,6 +20,16 @@ for the two-binary setup, reply helpers, state boundaries, and credential handli
 Available since `0.1.5`; native `reload_cog` replaces linked instances and does not
 compile source edits.
 
+## Building Rust bots (0.1.7)
+
+The [Rust workflow guide](rust-bots.md) covers the typed CommandSpec /
+FromArgs APIs, aliases/subcommands, reusable checks, generated help, bounded typed
+collectors, transport diagnostics, interaction ownership, shared rate waits, and
+explicit cache freshness added in 0.1.7. Start with `cargo run --example typed_bot`. Existing
+closure commands and CLI/MCP wire formats remain supported. New library workflow
+APIs do not add new CLI commands or MCP tools. Register collectors before sending
+prompts and handle timeout, overflow, and shutdown explicitly.
+
 ## Authentication and output
 
 Set `YAPPER_BOT_TOKEN`. Precedence is environment, then `token` in

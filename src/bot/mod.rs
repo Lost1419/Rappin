@@ -1,6 +1,7 @@
 pub mod cog;
 pub mod context;
 pub mod handler;
+mod pipeline;
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -9,9 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::events::EventCursor;
-use futures_util::{stream, StreamExt};
 use tokio::sync::RwLock;
-use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 
 pub use cog::{
@@ -25,11 +24,87 @@ use crate::error::{Result, YappinError};
 use crate::models::{BotProfile, Command, EventData, InteractionEvent, MessageEvent};
 use crate::utils::DEFAULT_API_BASE;
 
+#[derive(Clone)]
 struct CommandDef {
     description: String,
     cog_name: Option<String>,
     handler: CommandHandlerFn,
+    info: Option<crate::commands::CommandInfo>,
 }
+
+fn advertised_commands(commands: &HashMap<String, CommandDef>) -> Result<Vec<Command>> {
+    let mut roots = std::collections::BTreeMap::new();
+    let mut ordered: Vec<_> = commands.iter().collect();
+    ordered.sort_by_key(|(name, _)| *name);
+    for (name, def) in ordered {
+        if def.info.as_ref().is_some_and(|info| info.name != *name) {
+            continue;
+        }
+        let parts: Vec<_> = name.split(' ').collect();
+        if parts.len() > 8 {
+            return Err(crate::commands::CommandError::Definition(
+                "subcommand depth exceeds eight".into(),
+            )
+            .into());
+        }
+        for part in &parts {
+            crate::validation::validate_commands(&[Command::new(*part, &def.description)])?;
+        }
+        roots
+            .entry(parts[0].to_string())
+            .or_insert_with(|| def.description.clone());
+    }
+    let result: Vec<_> = roots
+        .into_iter()
+        .map(|(name, description)| Command::new(name, description))
+        .collect();
+    crate::validation::validate_commands(&result)?;
+    Ok(result)
+}
+fn insert_registered(
+    commands: &mut HashMap<String, CommandDef>,
+    command: crate::commands::RegisteredCommand,
+    cog_name: Option<String>,
+) -> Result<()> {
+    let mut names = vec![command.info.name.clone()];
+    names.extend(command.info.aliases.clone());
+    let mut unique = std::collections::HashSet::new();
+    for name in &names {
+        if !unique.insert(name) || commands.contains_key(name) {
+            return Err(crate::commands::CommandError::Definition(
+                "command or alias already registered".into(),
+            )
+            .into());
+        }
+        if name.split(' ').count() > 8 {
+            return Err(crate::commands::CommandError::Definition(
+                "subcommand depth exceeds eight".into(),
+            )
+            .into());
+        }
+        for part in name.split(' ') {
+            crate::validation::validate_commands(&[Command::new(part, &command.info.description)])?;
+        }
+    }
+    for name in names {
+        commands.insert(
+            name,
+            CommandDef {
+                description: command.info.description.clone(),
+                cog_name: cog_name.clone(),
+                handler: command.handler.clone(),
+                info: Some(command.info.clone()),
+            },
+        );
+    }
+    Ok(())
+}
+
+type PrefixResolver = Arc<
+    dyn Fn(MessageEvent) -> std::pin::Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send>>
+        + Send
+        + Sync,
+>;
 
 struct ButtonDef {
     prefix: String,
@@ -54,6 +129,9 @@ pub type ButtonErrorHandlerFn = Arc<
 struct BotState {
     client: Arc<Client>,
     prefixes: Vec<String>,
+    prefix_resolver: Option<PrefixResolver>,
+    mention_prefix: bool,
+    definition_error: Option<String>,
     commands: RwLock<HashMap<String, CommandDef>>,
     buttons: RwLock<Vec<ButtonDef>>,
     cogs: RwLock<HashMap<String, Arc<dyn Cog>>>,
@@ -67,6 +145,9 @@ struct BotState {
     cursor: Option<EventCursor>,
     max_age: Option<u32>,
     handler_concurrency: usize,
+    pending_batches: usize,
+    auto_ack_after: Option<Duration>,
+    telemetry: crate::diagnostics::Telemetry,
     #[cfg(feature = "gateway")]
     gateway_url: Option<String>,
     registry_update: tokio::sync::Mutex<()>,
@@ -92,6 +173,55 @@ impl WeakBotHandle {
 }
 
 impl BotHandle {
+    pub async fn command_info(&self) -> Vec<crate::commands::CommandInfo> {
+        let commands = self.inner.commands.read().await;
+        let mut result: Vec<_> = commands
+            .iter()
+            .filter(|(name, def)| def.info.as_ref().is_none_or(|info| info.name == **name))
+            .map(|(name, def)| {
+                def.info
+                    .clone()
+                    .unwrap_or_else(|| crate::commands::CommandInfo {
+                        name: name.clone(),
+                        description: def.description.clone(),
+                        aliases: vec![],
+                        arguments: vec![],
+                    })
+            })
+            .collect();
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        result
+    }
+    pub async fn help(&self, path: &str) -> String {
+        let info = self.command_info().await;
+        if path.is_empty() {
+            return info
+                .iter()
+                .map(|info| format!("{} — {}", info.usage(), info.description))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+        info.iter()
+            .filter(|info| {
+                info.name == path
+                    || info.name.starts_with(&format!("{path} "))
+                    || info.aliases.iter().any(|alias| alias == path)
+            })
+            .map(|info| info.help())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+    pub fn transport_status(&self) -> crate::diagnostics::TransportStatus {
+        self.inner.telemetry.status()
+    }
+    pub fn subscribe_transport(
+        &self,
+    ) -> tokio::sync::watch::Receiver<crate::diagnostics::TransportStatus> {
+        self.inner.telemetry.subscribe()
+    }
+    pub fn events(&self) -> &crate::collectors::EventHub {
+        self.client().events()
+    }
     #[cfg(feature = "hot-reload")]
     pub(crate) fn downgrade(&self) -> WeakBotHandle {
         WeakBotHandle {
@@ -149,14 +279,28 @@ impl BotHandle {
         cog.on_load(self.client()).await?;
         let result: Result<Option<Arc<dyn Cog>>> = async {
             // Preserve native cogs that initialize their route metadata in on_load.
-            let commands = cog.commands();
+            let mut commands = HashMap::new();
+            for command in cog.commands() {
+                if commands.contains_key(&command.name) {
+                    return Err(YappinError::validation(
+                        "commands.name",
+                        "duplicate command",
+                    ));
+                }
+                commands.insert(
+                    command.name,
+                    CommandDef {
+                        description: command.description,
+                        cog_name: Some(name.clone()),
+                        handler: command.handler,
+                        info: None,
+                    },
+                );
+            }
+            for command in cog.registered_commands() {
+                insert_registered(&mut commands, command, Some(name.clone()))?;
+            }
             let buttons = cog.buttons();
-            crate::validation::validate_commands(
-                &commands
-                    .iter()
-                    .map(|c| Command::new(&c.name, &c.description))
-                    .collect::<Vec<_>>(),
-            )?;
             let _update = self.inner.registry_update.lock().await;
             if let Some(present) = expected {
                 if self.inner.cogs.read().await.contains_key(&name) != present {
@@ -166,31 +310,21 @@ impl BotHandle {
                     ));
                 }
             }
-            let mut planned: Vec<Command> = {
-                let current = self.inner.commands.read().await;
-                for command in &commands {
-                    if current
-                        .get(&command.name)
-                        .is_some_and(|c| c.cog_name.as_deref() != Some(&name))
-                    {
-                        return Err(YappinError::validation(
-                            "commands.name",
-                            "command belongs to another cog or the bot",
-                        ));
-                    }
+            let mut planned = self.inner.commands.read().await.clone();
+            for key in commands.keys() {
+                if planned
+                    .get(key)
+                    .is_some_and(|c| c.cog_name.as_deref() != Some(&name))
+                {
+                    return Err(YappinError::validation(
+                        "commands.name",
+                        "command belongs to another cog or the bot",
+                    ));
                 }
-                current
-                    .iter()
-                    .filter(|(_, c)| c.cog_name.as_deref() != Some(&name))
-                    .map(|(n, c)| Command::new(n, &c.description))
-                    .collect()
-            };
-            planned.extend(
-                commands
-                    .iter()
-                    .map(|c| Command::new(&c.name, &c.description)),
-            );
-            crate::validation::validate_commands(&planned)?;
+            }
+            planned.retain(|_, c| c.cog_name.as_deref() != Some(&name));
+            planned.extend(commands.clone());
+            let planned = advertised_commands(&planned)?;
             // Do not hold dispatch locks while waiting for the API. Old code stays available.
             if synchronize && self.inner.sync_commands && self.inner.running.load(Ordering::SeqCst)
             {
@@ -202,16 +336,7 @@ impl BotHandle {
             let mut cogs = self.inner.cogs.write().await;
             current.retain(|_, c| c.cog_name.as_deref() != Some(&name));
             routes.retain(|b| b.cog_name.as_deref() != Some(&name));
-            for command in commands {
-                current.insert(
-                    command.name,
-                    CommandDef {
-                        description: command.description,
-                        cog_name: Some(name.clone()),
-                        handler: command.handler,
-                    },
-                );
-            }
+            current.extend(commands);
             for button in buttons {
                 routes.push(ButtonDef {
                     prefix: button.prefix,
@@ -253,15 +378,9 @@ impl BotHandle {
             if !self.inner.cogs.read().await.contains_key(name) {
                 return Ok(None);
             }
-            let planned: Vec<Command> = self
-                .inner
-                .commands
-                .read()
-                .await
-                .iter()
-                .filter(|(_, c)| c.cog_name.as_deref() != Some(name))
-                .map(|(n, c)| Command::new(n, &c.description))
-                .collect();
+            let mut planned = self.inner.commands.read().await.clone();
+            planned.retain(|_, c| c.cog_name.as_deref() != Some(name));
+            let planned = advertised_commands(&planned)?;
             if self.inner.sync_commands && self.inner.running.load(Ordering::SeqCst) {
                 self.client().set_commands(&planned).await?;
             }
@@ -309,14 +428,7 @@ impl BotHandle {
     /// Synchronize a consistent command snapshot without blocking normal dispatch.
     pub async fn sync_commands(&self) -> Result<Vec<Command>> {
         let _update = self.inner.registry_update.lock().await;
-        let commands: Vec<Command> = self
-            .inner
-            .commands
-            .read()
-            .await
-            .iter()
-            .map(|(n, c)| Command::new(n, &c.description))
-            .collect();
+        let commands = advertised_commands(&*self.inner.commands.read().await)?;
         self.client().set_commands(&commands).await
     }
 
@@ -332,6 +444,9 @@ pub struct BotBuilder {
     token: String,
     base_url: String,
     prefixes: Vec<String>,
+    prefix_resolver: Option<PrefixResolver>,
+    mention_prefix: bool,
+    definition_error: Option<String>,
     commands: HashMap<String, CommandDef>,
     buttons: Vec<ButtonDef>,
     cogs: Vec<Box<dyn Cog>>,
@@ -344,6 +459,10 @@ pub struct BotBuilder {
     cursor: Option<EventCursor>,
     max_age: Option<u32>,
     handler_concurrency: usize,
+    pending_batches: usize,
+    auto_ack_after: Option<Duration>,
+    transport_mode: crate::diagnostics::TransportMode,
+    lookup_policy: crate::cache::CachePolicy,
     #[cfg(feature = "gateway")]
     gateway_url: Option<String>,
 }
@@ -354,6 +473,9 @@ impl BotBuilder {
             token: token.into(),
             base_url: DEFAULT_API_BASE.to_string(),
             prefixes: vec!["/".to_string(), "!".to_string()],
+            prefix_resolver: None,
+            mention_prefix: false,
+            definition_error: None,
             commands: HashMap::new(),
             buttons: Vec::new(),
             cogs: Vec::new(),
@@ -366,6 +488,10 @@ impl BotBuilder {
             cursor: None,
             max_age: None,
             handler_concurrency: 8,
+            pending_batches: 4,
+            auto_ack_after: None,
+            transport_mode: crate::diagnostics::TransportMode::Polling,
+            lookup_policy: crate::cache::CachePolicy::default(),
             #[cfg(feature = "gateway")]
             gateway_url: None,
         }
@@ -385,6 +511,50 @@ impl BotBuilder {
         }
         self
     }
+    pub fn prefixes_with<F, Fut>(mut self, resolver: F) -> Self
+    where
+        F: Fn(MessageEvent) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Vec<String>>> + Send + 'static,
+    {
+        self.prefix_resolver = Some(Arc::new(move |event| Box::pin(resolver(event))));
+        self
+    }
+    pub fn mention_prefix(mut self, enabled: bool) -> Self {
+        self.mention_prefix = enabled;
+        self
+    }
+    pub fn command_spec<A, F, Fut>(
+        mut self,
+        spec: crate::commands::CommandSpec<A>,
+        handler: F,
+    ) -> Self
+    where
+        A: crate::commands::FromArgs,
+        F: Fn(MessageContext, A) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        if let Err(error) = insert_registered(&mut self.commands, spec.bind(handler), None) {
+            self.definition_error = Some(error.to_string());
+        }
+        self
+    }
+    pub fn help_command(self, name: impl Into<String>) -> Self {
+        self.command(name, "Show command usage", |ctx| async move {
+            let text = ctx
+                .bot()
+                .ok_or_else(|| YappinError::Config("help requires a bot handle".into()))?
+                .help(ctx.args.trim())
+                .await;
+            for part in crate::split_message(if text.is_empty() {
+                "No matching command"
+            } else {
+                &text
+            }) {
+                ctx.reply(part).await?;
+            }
+            Ok(())
+        })
+    }
 
     /// Registers a command with a name, description, and async handler.
     pub fn command<F, Fut>(
@@ -400,12 +570,21 @@ impl BotBuilder {
         let name_str = name.into().to_lowercase();
         let desc_str = description.into();
         let wrapped_handler: CommandHandlerFn = Arc::new(move |ctx| Box::pin(handler(ctx)));
+        if self
+            .commands
+            .get(&name_str)
+            .is_some_and(|command| command.info.is_some())
+        {
+            self.definition_error = Some("command conflicts with a typed command or alias".into());
+            return self;
+        }
         self.commands.insert(
             name_str,
             CommandDef {
                 description: desc_str,
                 cog_name: None,
                 handler: wrapped_handler,
+                info: None,
             },
         );
         self
@@ -439,12 +618,21 @@ impl BotBuilder {
                 fut.await
             })
         });
+        if self
+            .commands
+            .get(&name_str)
+            .is_some_and(|command| command.info.is_some())
+        {
+            self.definition_error = Some("command conflicts with a typed command or alias".into());
+            return self;
+        }
         self.commands.insert(
             name_str,
             CommandDef {
                 description: desc_str,
                 cog_name: None,
                 handler: wrapped_handler,
+                info: None,
             },
         );
         self
@@ -552,20 +740,50 @@ impl BotBuilder {
         self.handler_concurrency = limit.clamp(1, 100);
         self
     }
+    /// Bounds both prefetched and active event batches (each API batch has at most 100 events).
+    pub fn pending_batches(mut self, limit: usize) -> Self {
+        self.pending_batches = limit.clamp(1, 32);
+        self
+    }
+    pub fn transport_mode(mut self, mode: crate::diagnostics::TransportMode) -> Self {
+        self.transport_mode = mode;
+        self
+    }
+    pub fn lookup_cache(mut self, policy: crate::cache::CachePolicy) -> Self {
+        self.lookup_policy = policy;
+        self
+    }
+    /// Opt-in early acknowledgement. Use a short delay (e.g. 250ms); already answered clicks are skipped.
+    pub fn auto_ack_after(mut self, after: Duration) -> Self {
+        self.auto_ack_after = Some(after);
+        self
+    }
     /// Gateway automatically resumes and falls back to polling when unavailable.
     #[cfg(feature = "gateway")]
     pub fn gateway(mut self, url: impl Into<String>) -> Self {
         self.gateway_url = Some(url.into());
+        self.transport_mode = crate::diagnostics::TransportMode::GatewayPreferred;
         self
+    }
+    #[cfg(feature = "gateway")]
+    pub fn gateway_only(self, url: impl Into<String>) -> Self {
+        self.gateway(url)
+            .transport_mode(crate::diagnostics::TransportMode::GatewayOnly)
     }
 
     /// Builds the configured [`Bot`].
     pub fn build(self) -> Bot {
-        let client = Client::builder(self.token).base_url(self.base_url).build();
+        let client = Client::builder(self.token)
+            .base_url(self.base_url)
+            .lookup_cache(self.lookup_policy)
+            .build();
 
         let state = Arc::new(BotState {
             client: Arc::new(client),
             prefixes: self.prefixes,
+            prefix_resolver: self.prefix_resolver,
+            mention_prefix: self.mention_prefix,
+            definition_error: self.definition_error,
             commands: RwLock::new(self.commands),
             buttons: RwLock::new(self.buttons),
             cogs: RwLock::new(HashMap::new()),
@@ -579,6 +797,9 @@ impl BotBuilder {
             cursor: self.cursor,
             max_age: self.max_age,
             handler_concurrency: self.handler_concurrency,
+            pending_batches: self.pending_batches,
+            auto_ack_after: self.auto_ack_after,
+            telemetry: crate::diagnostics::Telemetry::new(self.transport_mode),
             #[cfg(feature = "gateway")]
             gateway_url: self.gateway_url,
             registry_update: tokio::sync::Mutex::new(()),
@@ -600,6 +821,12 @@ pub struct Bot {
 }
 
 impl Bot {
+    pub fn transport_status(&self) -> crate::diagnostics::TransportStatus {
+        self.handle.transport_status()
+    }
+    pub fn events(&self) -> &crate::collectors::EventHub {
+        self.client().events()
+    }
     /// Creates a [`BotBuilder`] for the specified bot token.
     pub fn builder(token: impl Into<String>) -> BotBuilder {
         BotBuilder::new(token)
@@ -662,6 +889,16 @@ impl Bot {
     }
 
     async fn run_inner(mut self) -> Result<()> {
+        if let Some(error) = &self.handle.inner.definition_error {
+            return Err(YappinError::Config(error.clone()));
+        }
+        advertised_commands(&*self.handle.inner.commands.read().await)?;
+        #[cfg(not(feature = "gateway"))]
+        if self.transport_status().mode != crate::diagnostics::TransportMode::Polling {
+            return Err(YappinError::Config(
+                "enable the gateway Cargo feature for this transport mode".into(),
+            ));
+        }
         self.handle.inner.running.store(true, Ordering::SeqCst);
 
         // 1. Fetch bot user details to verify token
@@ -691,20 +928,18 @@ impl Bot {
             Some(c) => c.load().await?,
             None => None,
         };
-        let mut last = match saved {
+        let last = match saved {
             Some(id) => id,
+            None if self.transport_status().mode
+                == crate::diagnostics::TransportMode::GatewayOnly =>
+            {
+                0
+            }
             None => self.client().get_events(Some(0), Some(0), None).await?.last,
         };
         if let Some(c) = &self.handle.inner.cursor {
             c.save(last).await?;
         }
-        #[cfg(feature = "gateway")]
-        let mut gateway = self.handle.inner.gateway_url.as_ref().map(|url| {
-            crate::gateway::Gateway::new(self.client().clone())
-                .url(url)
-                .max_age(self.handle.inner.max_age)
-        });
-
         if self.handle.inner.log {
             println!("[rappin] Logged in as {} ({})", me.username, me.id);
         }
@@ -714,64 +949,25 @@ impl Bot {
             handler.on_ready(self.handle.client(), &me).await;
         }
 
-        let mut fail_count = 0u32;
-
-        while self.handle.inner.running.load(Ordering::SeqCst) {
-            let poll = async {
-                #[cfg(feature = "gateway")]
-                if let Some(gateway) = &mut gateway {
-                    return gateway.poll(last).await;
-                }
-                self.client()
-                    .get_events(Some(last), Some(25), self.handle.inner.max_age)
-                    .await
-            };
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => { self.stop(); break; }
-                _ = self.handle.inner.stopped.notified() => break,
-                poll_result = poll => match poll_result {
-                    Ok(resp) => {
-                        fail_count = 0;
-                        let watermark = resp.last;
-                        let work = stream::iter(resp.events.into_iter().filter(move |e| e.id > last))
-                            .map(|event| self.dispatch_event(event, &me))
-                            .buffer_unordered(self.handle.inner.handler_concurrency)
-                            .collect::<Vec<_>>();
-                        tokio::pin!(work);
-                        let results = tokio::select! {
-                            results = &mut work => results,
-                            _ = tokio::signal::ctrl_c() => { self.stop(); work.await }
-                        };
-                        for result in results { result?; }
-                        // All handlers have finished successfully before the durable checkpoint moves.
-                        let next = last.max(watermark);
-                        if let Some(cursor) = &self.handle.inner.cursor { cursor.save(next).await?; }
-                        last = next;
-                    },
-                    Err(YappinError::Unauthorized) => return Err(YappinError::Unauthorized),
-                    Err(e) => {
-                        fail_count += 1;
-                        let delay = Duration::from_secs((1u64 << fail_count.min(5)).min(30));
-                        warn!("Event poll failed: {e}");
-                        tokio::select! {
-                            _ = sleep(delay) => (),
-                            _ = self.handle.inner.stopped.notified() => break,
-                            _ = tokio::signal::ctrl_c() => { self.stop(); break; }
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(())
+        self.run_pipeline(&me, last).await
     }
 
     /// Dispatch an already authenticated event from a custom transport.
     pub async fn process_event(&self, event: crate::models::Event) -> Result<()> {
+        if let Some(error) = &self.handle.inner.definition_error {
+            return Err(YappinError::Config(error.clone()));
+        }
         let me = match self.cache().get_me().await {
             Some(me) => me,
             None => self.client().get_me().await?,
         };
+        self.client().receive_event(event.clone()).await;
+        if let Some(after) = self.handle.inner.auto_ack_after {
+            if let Ok(EventData::Interaction(mut interaction)) = event.parse_data() {
+                interaction.created_at = interaction.created_at.or(event.created_at);
+                self.client().auto_ack(interaction, after);
+            }
+        }
         self.dispatch_event(event, &me).await
     }
 
@@ -877,23 +1073,56 @@ impl Bot {
             matched_args = msg.args.clone().unwrap_or_default();
         } else if let Some(ref content) = msg.content {
             // Check prefix commands
-            let mut prefixes = self.handle.inner.prefixes.clone();
+            let mut prefixes = if let Some(resolver) = &self.handle.inner.prefix_resolver {
+                resolver(msg.clone()).await?
+            } else {
+                self.handle.inner.prefixes.clone()
+            };
+            if self.handle.inner.mention_prefix {
+                prefixes.push(format!("<@{}>", me.id));
+                prefixes.push(format!("<@!{}>", me.id));
+            }
+            prefixes.retain(|p| !p.is_empty());
             prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
 
             let cmds_guard = self.handle.inner.commands.read().await;
             for p in prefixes {
                 if content.starts_with(&p) {
-                    let rest = &content[p.len()..];
+                    let rest = content[p.len()..].trim_start();
                     let mut parts = rest.splitn(2, char::is_whitespace);
                     if let Some(cmd_name) = parts.next() {
                         let cmd_lower = cmd_name.to_lowercase();
-                        if cmds_guard.contains_key(&cmd_lower) {
+                        if cmds_guard.keys().any(|key| {
+                            key == &cmd_lower || key.starts_with(&format!("{cmd_lower} "))
+                        }) {
                             matched_command = Some(cmd_lower);
                             matched_args = parts.next().unwrap_or_default().trim().to_string();
                             break;
                         }
                     }
                 }
+            }
+        }
+
+        let mut unmatched_group = None;
+        if let Some(root) = matched_command.clone() {
+            let commands = self.handle.inner.commands.read().await;
+            let tokens = crate::commands::tokenize(&matched_args).unwrap_or_default();
+            let mut path = root.clone();
+            let mut best = commands.contains_key(&path).then_some((path.clone(), 0));
+            for token in tokens.iter().take(7) {
+                path.push(' ');
+                path.push_str(&token.value.to_lowercase());
+                if commands.contains_key(&path) {
+                    best = Some((path.clone(), token.end));
+                }
+            }
+            if let Some((path, end)) = best {
+                matched_command = Some(path);
+                matched_args = matched_args[end..].trim_start().to_owned();
+            } else {
+                unmatched_group = Some(root);
+                matched_command = None;
             }
         }
 
@@ -905,10 +1134,17 @@ impl Bot {
             Some(self.handle.clone()),
         );
 
+        if let Some(group) = unmatched_group {
+            let text = self.handle.help(&group).await;
+            for part in crate::split_message(&text) {
+                ctx.reply(part).await?;
+            }
+        }
         if let Some(cmd_name) = matched_command {
             let cmds_guard = self.handle.inner.commands.read().await;
             if let Some(def) = cmds_guard.get(&cmd_name) {
                 let handler = def.handler.clone();
+                let usage = def.info.as_ref().map(|info| info.usage());
                 let cog_name = def.cog_name.clone();
                 let cog = match cog_name {
                     Some(name) => self.handle.inner.cogs.read().await.get(&name).cloned(),
@@ -921,6 +1157,17 @@ impl Bot {
                 };
                 if allow {
                     if let Err(e) = handler(ctx.clone()).await {
+                        if matches!(e, YappinError::Command(_)) {
+                            let text = format!(
+                                "{}{}",
+                                e,
+                                usage.map(|u| format!("\nUsage: {u}")).unwrap_or_default()
+                            );
+                            for part in crate::split_message(&text) {
+                                ctx.reply(part).await?;
+                            }
+                            return Ok(());
+                        }
                         let message = e.to_string();
                         if let Some(on_err) = &self.handle.inner.command_error_handler {
                             on_err(ctx.clone(), e).await;

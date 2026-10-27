@@ -1,7 +1,7 @@
 # Rappin 🦀
 
 [![GitHub](https://img.shields.io/badge/github-Lost1419/Rappin-blue?logo=github)](https://github.com/Lost1419/Rappin)
-[![Crates.io](https://img.shields.io/crates/v/rappin-rs.svg?v=0.1.6)](https://crates.io/crates/rappin-rs)
+[![Crates.io](https://img.shields.io/crates/v/rappin-rs.svg?v=0.1.7)](https://crates.io/crates/rappin-rs)
 [![Docs.rs](https://docs.rs/rappin-rs/badge.svg)](https://docs.rs/rappin-rs)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 
@@ -10,6 +10,19 @@ An idiomatic, type-safe, asynchronous Rust client and bot framework for the [Yap
 Yapin’ is a chat platform providing an HTTPS-based bot API with long-polling events, slash commands, interactive buttons, embeds, Components V2 cards, and LiveKit-powered voice channels.
 
 See [credential security](docs/agents.md#credential-hardening-014) for the security boundaries and migration notes.
+
+## Rust bot ergonomics (0.1.7)
+
+Typed command structs, aliases/subcommands, reusable authorization checks, and
+live generated help work alongside the existing async closure handlers. Bounded
+event intake supports typed reply/component collectors while handlers run.
+Transport status, shared interaction acknowledgements, coordinated rate-limit
+waits, and opt-in member/role caches make behavior explicit.
+
+Run `cargo run --example typed_bot` with `YAPPER_BOT_TOKEN` set. See the
+[Rust workflow guide](docs/rust-bots.md) for examples, defaults, and delivery
+semantics. These APIs are available starting with version 0.1.7.
+Hot workers also support typed arguments, help metadata, and parent-owned waits.
 
 ## Agent CLI, MCP, and resumable bots
 
@@ -118,7 +131,7 @@ Add `rappin-rs` and `tokio` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.6"
+rappin-rs = "0.1.7"
 tokio = { version = "1", features = ["full"] }
 ```
 

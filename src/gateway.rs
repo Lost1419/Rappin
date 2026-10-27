@@ -1,4 +1,7 @@
 //! Optional Yapin gateway transport. Checkpoints belong to the consumer, not the socket.
+use crate::diagnostics::{
+    EventTransport, FallbackReason, Telemetry, TransportMode, TransportStatus,
+};
 use crate::{Client, EventsResponse, Result, YappinError};
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
@@ -17,6 +20,9 @@ pub struct Gateway {
     events: Vec<String>,
     max_age: Option<u32>,
     fallback_until: Option<Instant>,
+    telemetry: Telemetry,
+    allow_fallback: bool,
+    heartbeat_sent: Option<Instant>,
 }
 impl Gateway {
     pub fn new(client: Client) -> Self {
@@ -30,6 +36,9 @@ impl Gateway {
             events: vec![],
             max_age: None,
             fallback_until: None,
+            telemetry: Telemetry::new(TransportMode::GatewayPreferred),
+            allow_fallback: true,
+            heartbeat_sent: None,
         }
     }
     pub fn url(mut self, url: impl Into<String>) -> Self {
@@ -43,6 +52,31 @@ impl Gateway {
     pub fn max_age(mut self, age: Option<u32>) -> Self {
         self.max_age = age;
         self
+    }
+    /// Disable REST fallback. A connection failure is returned to the caller.
+    pub fn gateway_only(mut self) -> Self {
+        self.allow_fallback = false;
+        self.telemetry
+            .update(|s| s.mode = TransportMode::GatewayOnly);
+        self
+    }
+    pub fn status(&self) -> TransportStatus {
+        self.telemetry.status()
+    }
+    pub fn subscribe_status(&self) -> tokio::sync::watch::Receiver<TransportStatus> {
+        self.telemetry.subscribe()
+    }
+    pub(crate) fn telemetry(mut self, telemetry: Telemetry) -> Self {
+        self.telemetry = telemetry;
+        self
+    }
+    pub(crate) fn backpressure(&mut self) {
+        self.socket = None;
+        self.telemetry.update(|s| {
+            s.active = None;
+            s.heartbeat_rtt = None;
+            s.fallback = Some(FallbackReason::Backpressure);
+        });
     }
     async fn connect(&mut self, after: u64) -> Result<()> {
         crate::security::endpoint(&self.url, true)?;
@@ -95,6 +129,7 @@ impl Gateway {
         self.socket = Some(ws);
         self.heartbeat = Instant::now() + self.interval;
         self.awaiting_ack = false;
+        self.heartbeat_sent = None;
         Ok(())
     }
     async fn receive(&mut self, after: u64) -> Result<EventsResponse> {
@@ -109,7 +144,7 @@ impl Gateway {
                 _=tokio::time::sleep_until(self.heartbeat)=>{
                     if self.awaiting_ack{return Err(transport());}
                     socket.send(Message::Text("{\"op\":\"heartbeat\"}".into())).await.map_err(|_|transport())?;
-                    self.awaiting_ack=true;self.heartbeat=Instant::now()+self.interval;
+                    self.awaiting_ack=true;self.heartbeat_sent=Some(Instant::now());self.heartbeat=Instant::now()+self.interval;
                 },
                 frame=socket.next()=>{
                     match frame.ok_or_else(transport)?.map_err(|_|transport())?{
@@ -118,9 +153,15 @@ impl Gateway {
                         Message::Text(t)=>{
                             let v:serde_json::Value=serde_json::from_str(&t)?;
                             match v["op"].as_str(){
-                                Some("heartbeat_ack")=>self.awaiting_ack=false,
-                                Some("ready") if after==0=>return Ok(EventsResponse{events:vec![],last:v["seq"].as_u64().unwrap_or(0)}),
-                                Some("event")=>{let event:crate::Event=serde_json::from_value(v["d"].clone())?;if event.id>after{return Ok(EventsResponse{last:event.id,events:vec![event]});}},
+                                Some("heartbeat_ack")=>{
+                                    self.awaiting_ack=false;
+                                    if let Some(sent)=self.heartbeat_sent.take(){self.telemetry.update(|s|s.heartbeat_rtt=Some(sent.elapsed()));}
+                                },
+                                Some("ready")=>{
+                                    self.telemetry.update(|s|{s.active=Some(EventTransport::Gateway);s.fallback=None;s.heartbeat_rtt=None;});
+                                    if after==0{return Ok(EventsResponse{events:vec![],last:v["seq"].as_u64().unwrap_or(0)});}
+                                },
+                                Some("event")=>{let event:crate::Event=serde_json::from_value(v["d"].clone())?;if event.id>after{self.telemetry.update(|s|{s.active=Some(EventTransport::Gateway);s.fallback=None;s.received_cursor=event.id;});return Ok(EventsResponse{last:event.id,events:vec![event]});}},
                                 _=>(),
                             }
                         },_=>(),
@@ -141,7 +182,14 @@ impl Gateway {
                 Ok(batch) => Ok(batch),
                 Err(e) => {
                     self.socket = None;
+                    self.telemetry.update(|s| {
+                        s.active = None;
+                        s.heartbeat_rtt = None;
+                    });
                     if e.is_unauthorized() {
+                        return Err(e);
+                    }
+                    if !self.allow_fallback {
                         return Err(e);
                     }
                     let delay = match e.status_code() {
@@ -150,6 +198,17 @@ impl Gateway {
                         _ => 5,
                     };
                     self.fallback_until = Some(Instant::now() + Duration::from_secs(delay));
+                    let reason = match e.status_code() {
+                        Some(4003) => FallbackReason::AccessDenied,
+                        Some(4008 | 4029) => FallbackReason::RateLimited,
+                        _ if wire_trace_enabled() => FallbackReason::WireLogging,
+                        _ => FallbackReason::Unavailable,
+                    };
+                    self.telemetry.update(|s| {
+                        s.active = Some(EventTransport::Polling);
+                        s.fallback = Some(reason);
+                    });
+                    tracing::info!(?reason, "gateway switched to polling");
                     self.client
                         .get_events(Some(after), Some(25), self.max_age)
                         .await
@@ -157,6 +216,7 @@ impl Gateway {
             }
         };
         let mut batch = result?;
+        self.telemetry.update(|s| s.received_cursor = batch.last);
         if !self.events.is_empty() {
             batch.events.retain(|e| self.events.contains(&e.kind));
         }

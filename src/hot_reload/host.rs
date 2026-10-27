@@ -245,9 +245,9 @@ impl Generation {
                 })??;
             let manifest = match ready {
                 Wire::Ready {
-                    protocol: protocol::VERSION,
+                    protocol: version,
                     manifest,
-                } => manifest,
+                } if (1..=protocol::VERSION).contains(&version) => manifest,
                 _ => return Err(protocol::protocol_error()),
             };
             manifest.validate()?;
@@ -290,6 +290,59 @@ impl Generation {
             let mut calls = 0;
             loop {
                 match protocol::read(&mut io.output).await? {
+                    Wire::Wait {
+                        filter,
+                        timeout_ms,
+                        prompt,
+                        channel,
+                    } => {
+                        calls += 1;
+                        if calls > 128 {
+                            return Err(YappinError::Config(
+                                "worker exceeded 128 requests per event".into(),
+                            ));
+                        }
+                        let result = async {
+                            if timeout_ms == 0 || timeout_ms > 300_000 {
+                                return Err(YappinError::validation(
+                                    "timeout",
+                                    "worker waits require 1 through 300000 milliseconds",
+                                ));
+                            }
+                            let waiter = client
+                                .events()
+                                .collect::<crate::Event>()
+                                .criteria(filter)
+                                .timeout(Duration::from_millis(timeout_ms))
+                                .limit(1)
+                                .subscribe()?;
+                            if let Some(message) = prompt {
+                                let channel = channel.ok_or_else(|| {
+                                    YappinError::validation("channel", "prompt requires a channel")
+                                })?;
+                                client.send_message(channel, &message).await?;
+                            }
+                            let event = waiter.wait().await?;
+                            let value = client.worker_output(serde_json::to_value(event)?);
+                            Ok::<crate::Event, YappinError>(serde_json::from_value(value)?)
+                        }
+                        .await;
+                        let message = match result {
+                            Ok(event) => Wire::EventResult {
+                                event: Some(Box::new(event)),
+                                error: None,
+                            },
+                            Err(error) => Wire::EventResult {
+                                event: None,
+                                error: Some(error.to_string()),
+                            },
+                        };
+                        protocol::write(
+                            io.input.as_mut().ok_or_else(protocol::protocol_error)?,
+                            &message,
+                        )
+                        .await?;
+                    }
                     Wire::Done { error } => {
                         io.poisoned = false;
                         return match error {
@@ -395,30 +448,31 @@ impl Cog for ProcessCog {
         &self.generation.manifest.name
     }
     fn commands(&self) -> Vec<CogCommand> {
-        self.generation
-            .manifest
-            .commands
-            .iter()
-            .map(|command| {
-                let generation = self.generation.clone();
-                let name = command.name.clone();
-                CogCommand::new(&command.name, &command.description, move |ctx| {
-                    let generation = generation.clone();
-                    let command = name.clone();
-                    async move {
-                        generation
-                            .invoke(
-                                CogEvent::Command {
-                                    command,
-                                    args: ctx.args,
-                                    argv: ctx.argv,
-                                    message: ctx.event,
-                                },
-                                &ctx.client,
-                            )
-                            .await
-                    }
-                })
+        self.worker_commands()
+            .into_iter()
+            .filter(|command| {
+                !self
+                    .generation
+                    .manifest
+                    .help
+                    .iter()
+                    .any(|info| info.name == command.name)
+            })
+            .collect()
+    }
+    fn registered_commands(&self) -> Vec<crate::commands::RegisteredCommand> {
+        self.worker_commands()
+            .into_iter()
+            .filter_map(|command| {
+                self.generation
+                    .manifest
+                    .help
+                    .iter()
+                    .find(|info| info.name == command.name)
+                    .map(|info| crate::commands::RegisteredCommand {
+                        info: info.clone(),
+                        handler: command.handler,
+                    })
             })
             .collect()
     }
@@ -491,6 +545,34 @@ impl Cog for ProcessCog {
     }
 }
 impl ProcessCog {
+    fn worker_commands(&self) -> Vec<CogCommand> {
+        self.generation
+            .manifest
+            .commands
+            .iter()
+            .map(|command| {
+                let generation = self.generation.clone();
+                let name = command.name.clone();
+                CogCommand::new(&command.name, &command.description, move |ctx| {
+                    let generation = generation.clone();
+                    let command = name.clone();
+                    async move {
+                        generation
+                            .invoke(
+                                CogEvent::Command {
+                                    command,
+                                    args: ctx.args,
+                                    argv: ctx.argv,
+                                    message: ctx.event,
+                                },
+                                &ctx.client,
+                            )
+                            .await
+                    }
+                })
+            })
+            .collect()
+    }
     async fn listen(&self, kind: Listener, event: CogEvent, client: &Client) {
         if self.generation.manifest.listeners.contains(&kind) {
             if let Err(error) = self.generation.invoke(event, client).await {

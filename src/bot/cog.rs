@@ -94,6 +94,10 @@ impl CogButton {
 /// enable `hot-reload` and use `crate::hot_reload::WorkerCog` in a separate Rust binary.
 #[async_trait]
 pub trait Cog: Send + Sync + 'static {
+    /// Typed commands retain their parsing, checks and generated help when installed or reloaded.
+    fn registered_commands(&self) -> Vec<crate::commands::RegisteredCommand> {
+        vec![]
+    }
     /// Unique identifier for this cog (e.g. "moderation", "fun", "music").
     fn name(&self) -> &str;
 
@@ -142,6 +146,7 @@ pub struct CogBuilder {
     name: String,
     commands: Vec<CogCommand>,
     buttons: Vec<CogButton>,
+    registered: Vec<crate::commands::RegisteredCommand>,
 }
 
 impl CogBuilder {
@@ -150,6 +155,7 @@ impl CogBuilder {
             name: name.into(),
             commands: Vec::new(),
             buttons: Vec::new(),
+            registered: Vec::new(),
         }
     }
 
@@ -165,6 +171,19 @@ impl CogBuilder {
     {
         self.commands
             .push(CogCommand::new(name, description, handler));
+        self
+    }
+    pub fn command_spec<A, F, Fut>(
+        mut self,
+        spec: crate::commands::CommandSpec<A>,
+        handler: F,
+    ) -> Self
+    where
+        A: crate::commands::FromArgs,
+        F: Fn(MessageContext, A) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = crate::Result<()>> + Send + 'static,
+    {
+        self.registered.push(spec.bind(handler));
         self
     }
 
@@ -203,6 +222,7 @@ impl CogBuilder {
             name: self.name,
             commands: self.commands,
             buttons: self.buttons,
+            registered: self.registered,
         }
     }
 }
@@ -211,10 +231,14 @@ pub struct DynamicCog {
     name: String,
     commands: Vec<CogCommand>,
     buttons: Vec<CogButton>,
+    registered: Vec<crate::commands::RegisteredCommand>,
 }
 
 #[async_trait]
 impl Cog for DynamicCog {
+    fn registered_commands(&self) -> Vec<crate::commands::RegisteredCommand> {
+        self.registered.clone()
+    }
     fn name(&self) -> &str {
         &self.name
     }

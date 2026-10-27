@@ -369,12 +369,19 @@ async fn native_cog_load_failure_also_preserves_old_handler() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn public_rust_worker_sdk_builds_and_proxies_replies_without_receiving_a_token() {
     let reply = json!({"message":{"id":uuid::Uuid::nil(),"channel_id":uuid::Uuid::nil(),"author_id":uuid::Uuid::nil(),"created_at":"2026-10-27T00:00:00Z","content":"reply"}});
-    let (base, mut requests, http) = support::mock(vec![support::response(200, reply)]).await;
-    let bot = Bot::builder("yb_host_credential_fixture")
-        .base_url(base)
-        .sync_commands(false)
-        .log(false)
-        .build();
+    let (base, mut requests, http) = support::mock(
+        (0..5)
+            .map(|_| support::response(200, reply.clone()))
+            .collect(),
+    )
+    .await;
+    let bot = Arc::new(
+        Bot::builder("yb_host_credential_fixture")
+            .base_url(base)
+            .sync_commands(false)
+            .log(false)
+            .build(),
+    );
     bot.cache().set_me(me()).await;
     let project = WorkerProject::example(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
@@ -389,6 +396,35 @@ async fn public_rust_worker_sdk_builds_and_proxies_replies_without_receiving_a_t
         .to_lowercase()
         .contains("authorization: bot yb_host_credential_fixture"));
     assert!(request.contains("Pong from the reloadable Rust cog!"));
+    assert!(bot.handle().help("roll").await.contains("/roll <sides>"));
+    let mut roll = event("roll");
+    roll.data["args"] = json!("20");
+    bot.process_event(roll).await.unwrap();
+    assert!(requests.recv().await.unwrap().contains("on d20"));
+    let mut invalid = event("roll");
+    invalid.data["args"] = json!("101");
+    bot.process_event(invalid).await.unwrap();
+    assert!(requests.recv().await.unwrap().contains("invalid sides"));
+    let question = tokio::spawn({
+        let bot = bot.clone();
+        async move { bot.process_event(event("question")).await }
+    });
+    let prompt = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(prompt.contains("What should I call you?"));
+    assert_eq!(bot.events().subscriber_count(), 1);
+    let mut answer = event("unused");
+    answer.data["content"] = json!("Chris");
+    bot.events().publish(answer);
+    tokio::time::timeout(Duration::from_secs(3), question)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(requests.recv().await.unwrap().contains("Hello, Chris"));
+    assert_eq!(bot.events().subscriber_count(), 0);
     assert_eq!(reload.generation(), 1);
     http.await.unwrap();
 }
@@ -411,13 +447,29 @@ impl rappin::EventHandler for ReadyGate {
 async fn failed_slash_sync_preserves_old_worker_and_main_bot_still_handles_events() {
     let project = Project::new().await;
     project.code("one", &["ping"], 0, None).await;
-    let (base, mut requests, http) = support::mock(vec![
-        support::response(200, support::profile()),
-        support::response(200, json!({"commands":[Command::new("ping","one")]})),
-        support::response(200, json!({"events":[],"last":1})),
-        support::response(503, json!({"error":"command sync unavailable"})),
-        support::response(200, json!({"events":[support::event(2,"ping")],"last":2})),
-        support::response(200, json!({})),
+    let (base, mut requests, http) = support::routed_mock(vec![
+        (
+            "GET /me".into(),
+            vec![support::response(200, support::profile())],
+        ),
+        (
+            "PUT /commands".into(),
+            vec![
+                support::response(200, json!({"commands":[Command::new("ping","one")]})),
+                support::response(503, json!({"error":"command sync unavailable"})),
+            ],
+        ),
+        (
+            "GET /events".into(),
+            vec![
+                support::response(200, json!({"events":[],"last":1})),
+                support::response(200, json!({"events":[support::event(2,"ping")],"last":2})),
+            ],
+        ),
+        (
+            "POST /channels/00000000-0000-0000-0000-000000000000/messages".into(),
+            vec![support::response(200, json!({}))],
+        ),
     ])
     .await;
     let ready = Arc::new(tokio::sync::Notify::new());
@@ -448,7 +500,9 @@ async fn failed_slash_sync_preserves_old_worker_and_main_bot_still_handles_event
     while let Ok(request) = requests.try_recv() {
         recorded.push(request);
     }
-    assert!(recorded.last().unwrap().contains("\"content\":\"one\""));
+    assert!(recorded
+        .iter()
+        .any(|request| request.contains("\"content\":\"one\"")));
     http.await.unwrap();
 }
 

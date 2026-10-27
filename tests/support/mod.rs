@@ -62,3 +62,85 @@ pub fn profile() -> serde_json::Value {
 pub fn event(id: u64, command: &str) -> serde_json::Value {
     serde_json::json!({"id":id,"type":"message","data":{"id":uuid::Uuid::new_v4(),"channel_id":uuid::Uuid::nil(),"author_id":uuid::Uuid::nil(),"command":command,"author_bot":false}})
 }
+
+/// Route-aware fixtures for concurrent event intake and handler HTTP requests.
+/// Exhausted routes stay pending until the fixture finishes, like an open long poll.
+pub async fn routed_mock(
+    routes: Vec<(String, Vec<Response>)>,
+) -> (
+    String,
+    mpsc::UnboundedReceiver<String>,
+    tokio::task::JoinHandle<()>,
+) {
+    use std::collections::{HashMap, VecDeque};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (tx, rx) = mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let mut routes: HashMap<String, VecDeque<Response>> = routes
+            .into_iter()
+            .map(|(key, values)| (key, values.into()))
+            .collect();
+        let mut parked = vec![];
+        while routes.values().any(|queue| !queue.is_empty()) {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut bytes = vec![];
+            let mut buffer = [0u8; 4096];
+            loop {
+                let count = socket.read(&mut buffer).await.unwrap();
+                if count == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buffer[..count]);
+                if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&bytes[..end]);
+                    let size = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.split_once(':')
+                                .filter(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                                .map(|(_, value)| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if bytes.len() >= end + 4 + size {
+                        break;
+                    }
+                }
+            }
+            let request = String::from_utf8(bytes).unwrap();
+            let parts: Vec<_> = request
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .split_whitespace()
+                .collect();
+            let key = format!(
+                "{} {}",
+                parts.first().unwrap_or(&""),
+                parts
+                    .get(1)
+                    .unwrap_or(&"")
+                    .split('?')
+                    .next()
+                    .unwrap_or_default()
+            );
+            let _ = tx.send(request);
+            let Some(queue) = routes.get_mut(&key) else {
+                panic!("unexpected request {key}");
+            };
+            let Some((status, headers, body)) = queue.pop_front() else {
+                parked.push(socket);
+                continue;
+            };
+            let mut reply=format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",body.len());
+            for (key, value) in headers {
+                reply.push_str(&format!("{key}: {value}\r\n"));
+            }
+            reply.push_str("\r\n");
+            reply.push_str(&body);
+            let _ = socket.write_all(reply.as_bytes()).await;
+        }
+        drop(parked);
+    });
+    (format!("http://{address}"), rx, task)
+}

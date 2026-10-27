@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.7 — 2026-10-27
+
+- Add typed CommandSpec / FromArgs commands, quote-aware arguments, bounded numbers/durations/IDs, aliases, local subcommand paths, dynamic/mention prefixes, reusable owner/server/role/permission checks, and live help metadata across native cogs.
+- Separate bounded event intake from globally bounded handlers. Preserve ordered completed-batch checkpoints, keep polling/heartbeats active during ordinary handler work, and resume after gateway backpressure.
+- Add typed bounded collectors with timeout, idle timeout, filters, limits, cancellation, and explicit overflow errors. Add scoped context helpers and parent-owned prompt/wait workflows for hot workers.
+- Expose configured/active transport, fallback reasons, WebSocket heartbeat RTT, cursor/backlog status, and sanitized REST timing observations. Add gateway-only mode.
+- Coordinate interaction response state across Client clones and worker proxies; add defer, opt-in early auto-ack, idempotent acknowledgements, and conservative handling of cancelled/ambiguous writes.
+- Share scoped Retry-After deadlines across Client clones, recognize HTTP dates and global message waits, and add opt-in bounded member/role TTL caches with explicit freshness and mutation/event invalidation.
+- Add a compiled typed-bot example, worker typed/wait examples, a Rust workflow guide included in rustdoc, and regression coverage. Worker protocol v2 adds help/waits; the host continues accepting v1.
+
+### Migration
+
+- Existing closure commands remain available. `ctx.argv` now respects quotes and escapes; `ctx.args` remains the original argument string.
+- Exhaustive matches on `YappinError` must handle the new `Command` and `Wait` variants.
+- Worker protocol v2 requires an updated host; the new host still accepts v1 workers. Rebuild workers when upgrading the SDK.
+
+
 ## 0.1.6 — 2026-10-27
 
 - Fix channel decoding when Yapin returns both `kind` and `type`. Keep support for either field alone, reject conflicting values, and preserve `kind` in serialized output. This fixes typed channel endpoints and CLI/MCP channel resolution.

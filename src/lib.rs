@@ -74,19 +74,28 @@
 //! }
 //! ```
 
+/// Rust-native command, collector, transport, and caching workflows.
+#[doc = include_str!("../docs/rust-bots.md")]
+pub mod guide {}
+
 pub mod bot;
 pub mod cache;
 pub mod client;
+pub mod collectors;
+pub mod commands;
 pub mod cooldown;
+pub mod diagnostics;
 pub mod error;
 pub mod events;
 #[cfg(feature = "gateway")]
 pub mod gateway;
 #[cfg(feature = "hot-reload")]
 pub mod hot_reload;
+pub mod interactions;
 pub mod models;
 pub mod oauth2;
 pub mod paginator;
+mod rate_limits;
 pub mod security;
 pub mod utils;
 pub mod validation;
@@ -98,10 +107,19 @@ pub use bot::{
     Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventHandler,
     InteractionContext, MessageContext,
 };
-pub use cache::Cache;
+pub use cache::{Cache, CachePolicy, Cached, Freshness};
 pub use client::{Client, ClientBuilder};
+pub use collectors::{Collectible, Collector, CollectorBuilder, EventFilter, EventHub, WaitError};
+pub use commands::{
+    check_fn, ArgumentInfo, Arguments, BoundedU32, ChannelId, Check, CommandCheck, CommandError,
+    CommandInfo, CommandSpec, FromArgs, HumanDuration, Permission, RegisteredCommand, UserId,
+};
 pub use cooldown::{Cooldown, CooldownType};
+pub use diagnostics::{
+    EventTransport, FallbackReason, RequestObservation, TransportMode, TransportStatus,
+};
 pub use error::{Result, YappinError};
+pub use interactions::{InteractionState, ResponsePhase};
 pub use models::*;
 pub use oauth2::{OAuth2Client, OAuth2Token, OAuth2User, Pkce};
 pub use paginator::{ConfirmDialog, Paginator};
@@ -117,7 +135,6 @@ pub mod prelude {
         Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventHandler,
         InteractionContext, MessageContext,
     };
-    pub use crate::cache::Cache;
     pub use crate::client::{Client, ClientBuilder};
     pub use crate::cooldown::{Cooldown, CooldownType};
     pub use crate::error::{Result, YappinError};
@@ -137,6 +154,12 @@ pub mod prelude {
     pub use crate::utils::IS_COMPONENTS_V2;
     pub use crate::validation::split_message;
     pub use crate::webhook::{WebhookClient, WebhookMessage};
+    pub use crate::{
+        check_fn, ArgumentInfo, Arguments, BoundedU32, Cache, CachePolicy, Cached, ChannelId,
+        Check, Collector, CommandCheck, CommandError, CommandSpec, EventFilter, EventHub,
+        EventTransport, Freshness, FromArgs, HumanDuration, InteractionState, Permission,
+        ResponsePhase, TransportMode, TransportStatus, UserId, WaitError,
+    };
 }
 
 pub use events::{EventConsumer, EventCursor};

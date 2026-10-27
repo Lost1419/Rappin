@@ -3,6 +3,10 @@ use thiserror::Error;
 /// The error type for operations in the `yappin` crate.
 #[derive(Debug, Error)]
 pub enum YappinError {
+    #[error(transparent)]
+    Command(#[from] crate::commands::CommandError),
+    #[error(transparent)]
+    Wait(#[from] crate::collectors::WaitError),
     /// An API error returned by Yapin' servers.
     #[error("API error ({status}): {message}")]
     Api {
@@ -86,6 +90,8 @@ impl YappinError {
     /// Stable JSON representation for agents. Transport URLs are intentionally omitted.
     pub fn to_json(&self) -> serde_json::Value {
         let kind = match self {
+            Self::Command(_) => "command",
+            Self::Wait(_) => "event_wait",
             Self::Validation { .. } => "validation",
             Self::Config(_) => "configuration",
             Self::Unauthorized => "unauthorized",

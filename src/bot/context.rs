@@ -24,6 +24,25 @@ pub struct MessageContext {
 }
 
 impl MessageContext {
+    /// Register before posting a question, then await the returned collector after sending it.
+    pub fn replies(&self) -> crate::collectors::CollectorBuilder<MessageEvent> {
+        self.client
+            .events()
+            .collect()
+            .channel(self.channel_id())
+            .author(self.author_id())
+    }
+    pub fn component_events(
+        &self,
+        message: Uuid,
+    ) -> crate::collectors::CollectorBuilder<InteractionEvent> {
+        self.client
+            .events()
+            .collect()
+            .channel(self.channel_id())
+            .author(self.author_id())
+            .message(message)
+    }
     pub fn new(
         client: Arc<Client>,
         event: MessageEvent,
@@ -31,7 +50,9 @@ impl MessageContext {
         args: String,
         bot: Option<BotHandle>,
     ) -> Self {
-        let argv = args.split_whitespace().map(String::from).collect();
+        let argv = crate::commands::tokenize(&args)
+            .map(|tokens| tokens.into_iter().map(|token| token.value).collect())
+            .unwrap_or_else(|_| args.split_whitespace().map(String::from).collect());
         Self {
             client,
             event,
@@ -222,6 +243,12 @@ pub struct InteractionContext {
 }
 
 impl InteractionContext {
+    pub async fn response_state(&self) -> Result<crate::interactions::InteractionState> {
+        self.client.interaction_state(&self.event).await
+    }
+    pub async fn defer(&self) -> Result<()> {
+        self.ack().await
+    }
     pub fn new(client: Arc<Client>, event: InteractionEvent, bot: Option<BotHandle>) -> Self {
         Self { client, event, bot }
     }
