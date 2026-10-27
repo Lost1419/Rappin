@@ -1,7 +1,7 @@
 # Rappin 🦀
 
 [![GitHub](https://img.shields.io/badge/github-Lost1419/Rappin-blue?logo=github)](https://github.com/Lost1419/Rappin)
-[![Crates.io](https://img.shields.io/crates/v/rappin-rs.svg?v=0.1.5)](https://crates.io/crates/rappin-rs)
+[![Crates.io](https://img.shields.io/crates/v/rappin-rs.svg?v=0.1.6)](https://crates.io/crates/rappin-rs)
 [![Docs.rs](https://docs.rs/rappin-rs/badge.svg)](https://docs.rs/rappin-rs)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 
@@ -118,7 +118,7 @@ Add `rappin-rs` and `tokio` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.5"
+rappin-rs = "0.1.6"
 tokio = { version = "1", features = ["full"] }
 ```
 

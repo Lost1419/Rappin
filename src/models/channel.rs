@@ -11,6 +11,48 @@ pub enum ChannelKind {
     Voice,
 }
 
+// Yapin can return both keys on the same object. An alias alone treats them as a
+// duplicate field, so decode the flattened pair and validate that they agree.
+fn deserialize_channel_kind<'de, D>(deserializer: D) -> Result<ChannelKind, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct Fields {
+        #[serde(default, deserialize_with = "present_channel_kind")]
+        kind: Option<ChannelKind>,
+        #[serde(rename = "type", default, deserialize_with = "present_channel_kind")]
+        channel_type: Option<ChannelKind>,
+    }
+
+    let fields = Fields::deserialize(deserializer)?;
+    match (fields.kind, fields.channel_type) {
+        (Some(kind), Some(channel_type)) if kind != channel_type => {
+            Err(serde::de::Error::custom("channel kind and type must agree"))
+        }
+        (Some(kind), _) | (_, Some(kind)) => Ok(kind),
+        (None, None) => Err(serde::de::Error::missing_field("kind")),
+    }
+}
+
+// Omitted keys are optional; a present key must still be a valid, non-null kind.
+fn present_channel_kind<'de, D>(deserializer: D) -> Result<Option<ChannelKind>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    ChannelKind::deserialize(deserializer).map(Some)
+}
+
+fn serialize_channel_kind<S>(kind: &ChannelKind, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeMap;
+    let mut map = serializer.serialize_map(Some(1))?;
+    map.serialize_entry("kind", kind)?;
+    map.end()
+}
+
 /// A channel in a server or category.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Channel {
@@ -18,8 +60,12 @@ pub struct Channel {
     pub id: Uuid,
     /// Channel name.
     pub name: String,
-    /// Channel type ("text" or "voice").
-    #[serde(alias = "type")]
+    /// Channel type ("text" or "voice"). Accepts `kind`, `type`, or both when equal.
+    #[serde(
+        flatten,
+        deserialize_with = "deserialize_channel_kind",
+        serialize_with = "serialize_channel_kind"
+    )]
     pub kind: ChannelKind,
     /// Associated server ID.
     #[serde(default)]
@@ -48,7 +94,12 @@ pub struct Channel {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelRow {
     pub id: Uuid,
-    #[serde(alias = "type")]
+    /// Accepts `kind`, `type`, or both when equal; serializes as `kind`.
+    #[serde(
+        flatten,
+        deserialize_with = "deserialize_channel_kind",
+        serialize_with = "serialize_channel_kind"
+    )]
     pub kind: ChannelKind,
     #[serde(default)]
     pub name: Option<String>,

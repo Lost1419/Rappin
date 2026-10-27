@@ -1,4 +1,5 @@
 #![cfg(feature = "cli")]
+mod support;
 use std::{path::PathBuf, process::Command};
 fn command() -> (Command, PathBuf) {
     let config = std::env::temp_dir().join(format!("rappin-cli-{}.toml", uuid::Uuid::new_v4()));
@@ -171,5 +172,65 @@ fn mcp_state_is_fixed_at_startup_instead_of_tool_arguments() {
     assert!(out.status.success());
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "42");
     std::fs::remove_file(file).unwrap();
+    std::fs::remove_file(config).unwrap();
+}
+
+#[tokio::test]
+async fn mcp_defaults_omitted_arguments_but_rejects_explicit_invalid_values() {
+    use serde_json::{json, Value};
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+
+    let (base, mut requests, server) = support::mock(vec![
+        support::response(200, json!({"servers": []})),
+        support::response(200, json!({"servers": []})),
+    ])
+    .await;
+    let (mut command, config) = command();
+    command
+        .env("YAPPER_BOT_TOKEN", "yb_fixture")
+        .args(["--base-url", &base, "mcp"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped());
+    let mut child = tokio::process::Command::from(command).spawn().unwrap();
+    let mut input = child.stdin.take().unwrap();
+    for request in [
+        json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_servers"}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_servers","arguments":{}}}),
+        json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_servers","arguments":null}}),
+        json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"resolve_channel"}}),
+        json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"list_servers","arguments":[]}}),
+    ] {
+        input
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+    }
+    drop(input);
+    let output = child.wait_with_output().await.unwrap();
+    assert!(output.status.success());
+    let replies: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(replies.len(), 6);
+    for reply in &replies[1..3] {
+        assert_eq!(reply["result"]["isError"], false);
+        let result: Value =
+            serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(result["data"]["servers"], json!([]));
+    }
+    for (reply, field) in replies[3..].iter().zip(["arguments", "name", "arguments"]) {
+        assert_eq!(reply["result"]["isError"], true);
+        let result: Value =
+            serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(result["error"]["field"], field);
+    }
+    for _ in 0..2 {
+        assert!(requests.recv().await.unwrap().starts_with("GET /servers "));
+    }
+    server.await.unwrap();
     std::fs::remove_file(config).unwrap();
 }

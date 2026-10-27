@@ -185,6 +185,9 @@ acknowledgement. Configure a fixed cursor at process startup with
 `rappin mcp --cursor-file ./state/events.json`; tool arguments cannot choose local
 file paths. Without that option, acknowledgement is disabled. It uses newline-delimited JSON-RPC; stdout is protocol-only.
 Writes accept `dry_run:true`. Tool errors set `isError` and carry the CLI envelope.
+Since `0.1.6`, tool calls may omit `arguments` when no inputs are needed; explicit
+null or array arguments are invalid. Missing required fields and unknown arguments
+are rejected.
 Example configuration (supply the environment credential through your client):
 
 ```json

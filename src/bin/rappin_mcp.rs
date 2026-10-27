@@ -137,17 +137,32 @@ pub async fn serve(ctx: &Context, cursor: Option<&std::path::Path>) -> Result<()
             Some("ping") => Ok(json!({})),
             Some("tools/list") => Ok(json!({"tools":tools()})),
             Some("tools/call") => {
-                let a = &request["params"]["arguments"];
+                // MCP permits omitting arguments; explicit null still fails validation.
+                let empty_arguments = json!({});
+                let a = request["params"]
+                    .get("arguments")
+                    .unwrap_or(&empty_arguments);
                 let name = request["params"]["name"].as_str().unwrap_or("");
                 let output: Result<Value> = async {
                     validate_arguments(name, a)?;
                     let mut args = vec!["rappin".to_owned()];
                     args.extend(argv(name, a)?);
-                    if matches!(name,"poll_events"|"ack_events") {
-                        if let Some(path)=cursor {
+                    if matches!(name, "poll_events" | "ack_events") {
+                        if let Some(path) = cursor {
                             args.push("--cursor-file".into());
-                            args.push(path.to_str().ok_or_else(||YappinError::Config("event cursor path must be UTF-8".into()))?.into());
-                        } else if name=="ack_events" {return Err(YappinError::Config("start rappin mcp --cursor-file PATH to enable event acknowledgements".into()));}
+                            args.push(
+                                path.to_str()
+                                    .ok_or_else(|| {
+                                        YappinError::Config("event cursor path must be UTF-8".into())
+                                    })?
+                                    .into(),
+                            );
+                        } else if name == "ack_events" {
+                            return Err(YappinError::Config(
+                                "start rappin mcp --cursor-file PATH to enable event acknowledgements"
+                                    .into(),
+                            ));
+                        }
                     }
                     let parsed = Args::try_parse_from(args).map_err(|_| {
                         YappinError::validation(
@@ -157,7 +172,7 @@ pub async fn serve(ctx: &Context, cursor: Option<&std::path::Path>) -> Result<()
                     })?;
                     let mut context = ctx.clone();
                     context.dry |= a["dry_run"] == true;
-                    Box::pin(run(parsed, &context)).await
+                    run(parsed, &context).await
                 }
                 .await;
                 let (failed, data) = match output {

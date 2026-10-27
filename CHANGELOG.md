@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.6 — 2026-10-27
+
+- Fix channel decoding when Yapin returns both `kind` and `type`. Keep support for either field alone, reject conflicting values, and preserve `kind` in serialized output. This fixes typed channel endpoints and CLI/MCP channel resolution.
+- Accept omitted MCP tool arguments as an empty object, as permitted by the protocol. Continue rejecting explicit null/array arguments and missing required fields. Simplify MCP dispatch without changing its fixed cursor-path boundary.
+
 ## 0.1.5 — 2026-10-27
 
 - Add optional `hot-reload`: compile edited Rust worker cogs and swap commands, button routes, and listeners while the parent bot keeps its event loop and credentials.
