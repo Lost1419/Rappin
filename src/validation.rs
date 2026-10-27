@@ -303,3 +303,33 @@ pub fn validate_webhook(value: &Value) -> Result<()> {
     }
     Ok(())
 }
+
+/// Validate command metadata before changing a running registry.
+pub(crate) fn validate_commands(commands: &[crate::Command]) -> Result<()> {
+    if commands.len() > 100 {
+        return Err(YappinError::validation("commands", "maximum 100 commands"));
+    }
+    let mut names = std::collections::HashSet::new();
+    for command in commands {
+        if command.name.is_empty()
+            || command.name.len() > 32
+            || !command
+                .name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-".contains(&b))
+            || !names.insert(&command.name)
+        {
+            return Err(YappinError::validation(
+                "commands.name",
+                "requires a unique lowercase name of 1 to 32 letters, digits, _ or -",
+            ));
+        }
+        if command.description.chars().count() > 100 {
+            return Err(YappinError::validation(
+                "commands.description",
+                "maximum 100 characters",
+            ));
+        }
+    }
+    Ok(())
+}

@@ -102,7 +102,7 @@ Rappin is designed around modern asynchronous Rust with `tokio` and `reqwest`:
   - Voice channels (obtain LiveKit tickets with E2EE metadata; optional encrypted playback)
   - Direct messages (`/users/{id}/dm`)
 - **Dual Mode**: Use either the declarative `Bot` long-polling engine or the standalone `Client` for REST scripting.
-- **Dynamic Cogs & Hot-Reloading**: Group commands and interactions into modular cogs that can be added, removed, or reloaded while the bot is running without dropping connections.
+- **Cogs & Rust Code Reloading**: Replace native cog instances at runtime, or enable `hot-reload` to compile and swap edited Rust worker cogs while the main bot keeps running. See the [hot-reloading guide](docs/hot-reloading.md).
 - **In-Memory Cache**: Built-in thread-safe cache for bot profile, servers, and channels with zero network latency for repeated reads.
 - **Command Cooldowns**: Declarative rate limiting per user, channel, server, or globally.
 - **Interactive Paginator & Confirm Dialog**: Pre-built UI navigation components for browsing through multi-page embeds and binary yes/no confirmation prompts.
@@ -186,9 +186,33 @@ async fn main() -> Result<()> {
 
 ---
 
-## 🧩 Cogs & Live Hot-Reloading
+## 🧩 Cogs & Rust Hot-Reloading
 
-Cogs allow splitting commands, button interactions, and event listeners into isolated modules that can be added, removed, or reloaded in real time **while the bot is still running**, with zero downtime.
+Cogs group commands, button interactions, and listeners into modules. Native `Cog` instances use code compiled into the main bot. The optional `hot-reload` feature loads separate Rust worker binaries, so edited source can be rebuilt and activated **without restarting the main bot**.
+
+### Reload edited Rust source
+
+This feature is currently available in this checkout (unreleased):
+
+```sh
+export YAPPER_BOT_TOKEN="yb_your_token"
+cargo run --features hot-reload --example hot_reload_bot
+```
+
+Edit the reply in [`examples/hot_cog_worker.rs`](examples/hot_cog_worker.rs) and save. The watcher builds and starts a candidate worker while the old one serves requests, then swaps its routes. Existing requests finish on the old worker. A failed build or registration keeps the working version installed.
+
+Worker handlers stay in Rust:
+
+```rust,ignore
+WorkerCog::new("fun")
+    .command("ping", "Check the bot", |ctx| async move {
+        ctx.reply("Pong!").await?;
+        Ok(())
+    })
+    .run().await?;
+```
+
+The parent retains the bot token and performs authenticated API calls for the worker. Worker memory resets on reload; keep durable state in a database or file. See the [complete setup and operating limits](docs/hot-reloading.md).
 
 ### 1. Creating a Cog
 
@@ -237,9 +261,9 @@ let fun_cog = CogBuilder::new("fun")
     .build();
 ```
 
-### 2. Updating Cogs at Runtime
+### 2. Replacing Native Cog Instances
 
-Because `Bot` provides a cloneable `BotHandle` (accessible through `bot.handle()` or `ctx.bot()`), you can reload or add cogs on the fly without restarting the process:
+`BotHandle` (accessible through `bot.handle()` or `ctx.bot()`) can replace native cog instances at runtime. `reload_cog` uses already linked code; use `HotReload` above to activate source edits.
 
 ```rust
 let bot = Bot::builder(token)
@@ -261,7 +285,7 @@ let bot = Bot::builder(token)
 bot.run().await?;
 ```
 
-When a cog is added, removed, or reloaded, Rappin automatically synchronizes the new command list with Yapin' (`PUT /commands`), immediately updating the server's slash command menu!
+While the bot is running, cog changes synchronize the command list with Yapin' (`PUT /commands`) before publishing local routes, unless command synchronization is disabled. A registration error preserves the previous local routes.
 
 ---
 
@@ -560,7 +584,8 @@ Connect with any LiveKit client to publish an audio stream.
 Check the `examples/` directory for ready-to-run examples:
 
 - `cargo run --example ping_bot`: Complete interactive bot responding to `/ping`, `/roll`, and button selections.
-- `cargo run --example cogs_bot`: Modular bot demonstrating dynamic Cog loading and real-time reloading.
+- `cargo run --example cogs_bot`: Modular bot demonstrating replacement of native cog instances.
+- `cargo run --features hot-reload --example hot_reload_bot`: Edit Rust worker source while the main bot stays running.
 - `cargo run --example advanced_bot`: Showcase of command cooldowns, in-memory cache, multi-page paginator, and confirmation dialogs.
 - `cargo run --example embeds_and_buttons`: Building rich Embed cards and Components V2 containers.
 - `cargo run --example api_client`: Interacting directly with the REST API.

@@ -1,4 +1,4 @@
-.PHONY: check install-local voice-setup
+.PHONY: check install-local voice-setup hot-demo
 FEATURES ?= cli,gateway,voice
 PREFIX ?= $(HOME)/.local
 check:
@@ -13,3 +13,5 @@ install-local:
 	install -m 755 target/release/rappin $(PREFIX)/bin/rappin
 voice-setup:
 	sh scripts/setup-voice.sh
+hot-demo:
+	cargo run --features hot-reload --example hot_reload_bot

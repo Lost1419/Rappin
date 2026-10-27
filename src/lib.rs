@@ -8,7 +8,7 @@
 //! - **Complete API Coverage**: High-level and low-level methods for all 35 OpenAPI endpoints (messages, channels, servers, members, roles, categories, voice, bans, reactions, interactions).
 //! - **Rich Message & Layout Builders**: Type-safe builders for `Embed` cards, `Button` rows, and Components V2 layouts (`Container`, `Section`, `TextDisplay`, etc.).
 //! - **Bot Framework & Event Dispatcher**: Ergonomic command routing, prefix support (`!`, `/`), button click handlers, event listeners, and resilient long-polling with exponential backoff and rate limit handling.
-//! - **Modular Cogs System**: Live hot-reloading of bot commands, button listeners, and lifecycle hooks while the bot is running.
+//! - **Modular Cogs System**: Add and replace cog instances at runtime. Optional `hot-reload` compiles and swaps edited Rust worker cogs while the main bot keeps running.
 //! - **In-Memory Cache Layer**: Thread-safe caching of bot profile, servers, and channels with zero network calls for repetitive lookups.
 //! - **Command Cooldowns**: Declarative rate limiting per user, channel, server, or globally.
 //! - **Interactive Paginator & Confirm Dialog**: Pre-built UI components for paging through embeds and binary confirmation prompts.
@@ -82,6 +82,8 @@ pub mod error;
 pub mod events;
 #[cfg(feature = "gateway")]
 pub mod gateway;
+#[cfg(feature = "hot-reload")]
+pub mod hot_reload;
 pub mod models;
 pub mod oauth2;
 pub mod paginator;
@@ -120,6 +122,8 @@ pub mod prelude {
     pub use crate::cooldown::{Cooldown, CooldownType};
     pub use crate::error::{Result, YappinError};
     pub use crate::events::{EventConsumer, EventCursor};
+    #[cfg(feature = "hot-reload")]
+    pub use crate::hot_reload::{HotReload, Listener, WorkerCog, WorkerContext, WorkerProject};
     pub use crate::models::component::{
         ActionRow, Button, ButtonStyle, Component, Container, FileDisplay, LayoutComponent,
         MediaGallery, MediaItem, Section, Separator, TextDisplay, ThumbnailComponent,
@@ -137,3 +141,6 @@ pub mod prelude {
 
 pub use events::{EventConsumer, EventCursor};
 pub use validation::split_message;
+
+#[cfg(feature = "hot-reload")]
+pub use hot_reload::{CogEvent, HotReload, Listener, WorkerCog, WorkerContext, WorkerProject};

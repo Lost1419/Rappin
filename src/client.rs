@@ -412,31 +412,7 @@ impl Client {
 
     /// Replaces the registered slash commands for this bot (`PUT /commands`, up to 100).
     pub async fn set_commands(&self, commands: &[Command]) -> Result<Vec<Command>> {
-        if commands.len() > 100 {
-            return Err(YappinError::validation("commands", "maximum 100 commands"));
-        }
-        let mut names = std::collections::HashSet::new();
-        for command in commands {
-            if command.name.is_empty()
-                || command.name.len() > 32
-                || !command
-                    .name
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-".contains(&b))
-                || !names.insert(&command.name)
-            {
-                return Err(YappinError::validation(
-                    "commands.name",
-                    "requires a unique lowercase name of 1 to 32 letters, digits, _ or -",
-                ));
-            }
-            if command.description.chars().count() > 100 {
-                return Err(YappinError::validation(
-                    "commands.description",
-                    "maximum 100 characters",
-                ));
-            }
-        }
+        crate::validation::validate_commands(commands)?;
         #[derive(Serialize)]
         struct Req<'a> {
             commands: &'a [Command],
@@ -1342,5 +1318,12 @@ impl Client {
             .request_json::<Resp, ()>(Method::POST, &format!("/users/{}/dm", user_id), None)
             .await?;
         Ok(resp.channel_id)
+    }
+}
+
+#[cfg(feature = "hot-reload")]
+impl Client {
+    pub(crate) fn worker_output(&self, value: serde_json::Value) -> serde_json::Value {
+        crate::security::redact_json(value, &[&self.inner.token])
     }
 }

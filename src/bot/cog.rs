@@ -90,6 +90,8 @@ impl CogButton {
 ///
 /// Cogs allow splitting commands, button interactions, and event listeners into
 /// distinct modules that can be added, removed, or reloaded while the bot is running.
+/// Replacing a native Cog uses code already linked into the bot. For edited Rust source,
+/// enable `hot-reload` and use `crate::hot_reload::WorkerCog` in a separate Rust binary.
 #[async_trait]
 pub trait Cog: Send + Sync + 'static {
     /// Unique identifier for this cog (e.g. "moderation", "fun", "music").

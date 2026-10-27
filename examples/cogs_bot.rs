@@ -1,4 +1,5 @@
-//! Demonstrates organizing a bot into Cogs and reloading them dynamically while the bot is running.
+//! Demonstrates replacing native cog instances using already compiled code.
+//! For edited Rust source without restarting the bot, see hot_reload_bot.rs.
 //!
 //! To run:
 //! ```sh

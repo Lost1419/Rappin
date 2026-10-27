@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Add optional `hot-reload`: compile edited Rust worker cogs and swap commands, button routes, and listeners while the parent bot keeps its event loop and credentials.
+- Keep the working cog available during compilation and registration; reject failed builds, invalid startup, conflicting commands, and failed slash-command synchronization before changing local routes. Existing invocations finish on their original worker.
+- Provide a Rust `WorkerCog` builder with reply, interaction, listener, and proxied JSON API helpers; add source watching, explicit reload/unload, and runnable examples. Worker subprocesses receive an allowlisted environment without the bot token.
+- Make native cog replacement transactional and clarify that `reload_cog` replaces linked instances rather than recompiling source.
+
 ## 0.1.4 — 2026-10-27
 
 - Confine authenticated API requests to their configured origin and path prefix, reject unsafe endpoint URLs, and refuse redirects in default HTTP clients and the voice bridge.

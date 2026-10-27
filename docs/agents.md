@@ -12,6 +12,14 @@ The library has no default optional features. `cli` adds the command and MCP ser
 `gateway` adds WebSocket transport; `voice` adds the Node playback bridge. No Node
 runtime is needed for REST, CLI, MCP, polling, or gateway use.
 
+For Rust bot development, optional `hot-reload` rebuilds and swaps edited Rust
+worker cogs while the parent bot stays running. Start with
+`cargo run --features hot-reload --example hot_reload_bot` and edit
+`examples/hot_cog_worker.rs`. See the [Rust hot-reloading guide](hot-reloading.md)
+for the two-binary setup, reply helpers, state boundaries, and credential handling.
+This is an unreleased library feature; native `reload_cog` replaces linked instances
+and does not compile source edits.
+
 ## Authentication and output
 
 Set `YAPPER_BOT_TOKEN`. Precedence is environment, then `token` in

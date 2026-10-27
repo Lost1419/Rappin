@@ -69,6 +69,7 @@ struct BotState {
     handler_concurrency: usize,
     #[cfg(feature = "gateway")]
     gateway_url: Option<String>,
+    registry_update: tokio::sync::Mutex<()>,
     running: AtomicBool,
     stopped: tokio::sync::Notify,
 }
@@ -79,7 +80,24 @@ pub struct BotHandle {
     inner: Arc<BotState>,
 }
 
+#[cfg(feature = "hot-reload")]
+pub(crate) struct WeakBotHandle {
+    inner: std::sync::Weak<BotState>,
+}
+#[cfg(feature = "hot-reload")]
+impl WeakBotHandle {
+    pub(crate) fn upgrade(&self) -> Option<BotHandle> {
+        self.inner.upgrade().map(|inner| BotHandle { inner })
+    }
+}
+
 impl BotHandle {
+    #[cfg(feature = "hot-reload")]
+    pub(crate) fn downgrade(&self) -> WeakBotHandle {
+        WeakBotHandle {
+            inner: Arc::downgrade(&self.inner),
+        }
+    }
     /// Returns a reference to the bot's REST client.
     pub fn client(&self) -> &Client {
         &self.inner.client
@@ -113,183 +131,193 @@ impl BotHandle {
             .insert(name_str, Arc::new(factory));
     }
 
-    /// Dynamically loads a new cog into the bot while it's running.
-    ///
-    /// The cog's `on_load()` is called, its commands and buttons are registered,
-    /// and `sync_commands()` is automatically called to update Yapin's slash command menu.
+    /// Install a cog without removing its current version until preparation succeeds.
     pub async fn add_cog<C: Cog>(&self, cog: C) -> Result<()> {
-        let name = cog.name().to_string();
+        self.install_cog(Arc::new(cog), true, None).await
+    }
 
-        // If cog already exists, unload it first
-        self.remove_cog(&name).await?;
-
-        // 1. Run on_load
-        cog.on_load(&self.inner.client).await?;
-
-        let cog_commands = cog.commands();
-        let cog_buttons = cog.buttons();
-        let cog_arc: Arc<dyn Cog> = Arc::new(cog);
-
-        // 2. Register cog commands
-        {
-            let mut cmds = self.inner.commands.write().await;
-            for c in cog_commands {
-                cmds.insert(
-                    c.name,
+    async fn install_cog(
+        &self,
+        cog: Arc<dyn Cog>,
+        synchronize: bool,
+        expected: Option<bool>,
+    ) -> Result<()> {
+        let name = cog.name().to_owned();
+        if name.is_empty() {
+            return Err(YappinError::validation("cog.name", "must not be empty"));
+        }
+        cog.on_load(self.client()).await?;
+        let result: Result<Option<Arc<dyn Cog>>> = async {
+            // Preserve native cogs that initialize their route metadata in on_load.
+            let commands = cog.commands();
+            let buttons = cog.buttons();
+            crate::validation::validate_commands(
+                &commands
+                    .iter()
+                    .map(|c| Command::new(&c.name, &c.description))
+                    .collect::<Vec<_>>(),
+            )?;
+            let _update = self.inner.registry_update.lock().await;
+            if let Some(present) = expected {
+                if self.inner.cogs.read().await.contains_key(&name) != present {
+                    return Err(YappinError::validation(
+                        "cog.name",
+                        "cog ownership changed before publication",
+                    ));
+                }
+            }
+            let mut planned: Vec<Command> = {
+                let current = self.inner.commands.read().await;
+                for command in &commands {
+                    if current
+                        .get(&command.name)
+                        .is_some_and(|c| c.cog_name.as_deref() != Some(&name))
+                    {
+                        return Err(YappinError::validation(
+                            "commands.name",
+                            "command belongs to another cog or the bot",
+                        ));
+                    }
+                }
+                current
+                    .iter()
+                    .filter(|(_, c)| c.cog_name.as_deref() != Some(&name))
+                    .map(|(n, c)| Command::new(n, &c.description))
+                    .collect()
+            };
+            planned.extend(
+                commands
+                    .iter()
+                    .map(|c| Command::new(&c.name, &c.description)),
+            );
+            crate::validation::validate_commands(&planned)?;
+            // Do not hold dispatch locks while waiting for the API. Old code stays available.
+            if synchronize && self.inner.sync_commands && self.inner.running.load(Ordering::SeqCst)
+            {
+                self.client().set_commands(&planned).await?;
+            }
+            // Acquire all routing locks before mutation; no await occurs during publication.
+            let mut current = self.inner.commands.write().await;
+            let mut routes = self.inner.buttons.write().await;
+            let mut cogs = self.inner.cogs.write().await;
+            current.retain(|_, c| c.cog_name.as_deref() != Some(&name));
+            routes.retain(|b| b.cog_name.as_deref() != Some(&name));
+            for command in commands {
+                current.insert(
+                    command.name,
                     CommandDef {
-                        description: c.description,
+                        description: command.description,
                         cog_name: Some(name.clone()),
-                        handler: c.handler,
+                        handler: command.handler,
                     },
                 );
             }
-        }
-
-        // 3. Register cog buttons
-        {
-            let mut btns = self.inner.buttons.write().await;
-            for b in cog_buttons {
-                btns.push(ButtonDef {
-                    prefix: b.prefix,
+            for button in buttons {
+                routes.push(ButtonDef {
+                    prefix: button.prefix,
                     cog_name: Some(name.clone()),
-                    handler: b.handler,
+                    handler: button.handler,
                 });
             }
+            Ok(cogs.insert(name.clone(), cog.clone()))
         }
-
-        // 4. Save cog instance
-        self.inner.cogs.write().await.insert(name.clone(), cog_arc);
-
-        if self.inner.log {
-            info!("Cog '{}' loaded", name);
+        .await;
+        match result {
+            Ok(old) => {
+                if let Some(old) = old {
+                    if let Err(error) = old.on_unload(self.client()).await {
+                        warn!("Cog cleanup failed: {error}");
+                    }
+                }
+                if self.inner.log {
+                    info!("Cog '{}' installed", name);
+                }
+                Ok(())
+            }
+            Err(error) => {
+                let _ = cog.on_unload(self.client()).await;
+                Err(error)
+            }
         }
-
-        // 5. Sync updated command list to Yapin' if running
-        if self.inner.sync_commands && self.inner.running.load(Ordering::SeqCst) {
-            self.sync_commands().await?;
-        }
-
-        Ok(())
     }
 
-    /// Dynamically unloads a cog by name while the bot is running.
-    ///
-    /// The cog's `on_unload()` is called, its commands and buttons are removed,
-    /// and `sync_commands()` updates Yapin's live slash commands.
+    #[cfg(feature = "hot-reload")]
+    pub(crate) async fn install_worker<C: Cog>(&self, cog: C, replacing: bool) -> Result<()> {
+        self.install_cog(Arc::new(cog), true, Some(replacing)).await
+    }
+
+    /// Remove routing atomically. Existing handler snapshots may finish in flight.
     pub async fn remove_cog(&self, name: &str) -> Result<Option<Arc<dyn Cog>>> {
-        let cog_opt = self.inner.cogs.write().await.remove(name);
-
-        if let Some(ref cog) = cog_opt {
-            // 1. Run on_unload
-            cog.on_unload(&self.inner.client).await?;
-
-            // 2. Remove commands
-            {
-                let mut cmds = self.inner.commands.write().await;
-                cmds.retain(|_, def| def.cog_name.as_deref() != Some(name));
+        let old = {
+            let _update = self.inner.registry_update.lock().await;
+            if !self.inner.cogs.read().await.contains_key(name) {
+                return Ok(None);
             }
-
-            // 3. Remove buttons
-            {
-                let mut btns = self.inner.buttons.write().await;
-                btns.retain(|b| b.cog_name.as_deref() != Some(name));
-            }
-
-            if self.inner.log {
-                info!("Cog '{}' unloaded", name);
-            }
-
-            // 4. Sync commands to Yapin' if running
+            let planned: Vec<Command> = self
+                .inner
+                .commands
+                .read()
+                .await
+                .iter()
+                .filter(|(_, c)| c.cog_name.as_deref() != Some(name))
+                .map(|(n, c)| Command::new(n, &c.description))
+                .collect();
             if self.inner.sync_commands && self.inner.running.load(Ordering::SeqCst) {
-                self.sync_commands().await?;
+                self.client().set_commands(&planned).await?;
             }
-        }
-
-        Ok(cog_opt)
-    }
-
-    /// Reloads an existing cog instance with a new instance of the cog.
-    pub async fn reload_cog<C: Cog>(&self, cog: C) -> Result<()> {
-        let name = cog.name().to_string();
-        self.remove_cog(&name).await?;
-        self.add_cog(cog).await?;
-        Ok(())
-    }
-
-    /// Reloads a cog by name using its registered cog factory.
-    pub async fn reload_cog_by_name(&self, name: &str) -> Result<()> {
-        let factory = {
-            let factories = self.inner.cog_factories.read().await;
-            factories.get(name).cloned().ok_or_else(|| {
-                YappinError::Config(format!("No factory registered for cog '{}'", name))
-            })?
+            let mut commands = self.inner.commands.write().await;
+            let mut buttons = self.inner.buttons.write().await;
+            let mut cogs = self.inner.cogs.write().await;
+            commands.retain(|_, c| c.cog_name.as_deref() != Some(name));
+            buttons.retain(|b| b.cog_name.as_deref() != Some(name));
+            cogs.remove(name)
         };
-
-        let new_cog = factory();
-        self.remove_cog(name).await?;
-
-        // Load new cog
-        new_cog.on_load(&self.inner.client).await?;
-        let cog_commands = new_cog.commands();
-        let cog_buttons = new_cog.buttons();
-        let cog_arc: Arc<dyn Cog> = Arc::from(new_cog);
-
-        {
-            let mut cmds = self.inner.commands.write().await;
-            for c in cog_commands {
-                cmds.insert(
-                    c.name,
-                    CommandDef {
-                        description: c.description,
-                        cog_name: Some(name.to_string()),
-                        handler: c.handler,
-                    },
-                );
-            }
+        if let Some(cog) = &old {
+            cog.on_unload(self.client()).await?;
         }
-
-        {
-            let mut btns = self.inner.buttons.write().await;
-            for b in cog_buttons {
-                btns.push(ButtonDef {
-                    prefix: b.prefix,
-                    cog_name: Some(name.to_string()),
-                    handler: b.handler,
-                });
-            }
-        }
-
-        self.inner
-            .cogs
-            .write()
-            .await
-            .insert(name.to_string(), cog_arc);
-
-        if self.inner.log {
-            info!("Cog '{}' reloaded", name);
-        }
-
-        if self.inner.sync_commands && self.inner.running.load(Ordering::SeqCst) {
-            self.sync_commands().await?;
-        }
-
-        Ok(())
+        Ok(old)
     }
 
-    /// Synchronizes registered commands to Yapin' via `PUT /commands`.
-    pub async fn sync_commands(&self) -> Result<Vec<Command>> {
-        let cmds_snapshot = self.inner.commands.read().await;
-        let cmd_list: Vec<Command> = cmds_snapshot
-            .iter()
-            .map(|(name, def)| Command::new(name, &def.description))
-            .collect();
-        drop(cmds_snapshot);
+    /// Replace an instance built from code already linked into this executable.
+    /// For edited Rust source, use the optional hot_reload module.
+    pub async fn reload_cog<C: Cog>(&self, cog: C) -> Result<()> {
+        self.install_cog(Arc::new(cog), true, None).await
+    }
 
-        let synced = self.inner.client.set_commands(&cmd_list).await?;
-        if self.inner.log {
-            info!("Synchronized {} command(s) with Yapin'", synced.len());
+    /// Recreate a linked cog through its factory; this does not compile source files.
+    pub async fn reload_cog_by_name(&self, name: &str) -> Result<()> {
+        let factory = self
+            .inner
+            .cog_factories
+            .read()
+            .await
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                YappinError::Config(format!("No factory registered for cog '{name}'"))
+            })?;
+        let cog: Arc<dyn Cog> = Arc::from(factory());
+        if cog.name() != name {
+            return Err(YappinError::validation(
+                "cog.name",
+                "factory returned a different cog name",
+            ));
         }
-        Ok(synced)
+        self.install_cog(cog, true, None).await
+    }
+
+    /// Synchronize a consistent command snapshot without blocking normal dispatch.
+    pub async fn sync_commands(&self) -> Result<Vec<Command>> {
+        let _update = self.inner.registry_update.lock().await;
+        let commands: Vec<Command> = self
+            .inner
+            .commands
+            .read()
+            .await
+            .iter()
+            .map(|(n, c)| Command::new(n, &c.description))
+            .collect();
+        self.client().set_commands(&commands).await
     }
 
     /// Stops the bot's event loop.
@@ -553,6 +581,7 @@ impl BotBuilder {
             handler_concurrency: self.handler_concurrency,
             #[cfg(feature = "gateway")]
             gateway_url: self.gateway_url,
+            registry_update: tokio::sync::Mutex::new(()),
             running: AtomicBool::new(false),
             stopped: tokio::sync::Notify::new(),
         });
@@ -646,50 +675,9 @@ impl Bot {
             }
         };
 
-        // 2. Load any initial cogs
+        // Initial cogs use the same validated, atomic registration path.
         for cog in self.initial_cogs.drain(..) {
-            let name = cog.name().to_string();
-            cog.on_load(self.handle.client()).await?;
-
-            let cog_commands = cog.commands();
-            let cog_buttons = cog.buttons();
-            let cog_arc: Arc<dyn Cog> = Arc::from(cog);
-
-            {
-                let mut cmds = self.handle.inner.commands.write().await;
-                for c in cog_commands {
-                    cmds.insert(
-                        c.name,
-                        CommandDef {
-                            description: c.description,
-                            cog_name: Some(name.clone()),
-                            handler: c.handler,
-                        },
-                    );
-                }
-            }
-
-            {
-                let mut btns = self.handle.inner.buttons.write().await;
-                for b in cog_buttons {
-                    btns.push(ButtonDef {
-                        prefix: b.prefix,
-                        cog_name: Some(name.clone()),
-                        handler: b.handler,
-                    });
-                }
-            }
-
-            self.handle
-                .inner
-                .cogs
-                .write()
-                .await
-                .insert(name.clone(), cog_arc);
-
-            if self.handle.inner.log {
-                info!("Cog '{}' loaded", name);
-            }
+            self.handle.install_cog(Arc::from(cog), false, None).await?;
         }
 
         // 3. Register slash commands if enabled
@@ -922,12 +910,11 @@ impl Bot {
             if let Some(def) = cmds_guard.get(&cmd_name) {
                 let handler = def.handler.clone();
                 let cog_name = def.cog_name.clone();
-                drop(cmds_guard);
-
                 let cog = match cog_name {
                     Some(name) => self.handle.inner.cogs.read().await.get(&name).cloned(),
                     None => None,
                 };
+                drop(cmds_guard);
                 let allow = match cog {
                     Some(cog) => cog.check(&ctx).await,
                     None => true,

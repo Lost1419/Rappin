@@ -30,6 +30,7 @@ default = []
 cli = ["dep:clap", "dep:toml", "tokio/io-std", "tokio/io-util"]
 gateway = ["dep:tokio-tungstenite", "dep:log"]
 voice = ["tokio/process", "tokio/io-util"]
+hot-reload = ["tokio/process", "tokio/io-util", "tokio/io-std"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -54,3 +55,11 @@ tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"], 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = "0.3"
+
+[[example]]
+name = "hot_cog_worker"
+required-features = ["hot-reload"]
+
+[[example]]
+name = "hot_reload_bot"
+required-features = ["hot-reload"]
