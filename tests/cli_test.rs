@@ -109,3 +109,67 @@ fn mcp_lists_tools_and_previews_writes_without_auth() {
     assert_eq!(result["data"]["messages"][0]["dry_run"], true);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn mcp_rejects_tool_selected_files_and_never_overwrites_them() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let (mut command, config) = command();
+    let file = std::env::temp_dir().join(format!("rappin-private-{}.json", uuid::Uuid::new_v4()));
+    std::fs::write(&file, "\"private_file_contents\"").unwrap();
+    let mut child = command
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for (id, name, args) in [
+        (1, "poll_events", serde_json::json!({"cursor_file":file})),
+        (
+            2,
+            "ack_events",
+            serde_json::json!({"id":1,"cursor_file":file}),
+        ),
+        (3, "ack_events", serde_json::json!({"id":1})),
+    ] {
+        writeln!(stdin,"{}",serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":args}})).unwrap();
+    }
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(!text.contains("private_file_contents"));
+    for line in text.lines() {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(v["result"]["isError"], true);
+    }
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        "\"private_file_contents\""
+    );
+    std::fs::remove_file(file).unwrap();
+    std::fs::remove_file(config).unwrap();
+}
+
+#[test]
+fn mcp_state_is_fixed_at_startup_instead_of_tool_arguments() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let (mut command, config) = command();
+    let file = std::env::temp_dir().join(format!("rappin-cursor-{}.json", uuid::Uuid::new_v4()));
+    let mut child = command
+        .arg("mcp")
+        .arg("--cursor-file")
+        .arg(&file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    writeln!(child.stdin.take().unwrap(),"{}",serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ack_events","arguments":{"id":42}}})).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "42");
+    std::fs::remove_file(file).unwrap();
+    std::fs::remove_file(config).unwrap();
+}

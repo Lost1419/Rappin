@@ -45,6 +45,13 @@ impl Gateway {
         self
     }
     async fn connect(&mut self, after: u64) -> Result<()> {
+        crate::security::endpoint(&self.url, true)?;
+        // These dependency log targets include raw frame payloads, including authentication.
+        if wire_trace_enabled() {
+            return Err(YappinError::Config(
+                "gateway wire tracing is enabled; refusing to send credentials".into(),
+            ));
+        }
         let (mut ws, _) = timeout(Duration::from_secs(10), connect_async(&self.url))
             .await
             .map_err(|_| transport())?
@@ -76,6 +83,11 @@ impl Gateway {
         }
         if let Some(age) = self.max_age {
             auth["max_age"] = age.into();
+        }
+        if wire_trace_enabled() {
+            return Err(YappinError::Config(
+                "gateway wire tracing is enabled; refusing to send credentials".into(),
+            ));
         }
         ws.send(Message::Text(auth.to_string().into()))
             .await
@@ -119,6 +131,7 @@ impl Gateway {
     }
     /// Reconnect on the next call using the last *handled* ID. Beta denial falls back for 5 min.
     pub async fn poll(&mut self, after: u64) -> Result<EventsResponse> {
+        crate::security::endpoint(&self.url, true)?;
         let result = if self.fallback_until.is_some_and(|t| t > Instant::now()) {
             self.client
                 .get_events(Some(after), Some(25), self.max_age)
@@ -163,4 +176,10 @@ fn close(code: Option<u16>) -> YappinError {
             retry_after: None,
         }
     }
+}
+
+fn wire_trace_enabled() -> bool {
+    log::log_enabled!(target:"tungstenite::protocol",log::Level::Trace)
+        || log::log_enabled!(target:"tungstenite::protocol::frame",log::Level::Trace)
+        || log::log_enabled!(target:"tokio_tungstenite",log::Level::Trace)
 }

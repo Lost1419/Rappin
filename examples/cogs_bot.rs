@@ -96,6 +96,16 @@ async fn main() -> Result<()> {
             "reload",
             "Reload a cog dynamically while running",
             |ctx| async move {
+                let owner = ctx
+                    .cache()
+                    .get_me()
+                    .await
+                    .and_then(|me| me.bot)
+                    .map(|bot| bot.owner_id);
+                if owner != Some(ctx.author_id()) {
+                    ctx.reply("Only the bot owner can reload cogs.").await?;
+                    return Ok(());
+                }
                 let cog_name = ctx.argv.first().map(|s| s.as_str()).unwrap_or("fun");
 
                 if let Some(bot_handle) = ctx.bot() {

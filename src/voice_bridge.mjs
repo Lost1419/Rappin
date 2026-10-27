@@ -6,6 +6,9 @@ import { spawn } from 'node:child_process';
 let input = '';
 for await (const chunk of process.stdin) { input += chunk; if (input.length > 65536) throw new Error('configuration too large'); }
 const config = JSON.parse(input);
+// Keep SDK HTTP calls from forwarding authenticated requests through redirects.
+const nativeFetch = globalThis.fetch;
+globalThis.fetch = (resource, options = {}) => nativeFetch(resource, { ...options, redirect: 'error' });
 let bot, call, ff;
 let cleaning;
 async function cleanup() {
@@ -26,7 +29,7 @@ try {
   bot = new Bot(config.token, { base: config.base_url, log: false, gateway: false });
   call = await bot.connectVoice(rtc, config.server, config.channel);
   const channels = 2, sampleRate = 48000, samples = 480, frameBytes = samples * channels * 2;
-  ff = spawn(config.ffmpeg, ['-nostdin', '-loglevel', 'error', '-i', config.file, '-f', 's16le', '-ar', String(sampleRate), '-ac', String(channels), 'pipe:1'], { stdio: ['ignore', 'pipe', 'pipe'] });
+  ff = spawn(config.ffmpeg, ['-nostdin', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-i', config.file, '-f', 's16le', '-ar', String(sampleRate), '-ac', String(channels), 'pipe:1'], { stdio: ['ignore', 'pipe', 'pipe'], env: Object.fromEntries(['PATH', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TMP', 'TEMP'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) });
   let detail = '';
   ff.stderr.on('data', chunk => { detail = (detail + chunk).slice(-4096); });
   const finished = new Promise(resolve => {

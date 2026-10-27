@@ -15,7 +15,9 @@ impl EventCursor {
     }
     pub async fn load(&self) -> Result<Option<u64>> {
         match tokio::fs::read(&self.path).await {
-            Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+            Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|_| {
+                YappinError::Config("invalid event cursor: expected an unsigned event ID".into())
+            }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }

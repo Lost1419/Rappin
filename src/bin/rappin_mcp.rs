@@ -50,15 +50,15 @@ fn tools() -> Vec<Value> {
         tool(
             "poll_events",
             "Read events without acknowledging them; after=0 starts from now",
-            json!({"after":{"type":"integer","minimum":0},"wait":{"type":"integer","minimum":0,"maximum":25},"cursor_file":{"type":"string"}}),
+            json!({"after":{"type":"integer","minimum":0},"wait":{"type":"integer","minimum":0,"maximum":25}}),
             vec![],
             false,
         ),
         tool(
             "ack_events",
             "Persist a watermark after handling every delivered event up to it",
-            json!({"id":{"type":"integer","minimum":0},"cursor_file":{"type":"string"},"dry_run":{"type":"boolean"}}),
-            vec!["id", "cursor_file"],
+            json!({"id":{"type":"integer","minimum":0},"dry_run":{"type":"boolean"}}),
+            vec!["id"],
             true,
         ),
     ]
@@ -97,8 +97,8 @@ fn argv(name: &str, a: &Value) -> Result<Vec<String>> {
         "list_channels" | "resolve_channel" => vec!["server"],
         "read_messages" => vec!["limit", "before", "after"],
         "send_message" => vec!["reply_to"],
-        "poll_events" => vec!["after", "wait", "cursor_file"],
-        "ack_events" => vec!["cursor_file"],
+        "poll_events" => vec!["after", "wait"],
+        "ack_events" => vec![],
         _ => vec![],
     } {
         if let Some(value) = a.get(key) {
@@ -113,12 +113,9 @@ fn argv(name: &str, a: &Value) -> Result<Vec<String>> {
             args.push(value);
         }
     }
-    if name == "ack_events" && a["cursor_file"].as_str().is_none() {
-        return Err(YappinError::validation("cursor_file", "required string"));
-    }
     Ok(args)
 }
-pub async fn serve(ctx: &Context) -> Result<()> {
+pub async fn serve(ctx: &Context, cursor: Option<&std::path::Path>) -> Result<()> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
     while let Some(line) = lines.next_line().await? {
@@ -143,8 +140,15 @@ pub async fn serve(ctx: &Context) -> Result<()> {
                 let a = &request["params"]["arguments"];
                 let name = request["params"]["name"].as_str().unwrap_or("");
                 let output: Result<Value> = async {
+                    validate_arguments(name, a)?;
                     let mut args = vec!["rappin".to_owned()];
                     args.extend(argv(name, a)?);
+                    if matches!(name,"poll_events"|"ack_events") {
+                        if let Some(path)=cursor {
+                            args.push("--cursor-file".into());
+                            args.push(path.to_str().ok_or_else(||YappinError::Config("event cursor path must be UTF-8".into()))?.into());
+                        } else if name=="ack_events" {return Err(YappinError::Config("start rappin mcp --cursor-file PATH to enable event acknowledgements".into()));}
+                    }
                     let parsed = Args::try_parse_from(args).map_err(|_| {
                         YappinError::validation(
                             "arguments",
@@ -173,6 +177,53 @@ pub async fn serve(ctx: &Context) -> Result<()> {
         };
         stdout.write_all(format!("{response}\n").as_bytes()).await?;
         stdout.flush().await?;
+    }
+    Ok(())
+}
+
+fn validate_arguments(name: &str, args: &Value) -> Result<()> {
+    let definition = tools()
+        .into_iter()
+        .find(|t| t["name"] == name)
+        .ok_or_else(|| YappinError::validation("tool", "unknown tool"))?;
+    let object = args
+        .as_object()
+        .ok_or_else(|| YappinError::validation("arguments", "expected an object"))?;
+    let schema = &definition["inputSchema"];
+    for key in schema["required"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        if !object.contains_key(key) {
+            return Err(YappinError::validation(key, "required argument"));
+        }
+    }
+    for (key, value) in object {
+        let field = schema["properties"].get(key).ok_or_else(|| {
+            YappinError::validation("arguments", "unknown argument; inspect tools/list")
+        })?;
+        let valid = match field["type"].as_str() {
+            Some("string") => value.is_string(),
+            Some("integer") => value.as_u64().is_some(),
+            Some("boolean") => value.is_boolean(),
+            _ => false,
+        };
+        if !valid {
+            return Err(YappinError::validation(key, "invalid argument type"));
+        }
+        if let Some(n) = value.as_u64() {
+            if field["minimum"].as_u64().is_some_and(|v| n < v)
+                || field["maximum"].as_u64().is_some_and(|v| n > v)
+            {
+                return Err(YappinError::validation(key, "argument out of bounds"));
+            }
+        }
+        if field["format"] == "uuid" && value.as_str().is_some_and(|s| Uuid::parse_str(s).is_err())
+        {
+            return Err(YappinError::validation(key, "invalid UUID"));
+        }
     }
     Ok(())
 }

@@ -16,7 +16,6 @@ async fn test_bot_builder_configuration() {
         .on_button_error(|_ctx, _err| async move {})
         .build();
 
-    assert_eq!(bot.client().token(), "yb_dummy_token_123");
     assert_eq!(
         bot.client().base_url(),
         "https://custom.yapin.gg/api/bot/v1"

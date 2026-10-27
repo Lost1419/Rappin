@@ -1,13 +1,15 @@
 # Rappin 🦀
 
 [![GitHub](https://img.shields.io/badge/github-Lost1419/Rappin-blue?logo=github)](https://github.com/Lost1419/Rappin)
-[![Crates.io](https://img.shields.io/crates/v/rappin-rs.svg?v=0.1.3)](https://crates.io/crates/rappin-rs)
+[![Crates.io](https://img.shields.io/crates/v/rappin-rs.svg?v=0.1.4)](https://crates.io/crates/rappin-rs)
 [![Docs.rs](https://docs.rs/rappin-rs/badge.svg)](https://docs.rs/rappin-rs)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 
 An idiomatic, type-safe, asynchronous Rust client and bot framework for the [Yapin’](https://www.yapin.gg) Bot API.
 
 Yapin’ is a chat platform providing an HTTPS-based bot API with long-polling events, slash commands, interactive buttons, embeds, Components V2 cards, and LiveKit-powered voice channels.
+
+See [credential security](docs/agents.md#credential-hardening-014) for the security boundaries and migration notes.
 
 ## Agent CLI, MCP, and resumable bots
 
@@ -116,7 +118,7 @@ Add `rappin-rs` and `tokio` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.3"
+rappin-rs = "0.1.4"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -243,6 +245,11 @@ Because `Bot` provides a cloneable `BotHandle` (accessible through `bot.handle()
 let bot = Bot::builder(token)
     .cog(ModerationCog)
     .command("reload", "Reload a cog live", |ctx| async move {
+        let owner = ctx.cache().get_me().await.and_then(|me| me.bot).map(|bot| bot.owner_id);
+        if owner != Some(ctx.author_id()) {
+            ctx.reply("Only the bot owner can reload cogs.").await?;
+            return Ok(());
+        }
         if let Some(bot) = ctx.bot() {
             bot.reload_cog(ModerationCog).await?;
             ctx.reply("✅ Moderation cog reloaded live!").await?;

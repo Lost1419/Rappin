@@ -9,7 +9,7 @@ pub struct VoiceChannel {
 }
 
 /// A LiveKit connection ticket for bot voice connection (`POST /servers/{id}/voice/join`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VoiceTicket {
     /// LiveKit server WebSocket URL.
     pub url: String,
@@ -73,4 +73,15 @@ pub struct DisconnectMemberResponse {
     pub ok: bool,
     #[serde(default)]
     pub channel_id: Option<Uuid>,
+}
+
+impl std::fmt::Debug for VoiceTicket {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VoiceTicket")
+            .field("token", &"[REDACTED]")
+            .field("channel_id", &self.channel_id)
+            .field("server_id", &self.server_id)
+            .field("e2ee", &self.e2ee)
+            .finish_non_exhaustive()
+    }
 }

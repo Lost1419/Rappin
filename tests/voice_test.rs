@@ -4,6 +4,27 @@ use rappin::{voice::VoiceOptions, Client};
 use std::{os::unix::fs::PermissionsExt, time::Duration};
 #[tokio::test]
 async fn voice_bridge_pads_frames_drains_and_leaves() {
+    if std::env::var_os("RAPPIN_VOICE_ENV_TEST").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "voice_bridge_pads_frames_drains_and_leaves",
+                "--nocapture",
+            ])
+            .env("RAPPIN_VOICE_ENV_TEST", "1")
+            .env("YAPPER_BOT_TOKEN", "yb_environment_fixture")
+            .env("CARGO_REGISTRY_TOKEN", "cargo_environment_fixture")
+            .env("NODE_OPTIONS", "--require=/nonexistent/untrusted-hook.cjs")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     if std::process::Command::new("node")
         .arg("--version")
         .output()
@@ -27,7 +48,7 @@ async fn voice_bridge_pads_frames_drains_and_leaves() {
     let source = format!(
         r#"import {{writeFile}} from 'node:fs/promises';
 export class Bot {{
- async connectVoice() {{ let frames=0; return {{source:{{captureFrame:async()=>{{frames++;}},waitForPlayout:async()=>{{if(frames!==2)throw Error('lost final partial frame');}}}},leave:async()=>{{await writeFile({},JSON.stringify({{frames,disconnected:true}}));}} }}; }}
+ async connectVoice() {{ if(process.env.YAPPER_BOT_TOKEN || process.env.CARGO_REGISTRY_TOKEN || process.env.NODE_OPTIONS)throw Error('inherited credential or startup hook'); let frames=0; return {{source:{{captureFrame:async()=>{{frames++;}},waitForPlayout:async()=>{{if(frames!==2)throw Error('lost final partial frame');}}}},leave:async()=>{{await writeFile({},JSON.stringify({{frames,disconnected:true}}));}} }}; }}
  async leaveVoice() {{}}
 }}"#,
         serde_json::to_string(&state).unwrap()

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.4 — 2026-10-27
+
+- Confine authenticated API requests to their configured origin and path prefix, reject unsafe endpoint URLs, and refuse redirects in default HTTP clients and the voice bridge.
+- Remove public access to the bot token; mark authorization headers sensitive and redact credentials in diagnostics, reflected API errors, deserialization errors, and CLI/MCP JSON keys and values.
+- Restrict MCP tools to validated arguments and an event-state path selected at process startup, closing arbitrary file-selection paths.
+- Fall back to REST when gateway raw-frame tracing is enabled. Limit voice subprocess environment inheritance and ffmpeg protocols.
+- Update SHA-256/HMAC dependencies and add token-exposure regression tests, including an independent HMAC test vector and poisoned-environment voice checks.
+- Restrict the example cog-reload command to the bot owner and document credential trust boundaries.
+
+### Migration
+
+- `Client::token()` is no longer public. Keep token ownership in application setup rather than command handlers.
+- Configure MCP event state with `rappin mcp --cursor-file PATH`; `poll_events` and `ack_events` no longer accept tool-selected file paths.
+- Remote credential endpoints require HTTPS/WSS. Explicit loopback development endpoints can still use HTTP/WS. Raw request paths cannot escape the configured API prefix.
+- The default transports refuse redirects. Custom HTTP clients remain trusted operator overrides and must preserve redirect/TLS/logging protections.
+
 ## 0.1.3 — 2026-10-27
 
 - Add a JSON CLI and MCP stdio tools for discovery, name resolution, bounded history, message writes, dry runs, schemas, and explicit event acknowledgement.

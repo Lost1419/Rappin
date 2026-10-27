@@ -1,6 +1,6 @@
 [package]
 name = "rappin-rs"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 rust-version = "1.88"
 autobins = false
@@ -28,7 +28,7 @@ required-features = ["cli"]
 [features]
 default = []
 cli = ["dep:clap", "dep:toml", "tokio/io-std", "tokio/io-util"]
-gateway = ["dep:tokio-tungstenite"]
+gateway = ["dep:tokio-tungstenite", "dep:log"]
 voice = ["tokio/process", "tokio/io-util"]
 
 [dependencies]
@@ -44,8 +44,9 @@ uuid = { version = "1", features = ["serde", "v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 url = "2.5"
 base64 = "0.22"
-sha2 = "0.10"
-hmac = "0.12"
+sha2 = "0.11"
+hmac = "0.13"
+log = { version = "0.4", optional = true }
 clap = { version = "4.6", features = ["derive"], optional = true }
 toml = { version = "0.9", optional = true }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"], optional = true }

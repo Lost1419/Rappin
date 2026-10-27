@@ -43,6 +43,8 @@ impl ClientBuilder {
         self
     }
 
+    /// Advanced trusted transport override. Configure redirect::Policy::none(), TLS
+    /// certificate validation, and safe logging. Custom transports can access credentials.
     pub fn http_client(mut self, client: reqwest::Client) -> Self {
         self.http_client = Some(client);
         self
@@ -57,6 +59,7 @@ impl ClientBuilder {
         let http = self.http_client.unwrap_or_else(|| {
             reqwest::Client::builder()
                 .timeout(Duration::from_secs(40))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("failed to create default reqwest client")
         });
@@ -98,7 +101,7 @@ impl Client {
     /// use rappin::Client;
     ///
     /// let client = Client::new("yb_sample_token");
-    /// assert_eq!(client.token(), "yb_sample_token");
+    /// assert_eq!(client.base_url(), rappin::DEFAULT_API_BASE);
     /// ```
     pub fn new(token: impl Into<String>) -> Self {
         ClientBuilder::new(token).build()
@@ -114,14 +117,15 @@ impl Client {
     /// let client = Client::builder("yb_sample_token")
     ///     .max_retries(5)
     ///     .build();
-    /// assert_eq!(client.token(), "yb_sample_token");
+    /// assert_eq!(client.base_url(), rappin::DEFAULT_API_BASE);
     /// ```
     pub fn builder(token: impl Into<String>) -> ClientBuilder {
         ClientBuilder::new(token)
     }
 
-    /// Returns the configured bot token.
-    pub fn token(&self) -> &str {
+    /// Private to authenticated transports; handlers are not given a token getter.
+    #[cfg(any(feature = "gateway", feature = "voice"))]
+    pub(crate) fn token(&self) -> &str {
         &self.inner.token
     }
 
@@ -193,20 +197,21 @@ impl Client {
             }
             return Err(YappinError::Api {
                 status: status.as_u16(),
-                message: msg,
+                message: crate::security::scrub(&msg, &[&self.inner.token]),
                 retry_after: retry_header,
             });
         }
     }
 
-    /// Performs an arbitrary JSON request against the API.
+    /// Performs a JSON request confined to the configured origin and API prefix.
     pub async fn request_json<T: DeserializeOwned, B: Serialize>(
         &self,
         method: Method,
         path: &str,
         body: Option<&B>,
     ) -> Result<T> {
-        let url = format!("{}{}", self.inner.base_url, path);
+        let url = crate::security::api_url(&self.inner.base_url, path)?;
+        let authorization = crate::security::authorization("Bot", &self.inner.token)?;
         debug!(%method, "Yapin API request");
 
         let body_data = match body {
@@ -219,8 +224,8 @@ impl Client {
                 let mut req = self
                     .inner
                     .http
-                    .request(method.clone(), &url)
-                    .header(header::AUTHORIZATION, format!("Bot {}", self.inner.token))
+                    .request(method.clone(), url.clone())
+                    .header(header::AUTHORIZATION, authorization.clone())
                     .header(
                         header::USER_AGENT,
                         concat!("rappin-rs/", env!("CARGO_PKG_VERSION")),
@@ -236,14 +241,18 @@ impl Client {
             })
             .await?;
 
-        let bytes = response.bytes().await?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| YappinError::Http(e.without_url()))?;
         if bytes.is_empty() {
             // Support endpoints returning 200/204 with no body
             let val = serde_json::from_str("{}")?;
             return Ok(val);
         }
 
-        let parsed = serde_json::from_slice(&bytes)?;
+        let parsed = serde_json::from_slice(&bytes)
+            .map_err(|e| crate::security::json_error(e, &[&self.inner.token]))?;
         Ok(parsed)
     }
 
@@ -255,15 +264,16 @@ impl Client {
         bytes: Vec<u8>,
         content_type: &str,
     ) -> Result<T> {
-        let url = format!("{}{}", self.inner.base_url, path);
+        let url = crate::security::api_url(&self.inner.base_url, path)?;
+        let authorization = crate::security::authorization("Bot", &self.inner.token)?;
         debug!(%method, %content_type, "Yapin binary request");
 
         let response = self
             .execute_with_retry(|| {
                 self.inner
                     .http
-                    .request(method.clone(), &url)
-                    .header(header::AUTHORIZATION, format!("Bot {}", self.inner.token))
+                    .request(method.clone(), url.clone())
+                    .header(header::AUTHORIZATION, authorization.clone())
                     .header(
                         header::USER_AGENT,
                         concat!("rappin-rs/", env!("CARGO_PKG_VERSION")),
@@ -274,8 +284,12 @@ impl Client {
             })
             .await?;
 
-        let resp_bytes = response.bytes().await?;
-        let parsed = serde_json::from_slice(&resp_bytes)?;
+        let resp_bytes = response
+            .bytes()
+            .await
+            .map_err(|e| YappinError::Http(e.without_url()))?;
+        let parsed = serde_json::from_slice(&resp_bytes)
+            .map_err(|e| crate::security::json_error(e, &[&self.inner.token]))?;
         Ok(parsed)
     }
 
@@ -1270,6 +1284,13 @@ impl Client {
         callback: &InteractionCallback,
     ) -> Result<()> {
         callback.validate()?;
+        let interaction_id: String =
+            url::form_urlencoded::byte_serialize(interaction_id.as_bytes())
+                .collect::<String>()
+                .replace('+', "%20");
+        let token: String = url::form_urlencoded::byte_serialize(token.as_bytes())
+            .collect::<String>()
+            .replace('+', "%20");
         let _: serde_json::Value = self
             .request_json(
                 Method::POST,

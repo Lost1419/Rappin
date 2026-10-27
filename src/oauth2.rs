@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuth2Token {
     pub access_token: String,
     #[serde(default)]
@@ -90,6 +90,7 @@ impl OAuth2Client {
             base_url: DEFAULT_SITE_BASE.into(),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(20))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("HTTP client"),
         }
@@ -149,23 +150,34 @@ impl OAuth2Client {
         }
         let res = self
             .http
-            .post(format!("{}/api/oauth/token", self.base_url))
+            .post(crate::security::api_url(
+                &self.base_url,
+                "/api/oauth/token",
+            )?)
             .form(&params)
             .send()
-            .await?;
-        decode(res).await
+            .await
+            .map_err(|e| YappinError::Http(e.without_url()))?;
+        decode(res, &[&self.client_secret, code, verifier.unwrap_or("")]).await
     }
     pub async fn get_user_profile(&self, access_token: &str) -> Result<OAuth2User> {
         let res = self
             .http
-            .get(format!("{}/api/oauth/me", self.base_url))
-            .header(header::AUTHORIZATION, format!("Bearer {access_token}"))
+            .get(crate::security::api_url(&self.base_url, "/api/oauth/me")?)
+            .header(
+                header::AUTHORIZATION,
+                crate::security::authorization("Bearer", access_token)?,
+            )
             .send()
-            .await?;
-        decode(res).await
+            .await
+            .map_err(|e| YappinError::Http(e.without_url()))?;
+        decode(res, &[access_token]).await
     }
 }
-async fn decode<T: serde::de::DeserializeOwned>(res: reqwest::Response) -> Result<T> {
+async fn decode<T: serde::de::DeserializeOwned>(
+    res: reqwest::Response,
+    secrets: &[&str],
+) -> Result<T> {
     let status = res.status();
     let delay = res
         .headers()
@@ -176,16 +188,30 @@ async fn decode<T: serde::de::DeserializeOwned>(res: reqwest::Response) -> Resul
     let bytes = res.bytes().await?;
     if !status.is_success() {
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
-        let message = body["error_description"]
+        let message: String = body["error_description"]
             .as_str()
             .or(body["error"].as_str())
             .unwrap_or("OAuth request failed")
             .into();
         return Err(YappinError::Api {
             status: status.as_u16(),
-            message,
+            message: crate::security::scrub(&message, secrets),
             retry_after: delay,
         });
     }
-    Ok(serde_json::from_slice(&bytes)?)
+    serde_json::from_slice(&bytes).map_err(|e| crate::security::json_error(e, secrets))
+}
+
+impl std::fmt::Debug for OAuth2Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuth2Token")
+            .field("access_token", &"[REDACTED]")
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .finish_non_exhaustive()
+    }
 }

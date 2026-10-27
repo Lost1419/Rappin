@@ -1,5 +1,7 @@
 /target
 /.rappin-voice/
 /node_modules/
+/docs/advert.md
+SECURITY.md
 
 .DS_Store

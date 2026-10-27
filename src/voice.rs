@@ -48,11 +48,19 @@ impl Client {
         file: impl AsRef<Path>,
         options: &VoiceOptions,
     ) -> Result<()> {
+        crate::security::endpoint(self.base_url(), false)?;
         let file = tokio::fs::canonicalize(file).await?;
         let sdk = tokio::fs::canonicalize(&options.sdk).await?;
         let node_modules = tokio::fs::canonicalize(&options.node_modules).await?;
         let config = serde_json::json!({"token":self.token(),"base_url":self.base_url(),"server":server,"channel":channel,"file":file,"sdk":sdk,"node_modules":node_modules,"ffmpeg":options.ffmpeg});
-        let mut child = Command::new(&options.node)
+        let mut command = Command::new(&options.node);
+        command.env_clear();
+        for key in ["PATH", "SystemRoot", "WINDIR", "TMPDIR", "TMP", "TEMP"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        let mut child = command
             .args([
                 "--input-type=module",
                 "--eval",

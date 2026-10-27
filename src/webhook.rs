@@ -1,6 +1,6 @@
 //! Outbound channel webhooks and authenticated inbound event webhooks.
 use crate::{CreateMessage, Event, Message, Result, YappinError};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::time::Duration;
@@ -33,6 +33,7 @@ impl WebhookClient {
             url: url.into(),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(15))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("HTTP client"),
         }
@@ -40,6 +41,9 @@ impl WebhookClient {
     async fn post<T: Serialize>(&self, message: &T, wait: bool) -> Result<Option<Message>> {
         let mut url = url::Url::parse(&self.url)
             .map_err(|_| YappinError::Config("invalid webhook URL".into()))?;
+        let mut destination = url.clone();
+        destination.set_query(None);
+        crate::security::endpoint(destination.as_str(), false)?;
         let query: Vec<_> = url
             .query_pairs()
             .filter(|(k, _)| k != "wait")
@@ -84,10 +88,7 @@ impl WebhookClient {
             let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
             return Err(YappinError::Api {
                 status: status.as_u16(),
-                message: v["message"]
-                    .as_str()
-                    .unwrap_or("webhook request failed")
-                    .into(),
+                message: "webhook request failed".into(),
                 retry_after: header
                     .or(v["retry_after"].as_f64())
                     .filter(|v| v.is_finite() && *v >= 0.0),

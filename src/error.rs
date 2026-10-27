@@ -13,7 +13,7 @@ pub enum YappinError {
 
     /// An HTTP client or transport error.
     #[error("HTTP error: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[source] reqwest::Error),
 
     /// A JSON serialization or deserialization error.
     #[error("JSON error: {0}")]
@@ -144,3 +144,9 @@ impl YappinError {
 
 /// A specialized Result type for Yapin' operations.
 pub type Result<T> = std::result::Result<T, YappinError>;
+
+impl From<reqwest::Error> for YappinError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Http(error.without_url())
+    }
+}

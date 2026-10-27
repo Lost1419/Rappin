@@ -173,7 +173,9 @@ validate the callback state. Tokens currently have no refresh-token flow.
 Configure an MCP client with command `rappin`, args `["mcp"]`, and an environment
 containing `YAPPER_BOT_TOKEN`. The stdio server exposes server/channel discovery,
 channel resolution, bounded history, message sending, event polling and explicit
-acknowledgement. It uses newline-delimited JSON-RPC; stdout is protocol-only.
+acknowledgement. Configure a fixed cursor at process startup with
+`rappin mcp --cursor-file ./state/events.json`; tool arguments cannot choose local
+file paths. Without that option, acknowledgement is disabled. It uses newline-delimited JSON-RPC; stdout is protocol-only.
 Writes accept `dry_run:true`. Tool errors set `isError` and carry the CLI envelope.
 Example configuration (supply the environment credential through your client):
 
@@ -214,3 +216,23 @@ and button handlers are bounded and awaited rather than detached. All 35 REST pa
 templates (51 operations) remain available. Source of truth: bundled
 [OpenAPI](openapi.json), [API reference](https://www.yapin.gg/developers/api), and
 [developer guide](https://www.yapin.gg/developers).
+
+## Credential hardening (0.1.4)
+
+Credential handling is hardened in 0.1.4. The framework is not a sandbox for
+application code: handlers, custom transports, configured endpoints, local SDKs,
+and the host operating system must be trusted.
+`Client::token()` is no longer public. Default clients refuse redirects and insecure
+remote endpoints. Custom transports, endpoints, handlers and voice SDK paths must
+be trusted operator configuration. MCP cursor paths are supplied at startup rather
+than in tool calls. Upgrade from 0.1.3 to receive these changes.
+
+Authorization headers are marked sensitive; token-bearing diagnostic models and
+reflected API errors redact credentials. CLI/MCP redaction covers JSON keys and
+values. The gateway uses REST fallback instead of authenticating while raw frame
+tracing is enabled. The voice bridge uses an environment allowlist, refuses HTTP
+redirects, and limits ffmpeg to local-file/pipe protocols. Keep dependency wire
+logging disabled and do not log serialized OAuth, interaction, or voice tickets.
+The SHA-256/HMAC dependencies have been updated to the maintained RustCrypto chain.
+These protections and regression tests reduce known exposure paths; they do not
+prove absence of every vulnerability or protect against malicious trusted code.

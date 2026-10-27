@@ -40,7 +40,8 @@ separate files. Do not retry an ambiguous send without checking history: the API
 no documented idempotency key. A permission failure needs changed permissions, not
 more retries. Voice playback is outbound only and requires the optional Node/ffmpeg
 runtime; `rappin voice --help` describes paths. `rappin mcp` exposes stdio tools when
-an MCP client is preferred.
+an MCP client is preferred. Supply its fixed state file at startup with
+`rappin mcp --cursor-file ./state/events.json`; tool calls cannot select local paths.
 
 See the repository's `docs/agents.md` for JSON shapes, retry behavior, permissions,
 webhooks, OAuth PKCE, gateway fallback, migration details, and voice setup.

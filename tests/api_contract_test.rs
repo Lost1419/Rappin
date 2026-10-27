@@ -169,12 +169,19 @@ fn validation_and_unicode_splitting() {
 }
 #[test]
 fn authenticated_webhook_normalizes_event_field_and_rejects_tampering() {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
     let body = br#"{"id":10,"event":"test","data":{}}"#;
     let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
     mac.update(body);
-    let signature = format!("sha256={:x}", mac.finalize().into_bytes());
+    let signature = format!(
+        "sha256={}",
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
     assert_eq!(
         webhook::verify_event("secret", &signature, body)
             .unwrap()

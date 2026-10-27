@@ -85,6 +85,7 @@ pub mod gateway;
 pub mod models;
 pub mod oauth2;
 pub mod paginator;
+pub mod security;
 pub mod utils;
 pub mod validation;
 #[cfg(feature = "voice")]

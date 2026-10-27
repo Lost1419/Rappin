@@ -6,7 +6,7 @@ use crate::models::component::Component;
 use crate::models::embed::Embed;
 
 /// A raw event from `GET /events`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     /// Incremental event ID.
     #[serde(default)]
@@ -211,7 +211,7 @@ pub struct MessageEvent {
 }
 
 /// Data payload for `interaction` (button click) events.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct InteractionEvent {
     pub id: String,
     pub token: String,
@@ -271,4 +271,25 @@ pub struct VoiceEvent {
     pub user_id: Uuid,
     #[serde(default)]
     pub server_id: Option<Uuid>,
+}
+
+impl std::fmt::Debug for InteractionEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InteractionEvent")
+            .field("token", &"[REDACTED]")
+            .field("id", &self.id)
+            .field("channel_id", &self.channel_id)
+            .field("server_id", &self.server_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for Event {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Event")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("data", &crate::security::redact_fields(self.data.clone()))
+            .finish_non_exhaustive()
+    }
 }

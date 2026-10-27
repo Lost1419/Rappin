@@ -34,7 +34,11 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     /// Serve agent tools over MCP stdio (newline-delimited JSON-RPC).
-    Mcp,
+    Mcp {
+        /// Operator-selected event state file; tool calls cannot choose filesystem paths.
+        #[arg(long)]
+        cursor_file: Option<PathBuf>,
+    },
     /// Check configuration and, unless --offline, authentication and reachability.
     Doctor {
         #[arg(long)]
@@ -342,7 +346,7 @@ fn config(args: &Args) -> Result<Context> {
 }
 async fn run(args: Args, ctx: &Context) -> Result<Value> {
     match args.command {
-        Command::Mcp => Err(YappinError::Config("start MCP with rappin mcp".into())),
+        Command::Mcp { .. } => Err(YappinError::Config("start MCP with rappin mcp".into())),
         Command::Doctor { offline } => {
             let mut v = json!({"version":env!("CARGO_PKG_VERSION"),"base_url":ctx.base,"auth_source":ctx.source,"token_available":ctx.token.is_some(),"config_path":ctx.config_path,"offline":offline,"reachable":null,"authenticated":null,"setup":if ctx.token.is_none(){Some("set YAPPER_BOT_TOKEN")}else{None}});
             if !offline && ctx.client.is_some() {
@@ -756,10 +760,10 @@ async fn main() {
         }
     };
     let context = config(&args);
-    if matches!(args.command, Command::Mcp) {
+    if let Command::Mcp { cursor_file } = &args.command {
         match context {
             Ok(ctx) => {
-                if let Err(e) = mcp::serve(&ctx).await {
+                if let Err(e) = mcp::serve(&ctx, cursor_file.as_deref()).await {
                     eprintln!("MCP server stopped: {e}");
                     std::process::exit(1);
                 }
@@ -801,25 +805,6 @@ async fn main() {
     }
 }
 
-fn redact(mut value: Value, token: Option<&str>) -> Value {
-    fn visit(value: &mut Value, token: &str) {
-        match value {
-            Value::String(s) => *s = s.replace(token, "[REDACTED]"),
-            Value::Array(a) => {
-                for v in a {
-                    visit(v, token);
-                }
-            }
-            Value::Object(o) => {
-                for v in o.values_mut() {
-                    visit(v, token);
-                }
-            }
-            _ => (),
-        }
-    }
-    if let Some(token) = token.filter(|t| !t.is_empty()) {
-        visit(&mut value, token);
-    }
-    value
+fn redact(value: Value, token: Option<&str>) -> Value {
+    rappin::security::redact_json(value, &token.into_iter().collect::<Vec<_>>())
 }
