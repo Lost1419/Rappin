@@ -97,6 +97,15 @@ pub struct BotProfile {
     /// Banner image path.
     #[serde(default)]
     pub banner_path: Option<String>,
+    /// Absolute image URLs supplied by GET /me.
+    #[serde(default)]
+    pub avatar_url: Option<String>,
+    #[serde(default)]
+    pub banner_url: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub bot: Option<BotMetadata>,
     /// Bot bio / description.
     #[serde(default)]
     pub bio: Option<String>,
@@ -105,12 +114,16 @@ pub struct BotProfile {
 impl BotProfile {
     /// Returns the full avatar URL if set.
     pub fn avatar_url(&self) -> Option<String> {
-        self.avatar_path.as_deref().map(avatar_url)
+        self.avatar_url
+            .clone()
+            .or_else(|| self.avatar_path.as_deref().map(avatar_url))
     }
 
     /// Returns the full banner URL if set.
     pub fn banner_url(&self) -> Option<String> {
-        self.banner_path.as_deref().map(banner_url)
+        self.banner_url
+            .clone()
+            .or_else(|| self.banner_path.as_deref().map(banner_url))
     }
 
     /// Formats a mention string for this bot (`<@id>`).
@@ -180,4 +193,12 @@ impl StatusUpdateRequest {
 pub struct Image {
     pub path: String,
     pub url: String,
+}
+
+/// Bot ownership and publication settings returned by GET /me.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BotMetadata {
+    pub name: String,
+    pub public: bool,
+    pub owner_id: Uuid,
 }

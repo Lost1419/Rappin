@@ -42,6 +42,15 @@ pub fn attachment_url(path: &str) -> String {
     build_cdn_url("attachments", path)
 }
 
+/// Preserve explicit JSON null separately from an omitted PATCH field.
+pub fn deserialize_patch<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

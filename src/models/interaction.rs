@@ -23,12 +23,24 @@ pub enum InteractionCallbackType {
 pub struct InteractionCallback {
     #[serde(rename = "type")]
     pub kind: InteractionCallbackType,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub embeds: Option<Vec<Embed>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub components: Option<Vec<Component>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::utils::deserialize_patch"
+    )]
+    pub content: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::utils::deserialize_patch"
+    )]
+    pub embeds: Option<Option<Vec<Embed>>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::utils::deserialize_patch"
+    )]
+    pub components: Option<Option<Vec<Component>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flags: Option<u32>,
 }
@@ -37,7 +49,7 @@ impl InteractionCallback {
     pub fn reply(content: impl Into<String>) -> Self {
         Self {
             kind: InteractionCallbackType::Reply,
-            content: Some(content.into()),
+            content: Some(Some(content.into())),
             embeds: None,
             components: None,
             flags: None,
@@ -47,7 +59,7 @@ impl InteractionCallback {
     pub fn ephemeral(content: impl Into<String>) -> Self {
         Self {
             kind: InteractionCallbackType::Ephemeral,
-            content: Some(content.into()),
+            content: Some(Some(content.into())),
             embeds: None,
             components: None,
             flags: None,
@@ -57,7 +69,7 @@ impl InteractionCallback {
     pub fn update(content: impl Into<String>) -> Self {
         Self {
             kind: InteractionCallbackType::Update,
-            content: Some(content.into()),
+            content: Some(Some(content.into())),
             embeds: None,
             components: None,
             flags: None,
@@ -79,7 +91,7 @@ impl InteractionCallback {
             kind: InteractionCallbackType::Reply,
             content: None,
             embeds: None,
-            components: Some(components.into_iter().map(Into::into).collect()),
+            components: Some(Some(components.into_iter().map(Into::into).collect())),
             flags: Some(IS_COMPONENTS_V2),
         }
     }
@@ -89,20 +101,39 @@ impl InteractionCallback {
             kind: InteractionCallbackType::Update,
             content: None,
             embeds: None,
-            components: Some(components.into_iter().map(Into::into).collect()),
+            components: Some(Some(components.into_iter().map(Into::into).collect())),
             flags: Some(IS_COMPONENTS_V2),
         }
     }
 
     pub fn embed(mut self, embed: Embed) -> Self {
-        self.embeds.get_or_insert_with(Vec::new).push(embed);
+        self.embeds
+            .get_or_insert_with(|| Some(Vec::new()))
+            .get_or_insert_with(Vec::new)
+            .push(embed);
         self
     }
 
     pub fn component(mut self, component: impl Into<Component>) -> Self {
         self.components
+            .get_or_insert_with(|| Some(Vec::new()))
             .get_or_insert_with(Vec::new)
             .push(component.into());
+        self
+    }
+}
+
+impl InteractionCallback {
+    pub fn clear_content(mut self) -> Self {
+        self.content = Some(None);
+        self
+    }
+    pub fn clear_embeds(mut self) -> Self {
+        self.embeds = Some(None);
+        self
+    }
+    pub fn clear_components(mut self) -> Self {
+        self.components = Some(None);
         self
     }
 }

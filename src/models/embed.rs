@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// Color representation for an Embed (either a 24-bit integer 0x000000 - 0xFFFFFF or hex string).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum EmbedColor {
     Int(u32),
@@ -19,7 +19,10 @@ impl EmbedColor {
 
     pub fn from_hex(hex: &str) -> Option<Self> {
         let clean = hex.trim_start_matches('#');
-        u32::from_str_radix(clean, 16).ok().map(EmbedColor::Int)
+        u32::from_str_radix(clean, 16)
+            .ok()
+            .filter(|v| *v <= 0xffffff)
+            .map(EmbedColor::Int)
     }
 }
 
@@ -196,5 +199,17 @@ impl Embed {
     pub fn timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
         self.timestamp = Some(timestamp);
         self
+    }
+}
+
+impl<'de> Deserialize<'de> for EmbedColor {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let color = value
+            .as_u64()
+            .filter(|v| *v <= 0xffffff)
+            .map(|v| Self::Int(v as u32))
+            .or_else(|| value.as_str().and_then(Self::from_hex));
+        color.ok_or_else(|| serde::de::Error::custom("expected a 24-bit number or hex color"))
     }
 }

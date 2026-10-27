@@ -12,7 +12,7 @@ pub struct Event {
     #[serde(default)]
     pub id: u64,
     /// Event type string (e.g. "message", "member_join", "interaction").
-    #[serde(rename = "type", default)]
+    #[serde(rename = "type", alias = "event", default)]
     pub kind: String,
     /// Event payload.
     #[serde(default)]

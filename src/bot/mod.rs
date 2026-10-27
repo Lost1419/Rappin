@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::events::EventCursor;
+use futures_util::{stream, StreamExt};
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
@@ -62,7 +64,13 @@ struct BotState {
     ignore_bots: bool,
     sync_commands: bool,
     log: bool,
+    cursor: Option<EventCursor>,
+    max_age: Option<u32>,
+    handler_concurrency: usize,
+    #[cfg(feature = "gateway")]
+    gateway_url: Option<String>,
     running: AtomicBool,
+    stopped: tokio::sync::Notify,
 }
 
 /// A cloneable handle to control the bot and dynamically manage cogs while running.
@@ -287,6 +295,7 @@ impl BotHandle {
     /// Stops the bot's event loop.
     pub fn stop(&self) {
         self.inner.running.store(false, Ordering::SeqCst);
+        self.inner.stopped.notify_one();
     }
 }
 
@@ -304,6 +313,11 @@ pub struct BotBuilder {
     ignore_bots: bool,
     sync_commands: bool,
     log: bool,
+    cursor: Option<EventCursor>,
+    max_age: Option<u32>,
+    handler_concurrency: usize,
+    #[cfg(feature = "gateway")]
+    gateway_url: Option<String>,
 }
 
 impl BotBuilder {
@@ -321,6 +335,11 @@ impl BotBuilder {
             ignore_bots: true,
             sync_commands: true,
             log: true,
+            cursor: None,
+            max_age: None,
+            handler_concurrency: 8,
+            #[cfg(feature = "gateway")]
+            gateway_url: None,
         }
     }
 
@@ -491,6 +510,27 @@ impl BotBuilder {
         self
     }
 
+    /// Resume only after completed batches. A cursor file must have a single owner.
+    pub fn cursor_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.cursor = Some(EventCursor::new(path));
+        self
+    }
+    pub fn max_event_age(mut self, seconds: u32) -> Self {
+        self.max_age = Some(seconds);
+        self
+    }
+    /// Maximum concurrent events. Use 1 for strict event ordering.
+    pub fn handler_concurrency(mut self, limit: usize) -> Self {
+        self.handler_concurrency = limit.clamp(1, 100);
+        self
+    }
+    /// Gateway automatically resumes and falls back to polling when unavailable.
+    #[cfg(feature = "gateway")]
+    pub fn gateway(mut self, url: impl Into<String>) -> Self {
+        self.gateway_url = Some(url.into());
+        self
+    }
+
     /// Builds the configured [`Bot`].
     pub fn build(self) -> Bot {
         let client = Client::builder(self.token).base_url(self.base_url).build();
@@ -508,7 +548,13 @@ impl BotBuilder {
             ignore_bots: self.ignore_bots,
             sync_commands: self.sync_commands,
             log: self.log,
+            cursor: self.cursor,
+            max_age: self.max_age,
+            handler_concurrency: self.handler_concurrency,
+            #[cfg(feature = "gateway")]
+            gateway_url: self.gateway_url,
             running: AtomicBool::new(false),
+            stopped: tokio::sync::Notify::new(),
         });
 
         Bot {
@@ -579,7 +625,14 @@ impl Bot {
     }
 
     /// Runs the bot until stopped or Ctrl+C is received.
-    pub async fn run(mut self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
+        let handle = self.handle.clone();
+        let result = self.run_inner().await;
+        handle.inner.running.store(false, Ordering::SeqCst);
+        result
+    }
+
+    async fn run_inner(mut self) -> Result<()> {
         self.handle.inner.running.store(true, Ordering::SeqCst);
 
         // 1. Fetch bot user details to verify token
@@ -646,19 +699,23 @@ impl Bot {
             }
         }
 
-        // 4. Obtain initial event offset (after=0 returns no events, newest id as last)
-        let mut last: u64 = match self
-            .handle
-            .client()
-            .get_events(Some(0), Some(0), None)
-            .await
-        {
-            Ok(resp) => resp.last,
-            Err(e) => {
-                warn!("Could not fetch initial event offset, starting at 0: {}", e);
-                0
-            }
+        let saved = match &self.handle.inner.cursor {
+            Some(c) => c.load().await?,
+            None => None,
         };
+        let mut last = match saved {
+            Some(id) => id,
+            None => self.client().get_events(Some(0), Some(0), None).await?.last,
+        };
+        if let Some(c) = &self.handle.inner.cursor {
+            c.save(last).await?;
+        }
+        #[cfg(feature = "gateway")]
+        let mut gateway = self.handle.inner.gateway_url.as_ref().map(|url| {
+            crate::gateway::Gateway::new(self.client().clone())
+                .url(url)
+                .max_age(self.handle.inner.max_age)
+        });
 
         if self.handle.inner.log {
             println!("[rappin] Logged in as {} ({})", me.username, me.id);
@@ -672,36 +729,46 @@ impl Bot {
         let mut fail_count = 0u32;
 
         while self.handle.inner.running.load(Ordering::SeqCst) {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    if self.handle.inner.log {
-                        println!("\n[rappin] Shutting down...");
-                    }
-                    self.stop();
-                    break;
+            let poll = async {
+                #[cfg(feature = "gateway")]
+                if let Some(gateway) = &mut gateway {
+                    return gateway.poll(last).await;
                 }
-                poll_result = self.handle.client().get_events(Some(last), Some(25), None) => {
-                    match poll_result {
-                        Ok(resp) => {
-                            fail_count = 0;
-                            for event in resp.events {
-                                if event.id <= last {
-                                    continue;
-                                }
-                                last = event.id;
-                                self.dispatch_event(event, &me).await;
-                            }
-                            last = last.max(resp.last);
-                        }
-                        Err(YappinError::Unauthorized) => {
-                            eprintln!("Token rejected: generate a new one in Settings -> Developer");
-                            return Err(YappinError::Unauthorized);
-                        }
-                        Err(e) => {
-                            fail_count += 1;
-                            let backoff_secs = (1 << fail_count.min(5)).min(30);
-                            warn!("Event poll error (attempt {}): {}. Retrying in {}s...", fail_count, e, backoff_secs);
-                            sleep(Duration::from_secs(backoff_secs)).await;
+                self.client()
+                    .get_events(Some(last), Some(25), self.handle.inner.max_age)
+                    .await
+            };
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => { self.stop(); break; }
+                _ = self.handle.inner.stopped.notified() => break,
+                poll_result = poll => match poll_result {
+                    Ok(resp) => {
+                        fail_count = 0;
+                        let watermark = resp.last;
+                        let work = stream::iter(resp.events.into_iter().filter(move |e| e.id > last))
+                            .map(|event| self.dispatch_event(event, &me))
+                            .buffer_unordered(self.handle.inner.handler_concurrency)
+                            .collect::<Vec<_>>();
+                        tokio::pin!(work);
+                        let results = tokio::select! {
+                            results = &mut work => results,
+                            _ = tokio::signal::ctrl_c() => { self.stop(); work.await }
+                        };
+                        for result in results { result?; }
+                        // All handlers have finished successfully before the durable checkpoint moves.
+                        let next = last.max(watermark);
+                        if let Some(cursor) = &self.handle.inner.cursor { cursor.save(next).await?; }
+                        last = next;
+                    },
+                    Err(YappinError::Unauthorized) => return Err(YappinError::Unauthorized),
+                    Err(e) => {
+                        fail_count += 1;
+                        let delay = Duration::from_secs((1u64 << fail_count.min(5)).min(30));
+                        warn!("Event poll failed: {e}");
+                        tokio::select! {
+                            _ = sleep(delay) => (),
+                            _ = self.handle.inner.stopped.notified() => break,
+                            _ = tokio::signal::ctrl_c() => { self.stop(); break; }
                         }
                     }
                 }
@@ -711,24 +778,41 @@ impl Bot {
         Ok(())
     }
 
-    async fn dispatch_event(&self, event: crate::models::Event, me: &BotProfile) {
+    /// Dispatch an already authenticated event from a custom transport.
+    pub async fn process_event(&self, event: crate::models::Event) -> Result<()> {
+        let me = match self.cache().get_me().await {
+            Some(me) => me,
+            None => self.client().get_me().await?,
+        };
+        self.dispatch_event(event, &me).await
+    }
+
+    async fn dispatch_event(&self, event: crate::models::Event, me: &BotProfile) -> Result<()> {
         let parsed = match event.parse_data() {
             Ok(p) => p,
             Err(e) => {
                 warn!("Failed to deserialize event {}: {}", event.kind, e);
-                return;
+                return Err(e.into());
             }
         };
 
         match parsed {
-            EventData::Message(msg) => self.handle_message(msg, me).await,
-            EventData::Interaction(inter) => self.handle_interaction(inter).await,
+            EventData::Message(msg) => self.handle_message(msg, me).await?,
+            EventData::Interaction(inter) => self.handle_interaction(inter).await?,
             EventData::MemberJoin(ev) => {
                 if let Some(ref h) = self.handle.inner.event_handler {
                     h.on_member_join(self.handle.client(), &ev).await;
                 }
-                let cogs = self.handle.inner.cogs.read().await;
-                for cog in cogs.values() {
+                let cogs: Vec<_> = self
+                    .handle
+                    .inner
+                    .cogs
+                    .read()
+                    .await
+                    .values()
+                    .cloned()
+                    .collect();
+                for cog in cogs {
                     cog.on_member_join(self.handle.client(), &ev).await;
                 }
             }
@@ -736,8 +820,16 @@ impl Bot {
                 if let Some(ref h) = self.handle.inner.event_handler {
                     h.on_member_leave(self.handle.client(), &ev).await;
                 }
-                let cogs = self.handle.inner.cogs.read().await;
-                for cog in cogs.values() {
+                let cogs: Vec<_> = self
+                    .handle
+                    .inner
+                    .cogs
+                    .read()
+                    .await
+                    .values()
+                    .cloned()
+                    .collect();
+                for cog in cogs {
                     cog.on_member_leave(self.handle.client(), &ev).await;
                 }
             }
@@ -773,17 +865,18 @@ impl Bot {
                 }
             }
         }
+        Ok(())
     }
 
-    async fn handle_message(&self, msg: MessageEvent, me: &BotProfile) {
+    async fn handle_message(&self, msg: MessageEvent, me: &BotProfile) -> Result<()> {
         if self.handle.inner.ignore_bots && msg.author_bot == Some(true) {
-            return;
+            return Ok(());
         }
 
         // If command_for list is provided, verify whether our bot was targeted
         if let Some(ref targeted) = msg.command_for {
             if !targeted.contains(&me.id) {
-                return;
+                return Ok(());
             }
         }
 
@@ -831,74 +924,92 @@ impl Bot {
                 let cog_name = def.cog_name.clone();
                 drop(cmds_guard);
 
-                // Run cog check if belongs to a cog
-                let mut allow = true;
-                if let Some(ref cname) = cog_name {
-                    let cogs_guard = self.handle.inner.cogs.read().await;
-                    if let Some(cog) = cogs_guard.get(cname) {
-                        allow = cog.check(&ctx).await;
-                    }
-                }
-
+                let cog = match cog_name {
+                    Some(name) => self.handle.inner.cogs.read().await.get(&name).cloned(),
+                    None => None,
+                };
+                let allow = match cog {
+                    Some(cog) => cog.check(&ctx).await,
+                    None => true,
+                };
                 if allow {
-                    let cmd_ctx = ctx.clone();
-                    let err_handler = self.handle.inner.command_error_handler.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = handler(cmd_ctx.clone()).await {
-                            if let Some(ref on_err) = err_handler {
-                                on_err(cmd_ctx, e).await;
-                            } else {
-                                error!("Command /{} error: {}", cmd_name, e);
-                            }
+                    if let Err(e) = handler(ctx.clone()).await {
+                        let message = e.to_string();
+                        if let Some(on_err) = &self.handle.inner.command_error_handler {
+                            on_err(ctx.clone(), e).await;
+                        } else {
+                            error!("Command /{cmd_name} failed: {message}");
                         }
-                    });
+                        return Err(YappinError::Config(format!(
+                            "command /{cmd_name} failed: {message}"
+                        )));
+                    }
                 }
             }
         }
-
-        // Notify event handler and cogs
-        if let Some(ref h) = self.handle.inner.event_handler {
+        if let Some(h) = &self.handle.inner.event_handler {
             h.on_message(&ctx).await;
         }
-        let cogs = self.handle.inner.cogs.read().await;
-        for cog in cogs.values() {
+        let cogs: Vec<_> = self
+            .handle
+            .inner
+            .cogs
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect();
+        for cog in cogs {
             cog.on_message(&ctx).await;
         }
+        Ok(())
     }
 
-    async fn handle_interaction(&self, inter: InteractionEvent) {
+    async fn handle_interaction(&self, inter: InteractionEvent) -> Result<()> {
         let custom_id = inter.custom_id.clone().unwrap_or_default();
         let ctx = InteractionContext::new(
             self.handle.inner.client.clone(),
             inter,
             Some(self.handle.clone()),
         );
-
-        let btns_guard = self.handle.inner.buttons.read().await;
-        for btn in btns_guard.iter() {
-            if custom_id.starts_with(&btn.prefix) {
-                let handler = btn.handler.clone();
-                let btn_ctx = ctx.clone();
-                let err_handler = self.handle.inner.button_error_handler.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = handler(btn_ctx.clone()).await {
-                        if let Some(ref on_err) = err_handler {
-                            on_err(btn_ctx, e).await;
-                        } else {
-                            error!("Button interaction error: {}", e);
-                        }
-                    }
-                });
+        let handlers: Vec<_> = self
+            .handle
+            .inner
+            .buttons
+            .read()
+            .await
+            .iter()
+            .filter(|b| custom_id.starts_with(&b.prefix))
+            .map(|b| b.handler.clone())
+            .collect();
+        for handler in handlers {
+            if let Err(e) = handler(ctx.clone()).await {
+                let message = e.to_string();
+                if let Some(on_err) = &self.handle.inner.button_error_handler {
+                    on_err(ctx.clone(), e).await;
+                } else {
+                    error!("Button handler failed: {message}");
+                }
+                return Err(YappinError::Config(format!(
+                    "button handler failed: {message}"
+                )));
             }
         }
-        drop(btns_guard);
-
-        if let Some(ref h) = self.handle.inner.event_handler {
+        if let Some(h) = &self.handle.inner.event_handler {
             h.on_interaction(&ctx).await;
         }
-        let cogs = self.handle.inner.cogs.read().await;
-        for cog in cogs.values() {
+        let cogs: Vec<_> = self
+            .handle
+            .inner
+            .cogs
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect();
+        for cog in cogs {
             cog.on_interaction(&ctx).await;
         }
+        Ok(())
     }
 }

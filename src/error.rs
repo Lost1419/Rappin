@@ -31,6 +31,10 @@ pub enum YappinError {
     #[error("Configuration error: {0}")]
     Config(String),
 
+    /// Invalid request payload, detected before making an HTTP request.
+    #[error("Invalid {field}: {message}")]
+    Validation { field: String, message: String },
+
     /// A generic I/O error.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -64,16 +68,43 @@ impl YappinError {
 
     /// Returns the suggested retry wait duration if this error was caused by a rate limit.
     pub fn retry_after(&self) -> Option<std::time::Duration> {
-        match self {
-            Self::RateLimited { retry_after } => {
-                Some(std::time::Duration::from_secs_f64(*retry_after))
-            }
-            Self::Api {
-                retry_after: Some(secs),
-                ..
-            } => Some(std::time::Duration::from_secs_f64(*secs)),
+        let seconds = match self {
+            Self::RateLimited { retry_after } => Some(*retry_after),
+            Self::Api { retry_after, .. } => *retry_after,
             _ => None,
+        }?;
+        std::time::Duration::try_from_secs_f64(seconds).ok()
+    }
+
+    pub fn validation(field: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Validation {
+            field: field.into(),
+            message: message.into(),
         }
+    }
+
+    /// Stable JSON representation for agents. Transport URLs are intentionally omitted.
+    pub fn to_json(&self) -> serde_json::Value {
+        let kind = match self {
+            Self::Validation { .. } => "validation",
+            Self::Config(_) => "configuration",
+            Self::Unauthorized => "unauthorized",
+            Self::Http(_) => "transport",
+            Self::Json(_) => "json",
+            Self::Io(_) => "io",
+            _ => "api",
+        };
+        let message = if matches!(self, Self::Http(_)) {
+            "HTTP transport failed".into()
+        } else {
+            self.to_string()
+        };
+        let mut value = serde_json::json!({"kind": kind, "message": message,
+            "status": self.status_code(), "retry_after": self.retry_after().map(|d| d.as_secs_f64())});
+        if let Self::Validation { field, .. } = self {
+            value["field"] = field.clone().into();
+        }
+        value
     }
 
     /// Checks if this error is an authorization failure (HTTP 401).

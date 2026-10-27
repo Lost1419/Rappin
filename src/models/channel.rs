@@ -112,7 +112,11 @@ impl CreateChannelRequest {
 pub struct EditChannelRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::utils::deserialize_patch"
+    )]
     pub category_id: Option<Option<Uuid>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub private: Option<bool>,

@@ -1,13 +1,51 @@
 # Rappin 🦀
 
 [![GitHub](https://img.shields.io/badge/github-Lost1419/Rappin-blue?logo=github)](https://github.com/Lost1419/Rappin)
-[![Crates.io](https://img.shields.io/crates/v/rappin-rs.svg?v=0.1.2)](https://crates.io/crates/rappin-rs)
+[![Crates.io](https://img.shields.io/crates/v/rappin-rs.svg?v=0.1.3)](https://crates.io/crates/rappin-rs)
 [![Docs.rs](https://docs.rs/rappin-rs/badge.svg)](https://docs.rs/rappin-rs)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 
 An idiomatic, type-safe, asynchronous Rust client and bot framework for the [Yapin’](https://www.yapin.gg) Bot API.
 
 Yapin’ is a chat platform providing an HTTPS-based bot API with long-polling events, slash commands, interactive buttons, embeds, Components V2 cards, and LiveKit-powered voice channels.
+
+## Agent CLI, MCP, and resumable bots
+
+The optional `rappin` binary lets agents use Yapin without writing a Rust program:
+
+```sh
+cargo install --path . --features cli,gateway,voice
+export YAPPER_BOT_TOKEN="yb_your_token"
+rappin --json doctor
+rappin servers list
+rappin channels resolve general --server "$SERVER_ID"
+rappin messages list "$CHANNEL_ID" --limit 25
+rappin --dry-run messages send "$CHANNEL_ID" --content "Hello from an agent"
+rappin messages send "$CHANNEL_ID" --content "Hello from an agent"
+```
+
+All output is JSON, writes support `--dry-run`, and JSON bodies can come from stdin.
+`rappin mcp` exposes the same discovery, history, message, and event workflows as
+stdio MCP tools. `rappin schema` prints the bundled official OpenAPI contract.
+See the [agent guide](docs/agents.md) for commands, auth/config, permissions,
+pagination, explicit event acknowledgement, voice setup, and compatibility changes.
+A reusable [agent skill](skills/rappin/SKILL.md) is included.
+
+Library users can opt into durable checkpoints and bounded handlers:
+
+```rust,no_run
+use rappin::prelude::*;
+let bot = Bot::builder("yb_token")
+    .cursor_file("./state/events.json")
+    .handler_concurrency(8)
+    .build();
+```
+
+Enable Cargo feature `gateway` and add
+`.gateway(rappin::gateway::DEFAULT_GATEWAY)` for WebSocket events with automatic
+resume, heartbeats, and polling fallback. Feature `voice` adds `Client::play_audio`
+using the official SDK's LiveKit encryption via an optional Node/ffmpeg bridge.
+The default library build requires neither CLI dependencies nor Node.
 
 ---
 
@@ -54,12 +92,12 @@ Rappin is designed around modern asynchronous Rust with `tokio` and `reqwest`:
 
 ## ✨ Features
 
-- **Complete API Coverage (All 35 OpenAPI Endpoints)**:
+- **Complete REST Coverage (35 paths, 51 HTTP operations)**:
   - Bot profile & presence (`/me`, `/me/status`, `/me/avatar`, `/me/banner`)
   - Channels & messages (send, edit, delete, bulk delete, pin, reactions)
   - Server management (members, roles, kicks, bans, unbans, timeouts, categories)
   - Button interactions (`reply`, `ephemeral`, `update`, `ack`)
-  - Voice channels (obtain LiveKit tickets with E2EE metadata)
+  - Voice channels (obtain LiveKit tickets with E2EE metadata; optional encrypted playback)
   - Direct messages (`/users/{id}/dm`)
 - **Dual Mode**: Use either the declarative `Bot` long-polling engine or the standalone `Client` for REST scripting.
 - **Dynamic Cogs & Hot-Reloading**: Group commands and interactions into modular cogs that can be added, removed, or reloaded while the bot is running without dropping connections.
@@ -78,7 +116,7 @@ Add `rappin-rs` and `tokio` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.2"
+rappin-rs = "0.1.3"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -281,7 +319,7 @@ let bot = Bot::builder(token)
 
 ## ⚡ In-Memory Cache
 
-Rappin automatically maintains a thread-safe in-memory cache of your bot's profile, joined servers, and channels:
+Rappin provides a thread-safe in-memory cache of your bot's profile, joined servers, and channels:
 
 ```rust
 // Access the cache from any command or interaction context
@@ -293,7 +331,7 @@ if let Some(bot_user) = ctx.cache().get_me().await {
 }
 ```
 
-Calls to `get_me()`, `get_servers()`, and `get_server_channels()` populate and keep the cache up to date automatically.
+Calls to `get_me()`, `get_servers()`, and `get_server_channels()` populate the cache from their responses. Read the cache explicitly for local lookups; REST methods still fetch fresh data. The cache is a snapshot, not a live subscription.
 
 ---
 
@@ -346,7 +384,7 @@ Send messages or embed cards from external systems (GitHub Actions, GitLab CI, G
 use rappin::webhook::WebhookClient;
 use rappin::models::embed::Embed;
 
-let webhook = WebhookClient::new("https://www.yapin.gg/api/bot/v1/webhooks/your_token");
+let webhook = WebhookClient::new("https://www.yapin.gg/api/webhooks/your_id/your_token");
 
 // Send simple text
 webhook.send_content("🚀 Build #142 passed!").await?;
@@ -370,7 +408,9 @@ use rappin::oauth2::OAuth2Client;
 let oauth = OAuth2Client::new("client_id", "client_secret", "https://app.com/callback");
 
 // 1. Redirect user to Yapin' authorization page
-let login_url = oauth.authorization_url(&["identify", "servers"], Some("random_state_csrf"));
+let login_url = oauth.authorization_url(&["identify"], Some("random_state_csrf"));
+// Validate callback state against the value saved in the login session.
+// For public apps, use OAuth2Client::public and the PKCE methods (see agent guide).
 
 // 2. Exchange redirect authorization code for access token
 let token = oauth.exchange_code(&code).await?;

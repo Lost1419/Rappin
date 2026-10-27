@@ -147,7 +147,9 @@ impl Client {
         let mut retries = self.inner.max_retries;
 
         loop {
-            let res = operation().await?;
+            let res = operation()
+                .await
+                .map_err(|e| YappinError::Http(e.without_url()))?;
             let status = res.status();
 
             if status.is_success() {
@@ -158,42 +160,12 @@ impl Client {
                 return Err(YappinError::Unauthorized);
             }
 
-            let is_rate_limited = status == StatusCode::TOO_MANY_REQUESTS;
-            let is_busy = status == StatusCode::SERVICE_UNAVAILABLE;
-
-            if is_rate_limited || is_busy {
-                let retry_after_header = res
-                    .headers()
-                    .get("Retry-After")
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(|s| s.parse::<f64>().ok());
-
-                let body_bytes = res.bytes().await.unwrap_or_default();
-                let err_json: serde_json::Value =
-                    serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null);
-
-                let retry_after = retry_after_header
-                    .or_else(|| err_json.get("retry_after").and_then(|v| v.as_f64()))
-                    .unwrap_or(1.0);
-
-                if retries > 0 && retry_after <= 60.0 {
-                    warn!(
-                        "Yapin' API {} (retry_after: {:.1}s), waiting...",
-                        if is_busy {
-                            "busy (503)"
-                        } else {
-                            "rate limited (429)"
-                        },
-                        retry_after
-                    );
-                    sleep(Duration::from_secs_f64(retry_after)).await;
-                    retries -= 1;
-                    continue;
-                }
-
-                return Err(YappinError::RateLimited { retry_after });
-            }
-
+            let retry_header = res
+                .headers()
+                .get("Retry-After")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v >= 0.0);
             let body_bytes = res.bytes().await.unwrap_or_default();
             let err_json: serde_json::Value =
                 serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null);
@@ -204,10 +176,25 @@ impl Client {
                 .unwrap_or_else(|| status.canonical_reason().unwrap_or("Unknown error"))
                 .to_string();
 
+            // A headerless 429 is a permanent limit (e.g. exhausted interaction).
+            // 503 guarantees the request did not execute; don't retry other writes.
+            if matches!(
+                status,
+                StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
+            ) {
+                if let Some(delay) = retry_header {
+                    if retries > 0 && delay <= 60.0 {
+                        warn!(status = status.as_u16(), delay, "API asked us to retry");
+                        sleep(Duration::from_secs_f64(delay)).await;
+                        retries -= 1;
+                        continue;
+                    }
+                }
+            }
             return Err(YappinError::Api {
                 status: status.as_u16(),
                 message: msg,
-                retry_after: None,
+                retry_after: retry_header,
             });
         }
     }
@@ -220,7 +207,7 @@ impl Client {
         body: Option<&B>,
     ) -> Result<T> {
         let url = format!("{}{}", self.inner.base_url, path);
-        debug!("{} {}", method, url);
+        debug!(%method, "Yapin API request");
 
         let body_data = match body {
             Some(b) => Some(serde_json::to_vec(b)?),
@@ -234,7 +221,10 @@ impl Client {
                     .http
                     .request(method.clone(), &url)
                     .header(header::AUTHORIZATION, format!("Bot {}", self.inner.token))
-                    .header(header::USER_AGENT, "rappin-rs/0.1.1");
+                    .header(
+                        header::USER_AGENT,
+                        concat!("rappin-rs/", env!("CARGO_PKG_VERSION")),
+                    );
 
                 if let Some(ref data) = body_data {
                     req = req
@@ -266,7 +256,7 @@ impl Client {
         content_type: &str,
     ) -> Result<T> {
         let url = format!("{}{}", self.inner.base_url, path);
-        debug!("{} {} ({})", method, url, content_type);
+        debug!(%method, %content_type, "Yapin binary request");
 
         let response = self
             .execute_with_retry(|| {
@@ -274,7 +264,10 @@ impl Client {
                     .http
                     .request(method.clone(), &url)
                     .header(header::AUTHORIZATION, format!("Bot {}", self.inner.token))
-                    .header(header::USER_AGENT, "yappin-rs/0.1.0")
+                    .header(
+                        header::USER_AGENT,
+                        concat!("rappin-rs/", env!("CARGO_PKG_VERSION")),
+                    )
                     .header(header::CONTENT_TYPE, content_type)
                     .body(bytes.clone())
                     .send()
@@ -315,7 +308,20 @@ impl Client {
 
     /// Updates the display name or biography of the bot (`PATCH /me`).
     pub async fn update_me(&self, req: &UpdateBotProfile) -> Result<BotProfile> {
-        self.request_json(Method::PATCH, "/me", Some(req)).await
+        if req
+            .display_name
+            .as_ref()
+            .is_some_and(|s| s.chars().count() > 32)
+            || req.bio.as_ref().is_some_and(|s| s.chars().count() > 190)
+        {
+            return Err(YappinError::validation(
+                "profile",
+                "display_name maximum 32 and bio maximum 190 characters (OpenAPI contract)",
+            ));
+        }
+        let profile: BotProfile = self.request_json(Method::PATCH, "/me", Some(req)).await?;
+        self.inner.cache.set_me(profile.clone()).await;
+        Ok(profile)
     }
 
     /// Sets the bot's avatar (`PUT /me/avatar`). Accepts image data and MIME type (e.g. `image/png`).
@@ -361,6 +367,9 @@ impl Client {
     /// }
     /// ```
     pub async fn set_status(&self, status: BotStatus, activity: Option<&str>) -> Result<()> {
+        if activity.is_some_and(|s| s.chars().count() > 60) {
+            return Err(YappinError::validation("activity", "maximum 60 characters"));
+        }
         let req = StatusUpdateRequest {
             status,
             activity: activity.map(|s| s.to_string()),
@@ -389,6 +398,31 @@ impl Client {
 
     /// Replaces the registered slash commands for this bot (`PUT /commands`, up to 100).
     pub async fn set_commands(&self, commands: &[Command]) -> Result<Vec<Command>> {
+        if commands.len() > 100 {
+            return Err(YappinError::validation("commands", "maximum 100 commands"));
+        }
+        let mut names = std::collections::HashSet::new();
+        for command in commands {
+            if command.name.is_empty()
+                || command.name.len() > 32
+                || !command
+                    .name
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-".contains(&b))
+                || !names.insert(&command.name)
+            {
+                return Err(YappinError::validation(
+                    "commands.name",
+                    "requires a unique lowercase name of 1 to 32 letters, digits, _ or -",
+                ));
+            }
+            if command.description.chars().count() > 100 {
+                return Err(YappinError::validation(
+                    "commands.description",
+                    "maximum 100 characters",
+                ));
+            }
+        }
         #[derive(Serialize)]
         struct Req<'a> {
             commands: &'a [Command],
@@ -418,6 +452,12 @@ impl Client {
         wait: Option<u32>,
         max_age: Option<u32>,
     ) -> Result<EventsResponse> {
+        if wait.is_some_and(|w| w > 25) || max_age.is_some_and(|age| age > 86400) {
+            return Err(YappinError::validation(
+                "events",
+                "wait maximum 25 and max_age maximum 86400 seconds",
+            ));
+        }
         let mut path = "/events?".to_string();
         if let Some(a) = after {
             path.push_str(&format!("after={}&", a));
@@ -515,6 +555,12 @@ impl Client {
         limit: Option<u32>,
         after: Option<Uuid>,
     ) -> Result<Vec<Member>> {
+        if limit.is_some_and(|l| !(1..=500).contains(&l)) {
+            return Err(YappinError::validation(
+                "limit",
+                "must be between 1 and 500",
+            ));
+        }
         let mut path = format!("/servers/{}/members?", server_id);
         if let Some(l) = limit {
             path.push_str(&format!("limit={}&", l));
@@ -551,6 +597,9 @@ impl Client {
 
     /// Sets or clears a member's nickname (`PATCH /servers/{id}/members/{uid}`).
     pub async fn set_nickname(&self, server_id: Uuid, user_id: Uuid, nickname: &str) -> Result<()> {
+        if nickname.chars().count() > 32 {
+            return Err(YappinError::validation("nickname", "maximum 32 characters"));
+        }
         #[derive(Serialize)]
         struct Req<'a> {
             nickname: &'a str,
@@ -664,6 +713,12 @@ impl Client {
         minutes: u32,
         reason: Option<&str>,
     ) -> Result<()> {
+        if minutes > 40320 || reason.is_some_and(|r| r.chars().count() > 200) {
+            return Err(YappinError::validation(
+                "timeout",
+                "maximum 40320 minutes and 200 reason characters",
+            ));
+        }
         let req = TimeoutRequest {
             user_id,
             minutes,
@@ -939,22 +994,34 @@ impl Client {
         &self,
         channel_id: Uuid,
         limit: Option<u32>,
-        before: Option<Uuid>,
-        after: Option<Uuid>,
+        before: Option<chrono::DateTime<chrono::Utc>>,
+        after: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<MessagesResponse> {
-        let mut path = format!("/channels/{}/messages?", channel_id);
+        if limit.is_some_and(|l| !(1..=100).contains(&l)) {
+            return Err(YappinError::validation(
+                "limit",
+                "must be between 1 and 100",
+            ));
+        }
+        if before.is_some() && after.is_some() {
+            return Err(YappinError::validation("cursor", "choose before or after"));
+        }
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
         if let Some(l) = limit {
-            path.push_str(&format!("limit={}&", l));
+            query.append_pair("limit", &l.to_string());
         }
         if let Some(b) = before {
-            path.push_str(&format!("before={}&", b));
+            query.append_pair("before", &b.to_rfc3339());
         }
         if let Some(a) = after {
-            path.push_str(&format!("after={}&", a));
+            query.append_pair("after", &a.to_rfc3339());
         }
-        let clean = path.trim_end_matches('&').trim_end_matches('?');
-        self.request_json::<MessagesResponse, ()>(Method::GET, clean, None)
-            .await
+        self.request_json::<MessagesResponse, ()>(
+            Method::GET,
+            &format!("/channels/{channel_id}/messages?{}", query.finish()),
+            None,
+        )
+        .await
     }
 
     /// Fetches a single message by ID (`GET /channels/{id}/messages/{mid}`).
@@ -990,6 +1057,7 @@ impl Client {
     /// }
     /// ```
     pub async fn send_message(&self, channel_id: Uuid, message: &CreateMessage) -> Result<Message> {
+        message.validate()?;
         #[derive(Deserialize)]
         struct Resp {
             message: Message,
@@ -1043,6 +1111,7 @@ impl Client {
         struct Resp {
             message: Message,
         }
+        edit.validate()?;
         let resp: Resp = self
             .request_json(
                 Method::PATCH,
@@ -1082,6 +1151,12 @@ impl Client {
         channel_id: Uuid,
         message_ids: &[Uuid],
     ) -> Result<BulkDeleteResponse> {
+        if message_ids.is_empty() || message_ids.len() > 100 {
+            return Err(YappinError::validation(
+                "ids",
+                "requires 1 to 100 message IDs",
+            ));
+        }
         let req = BulkDeleteRequest::new(message_ids.iter().copied());
         self.request_json(
             Method::POST,
@@ -1194,6 +1269,7 @@ impl Client {
         token: &str,
         callback: &InteractionCallback,
     ) -> Result<()> {
+        callback.validate()?;
         let _: serde_json::Value = self
             .request_json(
                 Method::POST,

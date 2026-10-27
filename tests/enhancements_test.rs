@@ -29,6 +29,10 @@ async fn test_cache_servers_and_channels() {
         avatar_path: None,
         banner_path: None,
         bio: Some("A test bot".to_string()),
+        avatar_url: None,
+        banner_url: None,
+        created_at: None,
+        bot: None,
     };
     cache.set_me(profile.clone()).await;
     let cached_profile = cache.get_me().await.expect("expected cached profile");
@@ -226,18 +230,18 @@ fn test_oauth2_authorization_url() {
         "https://example.com/oauth/callback",
     );
 
-    let auth_url = client.authorization_url(&["identify", "servers"], Some("state_xyz"));
+    let auth_url = client.authorization_url(&["identify"], Some("state_xyz"));
     assert!(auth_url.starts_with("https://www.yapin.gg/oauth/authorize?"));
     assert!(auth_url.contains("client_id=client_123"));
     assert!(auth_url.contains("redirect_uri=https%3A%2F%2Fexample.com%2Foauth%2Fcallback"));
     assert!(auth_url.contains("response_type=code"));
-    assert!(auth_url.contains("scope=identify+servers"));
+    assert!(auth_url.contains("scope=identify"));
     assert!(auth_url.contains("state=state_xyz"));
 }
 
 #[test]
 fn test_webhook_client_construct() {
-    let _ = WebhookClient::new("https://www.yapin.gg/api/bot/v1/webhooks/dummy");
+    let _ = WebhookClient::new("https://www.yapin.gg/api/webhooks/id/dummy");
 }
 
 #[test]

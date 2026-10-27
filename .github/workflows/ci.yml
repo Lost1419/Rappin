@@ -28,10 +28,16 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy check
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-features --all-targets -- -D warnings
 
       - name: Run tests
-        run: cargo test --all-targets
+        run: cargo test --all-features --all-targets
 
       - name: Check examples
         run: cargo check --examples
+
+      - name: Check documentation examples
+        run: cargo test --all-features --doc
+
+      - name: Check minimal library
+        run: cargo check --no-default-features

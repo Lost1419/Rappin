@@ -139,9 +139,17 @@ impl CreateMessage {
 pub struct EditMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::utils::deserialize_patch"
+    )]
     pub embeds: Option<Option<Vec<Embed>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::utils::deserialize_patch"
+    )]
     pub components: Option<Option<Vec<Component>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub flags: Option<u32>,

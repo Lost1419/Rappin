@@ -79,10 +79,16 @@ pub mod cache;
 pub mod client;
 pub mod cooldown;
 pub mod error;
+pub mod events;
+#[cfg(feature = "gateway")]
+pub mod gateway;
 pub mod models;
 pub mod oauth2;
 pub mod paginator;
 pub mod utils;
+pub mod validation;
+#[cfg(feature = "voice")]
+pub mod voice;
 pub mod webhook;
 
 pub use bot::{
@@ -94,13 +100,13 @@ pub use client::{Client, ClientBuilder};
 pub use cooldown::{Cooldown, CooldownType};
 pub use error::{Result, YappinError};
 pub use models::*;
-pub use oauth2::{OAuth2Client, OAuth2Token};
+pub use oauth2::{OAuth2Client, OAuth2Token, OAuth2User, Pkce};
 pub use paginator::{ConfirmDialog, Paginator};
 pub use utils::{
     attachment_url, avatar_url, banner_url, icon_url, DEFAULT_API_BASE, DEFAULT_FILES_BASE,
     DEFAULT_SITE_BASE, IS_COMPONENTS_V2,
 };
-pub use webhook::WebhookClient;
+pub use webhook::{WebhookClient, WebhookMessage};
 
 /// Commonly used types for building bots and interacting with Yapin'.
 pub mod prelude {
@@ -112,6 +118,7 @@ pub mod prelude {
     pub use crate::client::{Client, ClientBuilder};
     pub use crate::cooldown::{Cooldown, CooldownType};
     pub use crate::error::{Result, YappinError};
+    pub use crate::events::{EventConsumer, EventCursor};
     pub use crate::models::component::{
         ActionRow, Button, ButtonStyle, Component, Container, FileDisplay, LayoutComponent,
         MediaGallery, MediaItem, Section, Separator, TextDisplay, ThumbnailComponent,
@@ -120,8 +127,12 @@ pub mod prelude {
     pub use crate::models::message::{CreateMessage, EditMessage, Message};
     pub use crate::models::server::{Category, Member, Role, Server};
     pub use crate::models::user::{BotProfile, BotStatus, User};
-    pub use crate::oauth2::{OAuth2Client, OAuth2Token};
+    pub use crate::oauth2::{OAuth2Client, OAuth2Token, OAuth2User, Pkce};
     pub use crate::paginator::{ConfirmDialog, Paginator};
     pub use crate::utils::IS_COMPONENTS_V2;
-    pub use crate::webhook::WebhookClient;
+    pub use crate::validation::split_message;
+    pub use crate::webhook::{WebhookClient, WebhookMessage};
 }
+
+pub use events::{EventConsumer, EventCursor};
+pub use validation::split_message;

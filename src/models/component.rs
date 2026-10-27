@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Button style options.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ButtonStyle {
     Primary,
@@ -15,6 +15,7 @@ pub enum ButtonStyle {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Button {
     #[serde(rename = "type")]
+    #[serde(deserialize_with = "component_kind")]
     pub kind: String,
     pub style: ButtonStyle,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -100,6 +101,7 @@ impl Button {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActionRow {
     #[serde(rename = "type")]
+    #[serde(deserialize_with = "component_kind")]
     pub kind: String,
     pub components: Vec<Button>,
 }
@@ -118,7 +120,7 @@ impl ActionRow {
 }
 
 /// Generic message component (ActionRow or Components V2 LayoutComponent).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Component {
     Row(ActionRow),
@@ -414,7 +416,7 @@ impl Default for Container {
 }
 
 /// Components V2 layout component variant.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum LayoutComponent {
     Container(Container),
@@ -466,5 +468,63 @@ impl From<Separator> for LayoutComponent {
 impl From<FileDisplay> for LayoutComponent {
     fn from(f: FileDisplay) -> Self {
         LayoutComponent::File(f)
+    }
+}
+
+fn component_kind<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let v = serde_json::Value::deserialize(d)?;
+    match v.as_i64() {
+        Some(1) => Ok("row".into()),
+        Some(2) => Ok("button".into()),
+        _ => v
+            .as_str()
+            .map(String::from)
+            .ok_or_else(|| serde::de::Error::custom("invalid component type")),
+    }
+}
+impl<'de> Deserialize<'de> for ButtonStyle {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = serde_json::Value::deserialize(d)?;
+        match (v.as_str(), v.as_i64()) {
+            (Some("primary"), _) | (_, Some(1)) => Ok(Self::Primary),
+            (Some("secondary"), _) | (_, Some(2)) => Ok(Self::Secondary),
+            (Some("success"), _) | (_, Some(3)) => Ok(Self::Success),
+            (Some("danger"), _) | (_, Some(4)) => Ok(Self::Danger),
+            (Some("link"), _) | (_, Some(5)) => Ok(Self::Link),
+            _ => Err(serde::de::Error::custom("invalid button style")),
+        }
+    }
+}
+impl<'de> Deserialize<'de> for Component {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = serde_json::Value::deserialize(d)?;
+        if v["type"] == "row" || v["type"] == 1 {
+            serde_json::from_value(v)
+                .map(Self::Row)
+                .map_err(serde::de::Error::custom)
+        } else {
+            serde_json::from_value(v)
+                .map(Self::V2)
+                .map_err(serde::de::Error::custom)
+        }
+    }
+}
+impl<'de> Deserialize<'de> for LayoutComponent {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = serde_json::Value::deserialize(d)?;
+        let kind = v["type"].as_i64();
+        let result = match kind {
+            Some(17) => serde_json::from_value(v).map(Self::Container),
+            Some(9) => serde_json::from_value(v).map(Self::Section),
+            Some(10) => serde_json::from_value(v).map(Self::Text),
+            Some(11) => serde_json::from_value(v).map(Self::Thumbnail),
+            Some(12) => serde_json::from_value(v).map(Self::Gallery),
+            Some(14) => serde_json::from_value(v).map(Self::Separator),
+            Some(13) => serde_json::from_value(v).map(Self::File),
+            Some(1) => serde_json::from_value(v).map(Self::Row),
+            _ if v["type"] == "row" => serde_json::from_value(v).map(Self::Row),
+            _ => return Err(serde::de::Error::custom("unknown layout component type")),
+        };
+        result.map_err(serde::de::Error::custom)
     }
 }
