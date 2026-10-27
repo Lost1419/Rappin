@@ -4,7 +4,7 @@ Enable `hot-reload` to put a cog in a separate Rust executable. Rappin compiles 
 
 The worker uses stable, versioned JSON over local stdin/stdout pipes. Both sides are ordinary Rust programs; no additional runtime or `cargo-watch` installation is needed. Native `Cog` and `BotHandle::reload_cog` remain available for replacing instances of code already linked into the parent.
 
-This feature is unreleased. Use the current source checkout until a version containing `hot-reload` is published.
+Available since `rappin-rs` version `0.1.5` with Cargo feature `hot-reload`.
 
 ## Try the included example
 
@@ -28,7 +28,7 @@ my-bot/
   src/bin/fun.rs
 ```
 
-In `Cargo.toml`, select the parent as the default binary and enable the feature on the source dependency. Replace the absolute checkout path with yours:
+In `Cargo.toml`, select the parent as the default binary and enable the feature:
 
 ```toml
 [package]
@@ -38,7 +38,7 @@ edition = "2021"
 default-run = "my-bot"
 
 [dependencies]
-rappin = { package = "rappin-rs", path = "/absolute/path/to/Rappin", features = ["hot-reload"] }
+rappin = { package = "rappin-rs", version = "0.1.5", features = ["hot-reload"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

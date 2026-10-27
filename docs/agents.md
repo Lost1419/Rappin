@@ -17,8 +17,8 @@ worker cogs while the parent bot stays running. Start with
 `cargo run --features hot-reload --example hot_reload_bot` and edit
 `examples/hot_cog_worker.rs`. See the [Rust hot-reloading guide](hot-reloading.md)
 for the two-binary setup, reply helpers, state boundaries, and credential handling.
-This is an unreleased library feature; native `reload_cog` replaces linked instances
-and does not compile source edits.
+Available since `0.1.5`; native `reload_cog` replaces linked instances and does not
+compile source edits.
 
 ## Authentication and output
 
