@@ -25,6 +25,7 @@ pub struct InteractionState {
 pub(crate) struct Tracked {
     pub state: InteractionState,
     pub expires: Instant,
+    retire_at: Instant,
 }
 pub(crate) struct Registry {
     entries: Mutex<HashMap<[u8; 32], Arc<AsyncMutex<Tracked>>>>,
@@ -51,7 +52,7 @@ impl Registry {
         entries.retain(|_, entry| {
             entry
                 .try_lock()
-                .map_or(true, |tracked| tracked.expires > Instant::now())
+                .map_or(true, |tracked| tracked.retire_at > Instant::now())
         });
         if let Some(entry) = entries.get(&key) {
             return Ok(entry.clone());
@@ -64,6 +65,7 @@ impl Registry {
         let entry = Arc::new(AsyncMutex::new(Tracked {
             state: InteractionState::default(),
             expires: Instant::now() + Duration::from_secs(900),
+            retire_at: Instant::now() + Duration::from_secs(900),
         }));
         entries.insert(key, entry.clone());
         Ok(entry)
@@ -71,16 +73,31 @@ impl Registry {
 }
 
 impl crate::Client {
-    pub async fn interaction_state(&self, event: &InteractionEvent) -> Result<InteractionState> {
-        if event
-            .created_at
-            .is_some_and(|time| (chrono::Utc::now() - time).num_seconds() >= 900)
-        {
-            return Ok(InteractionState {
-                phase: ResponsePhase::Expired,
-                responses: 0,
-            });
+    /// Record the server deadline for a custom-transport interaction before any
+    /// callback. Bot intake and interaction contexts call this automatically.
+    pub async fn track_interaction(&self, event: &InteractionEvent) -> Result<()> {
+        let now = chrono::Utc::now();
+        let deadline = event.expires_at.or_else(|| {
+            event
+                .created_at
+                .and_then(|created| created.checked_add_signed(chrono::Duration::seconds(900)))
+        });
+        if let Some(deadline) = deadline {
+            let remaining = (deadline - now)
+                .to_std()
+                .unwrap_or(Duration::ZERO)
+                .min(Duration::from_secs(900));
+            let expires = Instant::now() + remaining;
+            let entry = self
+                .interaction_registry()
+                .entry(&path(&event.id, &event.token))?;
+            let mut tracked = entry.lock().await;
+            tracked.expires = tracked.expires.min(expires);
         }
+        Ok(())
+    }
+    pub async fn interaction_state(&self, event: &InteractionEvent) -> Result<InteractionState> {
+        self.track_interaction(event).await?;
         let entry = self
             .interaction_registry()
             .entry(&path(&event.id, &event.token))?;
@@ -101,6 +118,9 @@ impl crate::Client {
         let client = self.clone();
         let task = tokio::spawn(async move {
             let _permit = permit;
+            if client.track_interaction(&event).await.is_err() {
+                return;
+            }
             let age = event
                 .created_at
                 .map(|time| {

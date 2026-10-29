@@ -37,11 +37,14 @@ Set `YAPPER_BOT_TOKEN`. Precedence is environment, then `token` in
 Do not put tokens in command arguments. A TOML config may contain:
 
 ```toml
-base_url = "https://www.yapin.gg/api/bot/v1"
+base_url = "https://bots.yapper.website/api/bot/v1"
 # token = "yb_..." # optional; restrict this file's permissions if used
 ```
 
 Base URL precedence: `--base-url`, `YAPPER_API_BASE`, config, default.
+The default is `https://bots.yapper.website/api/bot/v1` as of 0.1.8. Only that
+origin can temporarily fall back to the documented website API; custom origins
+never redirect or fail over. See [transport and caching](transport-and-cache.md).
 `rappin doctor` checks auth/reachability; `--offline` only checks local configuration.
 Doctor is a diagnostic report: inspect its `authenticated`, `reachable`, and `setup`
 fields, even when the command exits successfully.

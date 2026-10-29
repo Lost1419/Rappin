@@ -32,6 +32,42 @@ struct CommandDef {
     info: Option<crate::commands::CommandInfo>,
 }
 
+#[derive(Clone)]
+struct CommandRegistry {
+    routes: HashMap<String, CommandDef>,
+    roots: std::collections::HashSet<String>,
+}
+impl CommandRegistry {
+    fn new(routes: HashMap<String, CommandDef>) -> Self {
+        let mut registry = Self {
+            routes,
+            roots: Default::default(),
+        };
+        registry.reindex();
+        registry
+    }
+    fn reindex(&mut self) {
+        self.roots = self
+            .routes
+            .keys()
+            .filter_map(|path| path.split(' ').next())
+            .map(str::to_owned)
+            .collect();
+    }
+}
+impl std::ops::Deref for CommandRegistry {
+    type Target = HashMap<String, CommandDef>;
+    fn deref(&self) -> &Self::Target {
+        &self.routes
+    }
+}
+
+fn prepare_prefixes(prefixes: &mut Vec<String>) {
+    prefixes.retain(|prefix| !prefix.is_empty());
+    prefixes.sort_by_key(|prefix| std::cmp::Reverse(prefix.len()));
+    prefixes.dedup();
+}
+
 fn advertised_commands(commands: &HashMap<String, CommandDef>) -> Result<Vec<Command>> {
     let mut roots = std::collections::BTreeMap::new();
     let mut ordered: Vec<_> = commands.iter().collect();
@@ -132,7 +168,7 @@ struct BotState {
     prefix_resolver: Option<PrefixResolver>,
     mention_prefix: bool,
     definition_error: Option<String>,
-    commands: RwLock<HashMap<String, CommandDef>>,
+    commands: RwLock<CommandRegistry>,
     buttons: RwLock<Vec<ButtonDef>>,
     cogs: RwLock<HashMap<String, Arc<dyn Cog>>>,
     cog_factories: RwLock<HashMap<String, CogFactoryFn>>,
@@ -322,8 +358,10 @@ impl BotHandle {
                     ));
                 }
             }
-            planned.retain(|_, c| c.cog_name.as_deref() != Some(&name));
-            planned.extend(commands.clone());
+            planned
+                .routes
+                .retain(|_, c| c.cog_name.as_deref() != Some(&name));
+            planned.routes.extend(commands.clone());
             let planned = advertised_commands(&planned)?;
             // Do not hold dispatch locks while waiting for the API. Old code stays available.
             if synchronize && self.inner.sync_commands && self.inner.running.load(Ordering::SeqCst)
@@ -334,9 +372,12 @@ impl BotHandle {
             let mut current = self.inner.commands.write().await;
             let mut routes = self.inner.buttons.write().await;
             let mut cogs = self.inner.cogs.write().await;
-            current.retain(|_, c| c.cog_name.as_deref() != Some(&name));
+            current
+                .routes
+                .retain(|_, c| c.cog_name.as_deref() != Some(&name));
             routes.retain(|b| b.cog_name.as_deref() != Some(&name));
-            current.extend(commands);
+            current.routes.extend(commands);
+            current.reindex();
             for button in buttons {
                 routes.push(ButtonDef {
                     prefix: button.prefix,
@@ -379,7 +420,9 @@ impl BotHandle {
                 return Ok(None);
             }
             let mut planned = self.inner.commands.read().await.clone();
-            planned.retain(|_, c| c.cog_name.as_deref() != Some(name));
+            planned
+                .routes
+                .retain(|_, c| c.cog_name.as_deref() != Some(name));
             let planned = advertised_commands(&planned)?;
             if self.inner.sync_commands && self.inner.running.load(Ordering::SeqCst) {
                 self.client().set_commands(&planned).await?;
@@ -387,7 +430,10 @@ impl BotHandle {
             let mut commands = self.inner.commands.write().await;
             let mut buttons = self.inner.buttons.write().await;
             let mut cogs = self.inner.cogs.write().await;
-            commands.retain(|_, c| c.cog_name.as_deref() != Some(name));
+            commands
+                .routes
+                .retain(|_, c| c.cog_name.as_deref() != Some(name));
+            commands.reindex();
             buttons.retain(|b| b.cog_name.as_deref() != Some(name));
             cogs.remove(name)
         };
@@ -463,6 +509,8 @@ pub struct BotBuilder {
     auto_ack_after: Option<Duration>,
     transport_mode: crate::diagnostics::TransportMode,
     lookup_policy: crate::cache::CachePolicy,
+    lookup_backend: Option<Arc<dyn crate::cache::LookupCache>>,
+    api_fallback: bool,
     #[cfg(feature = "gateway")]
     gateway_url: Option<String>,
 }
@@ -492,6 +540,8 @@ impl BotBuilder {
             auto_ack_after: None,
             transport_mode: crate::diagnostics::TransportMode::Polling,
             lookup_policy: crate::cache::CachePolicy::default(),
+            lookup_backend: None,
+            api_fallback: true,
             #[cfg(feature = "gateway")]
             gateway_url: None,
         }
@@ -753,6 +803,17 @@ impl BotBuilder {
         self.lookup_policy = policy;
         self
     }
+    /// Use your own asynchronous member/role cache (e.g. Redis or SQL).
+    /// The backend controls storage, expiration and failures. No database is required.
+    pub fn lookup_cache_backend(mut self, backend: Arc<dyn crate::cache::LookupCache>) -> Self {
+        self.lookup_backend = Some(backend);
+        self
+    }
+    /// Configure known-host REST fallback; custom base URLs never fail over.
+    pub fn api_fallback(mut self, enabled: bool) -> Self {
+        self.api_fallback = enabled;
+        self
+    }
     /// Opt-in early acknowledgement. Use a short delay (e.g. 250ms); already answered clicks are skipped.
     pub fn auto_ack_after(mut self, after: Duration) -> Self {
         self.auto_ack_after = Some(after);
@@ -772,11 +833,16 @@ impl BotBuilder {
     }
 
     /// Builds the configured [`Bot`].
-    pub fn build(self) -> Bot {
-        let client = Client::builder(self.token)
+    pub fn build(mut self) -> Bot {
+        prepare_prefixes(&mut self.prefixes);
+        let mut client = Client::builder(self.token)
             .base_url(self.base_url)
             .lookup_cache(self.lookup_policy)
-            .build();
+            .api_fallback(self.api_fallback);
+        if let Some(backend) = self.lookup_backend {
+            client = client.lookup_cache_backend(backend);
+        }
+        let client = client.build();
 
         let state = Arc::new(BotState {
             client: Arc::new(client),
@@ -784,7 +850,7 @@ impl BotBuilder {
             prefix_resolver: self.prefix_resolver,
             mention_prefix: self.mention_prefix,
             definition_error: self.definition_error,
-            commands: RwLock::new(self.commands),
+            commands: RwLock::new(CommandRegistry::new(self.commands)),
             buttons: RwLock::new(self.buttons),
             cogs: RwLock::new(HashMap::new()),
             cog_factories: RwLock::new(HashMap::new()),
@@ -937,8 +1003,10 @@ impl Bot {
             }
             None => self.client().get_events(Some(0), Some(0), None).await?.last,
         };
-        if let Some(c) = &self.handle.inner.cursor {
-            c.save(last).await?;
+        if saved != Some(last) {
+            if let Some(c) = &self.handle.inner.cursor {
+                c.save(last).await?;
+            }
         }
         if self.handle.inner.log {
             println!("[rappin] Logged in as {} ({})", me.username, me.id);
@@ -961,18 +1029,31 @@ impl Bot {
             Some(me) => me,
             None => self.client().get_me().await?,
         };
-        self.client().receive_event(event.clone()).await;
-        if let Some(after) = self.handle.inner.auto_ack_after {
+        let mut prepared = None;
+        if event.kind == "interaction" {
             if let Ok(EventData::Interaction(mut interaction)) = event.parse_data() {
                 interaction.created_at = interaction.created_at.or(event.created_at);
-                self.client().auto_ack(interaction, after);
+                self.client().track_interaction(&interaction).await?;
+                if let Some(after) = self.handle.inner.auto_ack_after {
+                    self.client().auto_ack(interaction.clone(), after);
+                }
+                prepared = Some(Box::new(interaction));
             }
         }
-        self.dispatch_event(event, &me).await
+        self.client().receive_event(event.clone()).await;
+        self.dispatch_event(event, &me, prepared).await
     }
 
-    async fn dispatch_event(&self, event: crate::models::Event, me: &BotProfile) -> Result<()> {
-        let parsed = match event.parse_data() {
+    async fn dispatch_event(
+        &self,
+        event: crate::models::Event,
+        me: &BotProfile,
+        prepared: Option<Box<InteractionEvent>>,
+    ) -> Result<()> {
+        let parsed = match prepared
+            .map(|interaction| Ok(EventData::Interaction(*interaction)))
+            .unwrap_or_else(|| event.parse_data())
+        {
             Ok(p) => p,
             Err(e) => {
                 warn!("Failed to deserialize event {}: {}", event.kind, e);
@@ -1074,27 +1155,27 @@ impl Bot {
         } else if let Some(ref content) = msg.content {
             // Check prefix commands
             let mut prefixes = if let Some(resolver) = &self.handle.inner.prefix_resolver {
-                resolver(msg.clone()).await?
+                let mut prefixes = resolver(msg.clone()).await?;
+                prepare_prefixes(&mut prefixes);
+                std::borrow::Cow::Owned(prefixes)
             } else {
-                self.handle.inner.prefixes.clone()
+                std::borrow::Cow::Borrowed(self.handle.inner.prefixes.as_slice())
             };
             if self.handle.inner.mention_prefix {
+                let prefixes = prefixes.to_mut();
                 prefixes.push(format!("<@{}>", me.id));
                 prefixes.push(format!("<@!{}>", me.id));
+                prepare_prefixes(prefixes);
             }
-            prefixes.retain(|p| !p.is_empty());
-            prefixes.sort_by_key(|p| std::cmp::Reverse(p.len()));
 
             let cmds_guard = self.handle.inner.commands.read().await;
-            for p in prefixes {
-                if content.starts_with(&p) {
+            for p in prefixes.iter() {
+                if content.starts_with(p) {
                     let rest = content[p.len()..].trim_start();
                     let mut parts = rest.splitn(2, char::is_whitespace);
                     if let Some(cmd_name) = parts.next() {
                         let cmd_lower = cmd_name.to_lowercase();
-                        if cmds_guard.keys().any(|key| {
-                            key == &cmd_lower || key.starts_with(&format!("{cmd_lower} "))
-                        }) {
+                        if cmds_guard.roots.contains(&cmd_lower) {
                             matched_command = Some(cmd_lower);
                             matched_args = parts.next().unwrap_or_default().trim().to_string();
                             break;

@@ -1,7 +1,7 @@
 use super::Bot;
 use crate::{
     diagnostics::{EventTransport, TransportMode},
-    BotProfile, EventsResponse, Result, YappinError,
+    BotProfile, Result, YappinError,
 };
 use futures_util::{
     future::BoxFuture,
@@ -19,6 +19,10 @@ struct Intake(
     crate::Client,
     crate::diagnostics::Telemetry,
 );
+struct PreparedBatch {
+    last: u64,
+    events: Vec<(crate::Event, Option<Box<crate::InteractionEvent>>)>,
+}
 impl Drop for Intake {
     fn drop(&mut self) {
         self.0.abort();
@@ -41,7 +45,7 @@ impl Bot {
         let max_age = self.handle.inner.max_age;
         let capacity = self.handle.inner.pending_batches;
         let auto_ack = self.handle.inner.auto_ack_after;
-        let (sender, mut receiver) = mpsc::channel::<Result<EventsResponse>>(capacity);
+        let (sender, mut receiver) = mpsc::channel::<Result<PreparedBatch>>(capacity);
         #[cfg(feature = "gateway")]
         let gateway_url = self
             .handle
@@ -105,20 +109,35 @@ impl Bot {
                                 .max(batch.last)
                                 .max(batch.events.last().map_or(0, |e| e.id));
                             batch.last = received;
-                            for event in &batch.events {
-                                if let Some(after) = auto_ack {
+                            let mut events = Vec::with_capacity(batch.events.len());
+                            for event in batch.events {
+                                let mut prepared = None;
+                                if event.kind == "interaction" {
                                     if let Ok(crate::EventData::Interaction(mut interaction)) =
                                         event.parse_data()
                                     {
                                         interaction.created_at =
                                             interaction.created_at.or(event.created_at);
-                                        client.auto_ack(interaction, after);
+                                        if let Err(error) =
+                                            client.track_interaction(&interaction).await
+                                        {
+                                            permit.send(Err(error));
+                                            return;
+                                        }
+                                        if let Some(after) = auto_ack {
+                                            client.auto_ack(interaction.clone(), after);
+                                        }
+                                        prepared = Some(Box::new(interaction));
                                     }
                                 }
                                 client.receive_event(event.clone()).await;
+                                events.push((event, prepared));
                             }
                             telemetry.update(|s| s.received_cursor = received);
-                            permit.send(Ok(batch));
+                            permit.send(Ok(PreparedBatch {
+                                last: batch.last,
+                                events,
+                            }));
                         }
                         Err(error) => {
                             if error.is_unauthorized() || mode == TransportMode::GatewayOnly {
@@ -144,6 +163,7 @@ impl Bot {
         let mut batches: FuturesOrdered<BoxFuture<'_, (u64, Result<()>)>> = FuturesOrdered::new();
         let mut stopping = !self.handle.inner.running.load(Ordering::SeqCst);
         let mut failure = None;
+        let mut committed = last;
         loop {
             if stopping {
                 intake.0.abort();
@@ -164,11 +184,11 @@ impl Bot {
                             let serial_batches=serial_batches.clone();
                             batches.push_back(Box::pin(async move {
                                 let _ordered = if limit==1 {Some(serial_batches.lock().await)} else {None};
-                                let results=stream::iter(batch.events).map(|event|{
+                                let results=stream::iter(batch.events).map(|(event, prepared)|{
                                     let semaphore=semaphore.clone();
                                     async move {
                                         let _permit=semaphore.acquire().await.map_err(|_|YappinError::Config("handler executor closed".into()))?;
-                                        self.dispatch_event(event,me).await
+                                        self.dispatch_event(event,me,prepared).await
                                     }
                                 }).buffer_unordered(limit).collect::<Vec<_>>().await;
                                 let result=results.into_iter().collect::<Result<Vec<_>>>().map(|_|());
@@ -184,10 +204,12 @@ impl Bot {
                     if let Some((watermark,result))=completed {
                         match result {
                             Ok(()) if failure.is_none()=>{
-                                if let Some(cursor)=&self.handle.inner.cursor {
-                                    if let Err(error)=cursor.save(watermark).await{failure=Some(error);stopping=true;}
+                                if watermark != committed {
+                                    if let Some(cursor)=&self.handle.inner.cursor {
+                                        if let Err(error)=cursor.save(watermark).await{failure=Some(error);stopping=true;}
+                                    }
                                 }
-                                if failure.is_none(){self.handle.inner.telemetry.update(|s|s.committed_cursor=watermark);}
+                                if failure.is_none(){committed=watermark;self.handle.inner.telemetry.update(|s|s.committed_cursor=watermark);}
                             }
                             Err(error)=>{if failure.is_none(){failure=Some(error);}stopping=true;},
                             _=>(),

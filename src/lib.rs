@@ -9,6 +9,7 @@
 //! - **Rich Message & Layout Builders**: Type-safe builders for `Embed` cards, `Button` rows, and Components V2 layouts (`Container`, `Section`, `TextDisplay`, etc.).
 //! - **Bot Framework & Event Dispatcher**: Ergonomic command routing, prefix support (`!`, `/`), button click handlers, event listeners, and resilient long-polling with exponential backoff and rate limit handling.
 //! - **Modular Cogs System**: Add and replace cog instances at runtime. Optional `hot-reload` compiles and swaps edited Rust worker cogs while the main bot keeps running.
+//! - **Custom Lookup Caches**: Optional asynchronous member/role storage through `LookupCache`, including application-owned databases.
 //! - **In-Memory Cache Layer**: Thread-safe caching of bot profile, servers, and channels with zero network calls for repetitive lookups.
 //! - **Command Cooldowns**: Declarative rate limiting per user, channel, server, or globally.
 //! - **Interactive Paginator & Confirm Dialog**: Pre-built UI components for paging through embeds and binary confirmation prompts.
@@ -87,6 +88,7 @@ pub mod cooldown;
 pub mod diagnostics;
 pub mod error;
 pub mod events;
+mod failover;
 #[cfg(feature = "gateway")]
 pub mod gateway;
 #[cfg(feature = "hot-reload")]
@@ -107,7 +109,7 @@ pub use bot::{
     Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventHandler,
     InteractionContext, MessageContext,
 };
-pub use cache::{Cache, CachePolicy, Cached, Freshness};
+pub use cache::{Cache, CachePolicy, Cached, Freshness, LookupCache};
 pub use client::{Client, ClientBuilder};
 pub use collectors::{Collectible, Collector, CollectorBuilder, EventFilter, EventHub, WaitError};
 pub use commands::{
@@ -125,9 +127,9 @@ pub use oauth2::{OAuth2Client, OAuth2Token, OAuth2User, Pkce};
 pub use paginator::{ConfirmDialog, Paginator};
 pub use utils::{
     attachment_url, avatar_url, banner_url, icon_url, DEFAULT_API_BASE, DEFAULT_FILES_BASE,
-    DEFAULT_SITE_BASE, IS_COMPONENTS_V2,
+    DEFAULT_SITE_BASE, IS_COMPONENTS_V2, LEGACY_API_BASE,
 };
-pub use webhook::{WebhookClient, WebhookMessage};
+pub use webhook::{WebhookClient, WebhookInfo, WebhookMessage};
 
 /// Commonly used types for building bots and interacting with Yapin'.
 pub mod prelude {
@@ -153,12 +155,12 @@ pub mod prelude {
     pub use crate::paginator::{ConfirmDialog, Paginator};
     pub use crate::utils::IS_COMPONENTS_V2;
     pub use crate::validation::split_message;
-    pub use crate::webhook::{WebhookClient, WebhookMessage};
+    pub use crate::webhook::{WebhookClient, WebhookInfo, WebhookMessage};
     pub use crate::{
         check_fn, ArgumentInfo, Arguments, BoundedU32, Cache, CachePolicy, Cached, ChannelId,
         Check, Collector, CommandCheck, CommandError, CommandSpec, EventFilter, EventHub,
-        EventTransport, Freshness, FromArgs, HumanDuration, InteractionState, Permission,
-        ResponsePhase, TransportMode, TransportStatus, UserId, WaitError,
+        EventTransport, Freshness, FromArgs, HumanDuration, InteractionState, LookupCache,
+        Permission, ResponsePhase, TransportMode, TransportStatus, UserId, WaitError,
     };
 }
 
@@ -167,3 +169,6 @@ pub use validation::split_message;
 
 #[cfg(feature = "hot-reload")]
 pub use hot_reload::{CogEvent, HotReload, Listener, WorkerCog, WorkerContext, WorkerProject};
+
+#[doc = include_str!("../docs/transport-and-cache.md")]
+pub mod transport_and_cache_guide {}

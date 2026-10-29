@@ -1,5 +1,8 @@
 /// Default base URL for the Yapin' Bot API.
-pub const DEFAULT_API_BASE: &str = "https://www.yapin.gg/api/bot/v1";
+pub const DEFAULT_API_BASE: &str = "https://bots.yapper.website/api/bot/v1";
+
+/// Website API origin used when the dedicated bot API is unavailable.
+pub const LEGACY_API_BASE: &str = "https://www.yapin.gg/api/bot/v1";
 
 /// Base URL for user uploaded assets.
 pub const DEFAULT_FILES_BASE: &str = "https://files.yapper.website";

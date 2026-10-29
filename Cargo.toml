@@ -1,6 +1,6 @@
 [package]
 name = "rappin-rs"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 rust-version = "1.88"
 autobins = false
@@ -35,6 +35,7 @@ hot-reload = ["tokio/process", "tokio/io-util", "tokio/io-std"]
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+bytes = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "fs"] }
 async-trait = "0.1"

@@ -29,7 +29,7 @@ impl Event {
     /// this gracefully falls back to [`EventData::Unknown`] rather than dropping the event loop.
     pub fn parse_data(&self) -> Result<EventData, serde_json::Error> {
         match self.kind.as_str() {
-            "message" => match serde_json::from_value(self.data.clone()) {
+            "message" => match serde::Deserialize::deserialize(&self.data) {
                 Ok(msg) => Ok(EventData::Message(msg)),
                 Err(e) => {
                     tracing::warn!(
@@ -42,7 +42,7 @@ impl Event {
                     })
                 }
             },
-            "interaction" => match serde_json::from_value(self.data.clone()) {
+            "interaction" => match serde::Deserialize::deserialize(&self.data) {
                 Ok(inter) => Ok(EventData::Interaction(inter)),
                 Err(e) => {
                     tracing::warn!(
@@ -55,7 +55,7 @@ impl Event {
                     })
                 }
             },
-            "member_join" => match serde_json::from_value(self.data.clone()) {
+            "member_join" => match serde::Deserialize::deserialize(&self.data) {
                 Ok(ev) => Ok(EventData::MemberJoin(ev)),
                 Err(e) => {
                     tracing::warn!(
@@ -68,7 +68,7 @@ impl Event {
                     })
                 }
             },
-            "member_leave" => match serde_json::from_value(self.data.clone()) {
+            "member_leave" => match serde::Deserialize::deserialize(&self.data) {
                 Ok(ev) => Ok(EventData::MemberLeave(ev)),
                 Err(e) => {
                     tracing::warn!(
@@ -81,7 +81,7 @@ impl Event {
                     })
                 }
             },
-            "reaction_add" => match serde_json::from_value(self.data.clone()) {
+            "reaction_add" => match serde::Deserialize::deserialize(&self.data) {
                 Ok(ev) => Ok(EventData::ReactionAdd(ev)),
                 Err(e) => {
                     tracing::warn!(
@@ -94,7 +94,7 @@ impl Event {
                     })
                 }
             },
-            "reaction_remove" => match serde_json::from_value(self.data.clone()) {
+            "reaction_remove" => match serde::Deserialize::deserialize(&self.data) {
                 Ok(ev) => Ok(EventData::ReactionRemove(ev)),
                 Err(e) => {
                     tracing::warn!(
@@ -107,7 +107,7 @@ impl Event {
                     })
                 }
             },
-            "voice_join" => match serde_json::from_value(self.data.clone()) {
+            "voice_join" => match serde::Deserialize::deserialize(&self.data) {
                 Ok(ev) => Ok(EventData::VoiceJoin(ev)),
                 Err(e) => {
                     tracing::warn!(
@@ -120,7 +120,7 @@ impl Event {
                     })
                 }
             },
-            "voice_leave" => match serde_json::from_value(self.data.clone()) {
+            "voice_leave" => match serde::Deserialize::deserialize(&self.data) {
                 Ok(ev) => Ok(EventData::VoiceLeave(ev)),
                 Err(e) => {
                     tracing::warn!(
@@ -176,6 +176,12 @@ pub struct MessageEvent {
     pub id: Uuid,
     pub channel_id: Uuid,
     #[serde(default)]
+    pub channel_name: Option<String>,
+    #[serde(default)]
+    pub author: Option<serde_json::Value>,
+    #[serde(default)]
+    pub attachment: Option<serde_json::Value>,
+    #[serde(default)]
     pub server_id: Option<Uuid>,
     pub author_id: Uuid,
     #[serde(default)]
@@ -229,6 +235,11 @@ pub struct InteractionEvent {
     pub message_id: Option<Uuid>,
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
+    /// Server-issued expiration; authoritative when present.
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(rename = "type", default)]
+    pub kind: Option<String>,
 }
 
 /// Data payload for `member_join` events.
@@ -251,6 +262,10 @@ pub struct MemberLeaveEvent {
     pub server_id: Uuid,
     #[serde(default)]
     pub member_count: Option<u64>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub joined_at: Option<DateTime<Utc>>,
 }
 
 /// Data payload for `reaction_add` and `reaction_remove` events.
@@ -262,6 +277,10 @@ pub struct ReactionEvent {
     pub emoji: String,
     #[serde(default)]
     pub server_id: Option<Uuid>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub message_author_id: Option<Uuid>,
 }
 
 /// Data payload for `voice_join` and `voice_leave` events.

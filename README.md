@@ -1,7 +1,7 @@
 # Rappin 🦀
 
 [![GitHub](https://img.shields.io/badge/github-Lost1419/Rappin-blue?logo=github)](https://github.com/Lost1419/Rappin)
-[![Crates.io](https://img.shields.io/crates/v/rappin-rs.svg?v=0.1.7)](https://crates.io/crates/rappin-rs)
+[![Crates.io](https://img.shields.io/crates/v/rappin-rs.svg?v=0.1.8)](https://crates.io/crates/rappin-rs)
 [![Docs.rs](https://docs.rs/rappin-rs/badge.svg)](https://docs.rs/rappin-rs)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
 
@@ -10,6 +10,15 @@ An idiomatic, type-safe, asynchronous Rust client and bot framework for the [Yap
 Yapin’ is a chat platform providing an HTTPS-based bot API with long-polling events, slash commands, interactive buttons, embeds, Components V2 cards, and LiveKit-powered voice channels.
 
 See [credential security](docs/agents.md#credential-hardening-014) for the security boundaries and migration notes.
+
+## API transport and cache updates (0.1.8)
+
+The default REST origin is now `https://bots.yapper.website/api/bot/v1`, with
+bounded fallback to Yapin’s website API. Custom origins remain isolated.
+Member/role lookup caches can use your own database through `LookupCache`;
+static and database-backed dynamic prefixes remain supported. Request bodies
+reuse shared buffers, and idle event polls no longer rewrite unchanged cursors.
+See [transport, caching, and migration](docs/transport-and-cache.md) for configuration.
 
 ## Rust bot ergonomics (0.1.7)
 
@@ -131,7 +140,7 @@ Add `rappin-rs` and `tokio` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.7"
+rappin-rs = "0.1.8"
 tokio = { version = "1", features = ["full"] }
 ```
 

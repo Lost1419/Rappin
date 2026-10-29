@@ -20,6 +20,8 @@ pub struct ClientBuilder {
     max_retries: u32,
     http_client: Option<reqwest::Client>,
     cache: Option<Arc<Cache>>,
+    lookup_backend: Option<Arc<dyn crate::cache::LookupCache>>,
+    api_fallback: bool,
 }
 
 impl ClientBuilder {
@@ -30,6 +32,8 @@ impl ClientBuilder {
             max_retries: 3,
             http_client: None,
             cache: None,
+            lookup_backend: None,
+            api_fallback: true,
         }
     }
 
@@ -40,6 +44,21 @@ impl ClientBuilder {
 
     pub fn max_retries(mut self, retries: u32) -> Self {
         self.max_retries = retries;
+        self
+    }
+
+    /// Allow the default Yapin API to fail over to its documented website origin.
+    /// Custom base URLs never fail over. Ambiguous writes are never replayed.
+    pub fn api_fallback(mut self, enabled: bool) -> Self {
+        self.api_fallback = enabled;
+        self
+    }
+
+    /// Use an application-owned lookup cache, such as Redis or a SQL database.
+    /// Takes precedence over the built-in member/role cache; fresh requests still
+    /// reach the API. The backend owns expiration, persistence and error policy.
+    pub fn lookup_cache_backend(mut self, backend: Arc<dyn crate::cache::LookupCache>) -> Self {
+        self.lookup_backend = Some(backend);
         self
     }
 
@@ -74,9 +93,11 @@ impl ClientBuilder {
             inner: Arc::new(ClientInner {
                 http,
                 token: self.token,
+                failover: crate::failover::Failover::new(&self.base_url, self.api_fallback),
                 base_url: self.base_url,
                 max_retries: self.max_retries,
                 cache,
+                lookup_backend: self.lookup_backend,
                 events: crate::collectors::EventHub::default(),
                 rate_limits: crate::rate_limits::RateLimits::default(),
                 requests: tokio::sync::watch::channel(None).0,
@@ -100,6 +121,8 @@ struct ClientInner {
     base_url: String,
     max_retries: u32,
     cache: Arc<Cache>,
+    lookup_backend: Option<Arc<dyn crate::cache::LookupCache>>,
+    failover: crate::failover::Failover,
 }
 
 /// Asynchronous REST client for the Yapin' Bot API.
@@ -148,6 +171,12 @@ impl Client {
     /// Returns the base URL of the API.
     pub fn base_url(&self) -> &str {
         &self.inner.base_url
+    }
+
+    /// Current request origin, including any temporary fallback. `base_url()`
+    /// continues to report the configured primary URL.
+    pub fn active_base_url(&self) -> String {
+        self.inner.failover.base(&self.inner.base_url)
     }
 
     /// Returns a reference to the client's internal in-memory cache.
@@ -203,10 +232,24 @@ impl Client {
                     .as_str()
                     .and_then(|s| Uuid::parse_str(s).ok()),
             ) {
-                self.cache().invalidate_member(server, user).await;
+                self.invalidate_member(server, user).await;
             }
         }
         self.events().publish(event);
+    }
+
+    async fn invalidate_member(&self, server: Uuid, user: Uuid) {
+        self.cache().invalidate_member(server, user).await;
+        if let Some(backend) = &self.inner.lookup_backend {
+            backend.invalidate_member(server, user).await;
+        }
+    }
+
+    async fn invalidate_server_lookups(&self, server: Uuid) {
+        self.cache().invalidate_server_lookups(server).await;
+        if let Some(backend) = &self.inner.lookup_backend {
+            backend.invalidate_server(server).await;
+        }
     }
 
     /// Explicitly choose whether a fresh, bounded member snapshot may satisfy this lookup.
@@ -217,7 +260,11 @@ impl Client {
         freshness: crate::cache::Freshness,
     ) -> Result<MemberDetail> {
         if freshness == crate::cache::Freshness::PreferCache {
-            if let Some(cached) = self.cache().get_member(server, user).await {
+            if let Some(backend) = &self.inner.lookup_backend {
+                if let Some(value) = backend.get_member(server, user).await {
+                    return Ok(value);
+                }
+            } else if let Some(cached) = self.cache().get_member(server, user).await {
                 return Ok(cached.value);
             }
         }
@@ -229,7 +276,11 @@ impl Client {
         freshness: crate::cache::Freshness,
     ) -> Result<Vec<Role>> {
         if freshness == crate::cache::Freshness::PreferCache {
-            if let Some(cached) = self.cache().get_roles(server).await {
+            if let Some(backend) = &self.inner.lookup_backend {
+                if let Some(value) = backend.get_roles(server).await {
+                    return Ok(value);
+                }
+            } else if let Some(cached) = self.cache().get_roles(server).await {
                 return Ok(cached.value);
             }
         }
@@ -247,7 +298,7 @@ impl Client {
         mut operation: F,
     ) -> Result<Response>
     where
-        F: FnMut() -> Fut,
+        F: FnMut(url::Url) -> Fut,
         Fut: std::future::Future<Output = std::result::Result<Response, reqwest::Error>>,
     {
         let mut retries = self.inner.max_retries;
@@ -257,11 +308,14 @@ impl Client {
         let route = crate::rate_limits::route_template(path);
         let mut wait = Duration::ZERO;
         let mut attempts = 0;
+        // Pin each call to its initial origin. Only an explicit safe-read
+        // failover below may move it; concurrent failures must not move writes.
+        let mut base = self.active_base_url();
 
         loop {
             wait += self.inner.rate_limits.wait(key, is_message).await;
             attempts += 1;
-            let res = operation().await;
+            let res = operation(crate::security::api_url(&base, path)?).await;
             let status = res.as_ref().ok().map(|res| res.status().as_u16());
             let label = if matches!(
                 method.as_str(),
@@ -282,6 +336,21 @@ impl Client {
                     attempts,
                 }));
             tracing::debug!(method=label,route=%route,status,elapsed_ms=started.elapsed().as_millis() as u64,attempts,"REST response headers");
+            let unavailable = match &res {
+                Ok(response) => matches!(
+                    response.status(),
+                    StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT
+                ),
+                Err(error) => error.is_connect(),
+            };
+            if unavailable && self.inner.failover.activate(&base) {
+                tracing::warn!("dedicated bot API unavailable; using website API for ten minutes");
+                if matches!(*method, Method::GET | Method::HEAD) && retries > 0 {
+                    retries -= 1;
+                    base = self.active_base_url();
+                    continue;
+                }
+            }
             let res = res.map_err(|e| YappinError::Http(e.without_url()))?;
             let status = res.status();
 
@@ -350,12 +419,12 @@ impl Client {
         path: &str,
         body: Option<&B>,
     ) -> Result<T> {
-        let url = crate::security::api_url(&self.inner.base_url, path)?;
+        crate::security::api_url(&self.inner.base_url, path)?;
         let authorization = crate::security::authorization("Bot", &self.inner.token)?;
         debug!(%method, "Yapin API request");
 
         let body_data = match body {
-            Some(b) => Some(serde_json::to_vec(b)?),
+            Some(b) => Some(bytes::Bytes::from(serde_json::to_vec(b)?)),
             None => None,
         };
 
@@ -401,11 +470,11 @@ impl Client {
             entry.state.phase = ResponsePhase::Uncertain;
         }
         let response = self
-            .execute_with_retry(&method, path, || {
+            .execute_with_retry(&method, path, |url| {
                 let mut req = self
                     .inner
                     .http
-                    .request(method.clone(), url.clone())
+                    .request(method.clone(), url)
                     .header(header::AUTHORIZATION, authorization.clone())
                     .header(
                         header::USER_AGENT,
@@ -457,7 +526,7 @@ impl Client {
                 })
             {
                 if let Some(server) = parts.get(1).and_then(|id| Uuid::parse_str(id).ok()) {
-                    self.cache().invalidate_server_lookups(server).await;
+                    self.invalidate_server_lookups(server).await;
                 }
             }
         }
@@ -485,15 +554,16 @@ impl Client {
         bytes: Vec<u8>,
         content_type: &str,
     ) -> Result<T> {
-        let url = crate::security::api_url(&self.inner.base_url, path)?;
+        crate::security::api_url(&self.inner.base_url, path)?;
+        let bytes = bytes::Bytes::from(bytes);
         let authorization = crate::security::authorization("Bot", &self.inner.token)?;
         debug!(%method, %content_type, "Yapin binary request");
 
         let response = self
-            .execute_with_retry(&method, path, || {
+            .execute_with_retry(&method, path, |url| {
                 self.inner
                     .http
-                    .request(method.clone(), url.clone())
+                    .request(method.clone(), url)
                     .header(header::AUTHORIZATION, authorization.clone())
                     .header(
                         header::USER_AGENT,
@@ -547,11 +617,11 @@ impl Client {
             .display_name
             .as_ref()
             .is_some_and(|s| s.chars().count() > 32)
-            || req.bio.as_ref().is_some_and(|s| s.chars().count() > 190)
+            || req.bio.as_ref().is_some_and(|s| s.chars().count() > 300)
         {
             return Err(YappinError::validation(
                 "profile",
-                "display_name maximum 32 and bio maximum 190 characters (OpenAPI contract)",
+                "display_name maximum 32 and bio maximum 300 characters (developer guide; server enforces its active limit)",
             ));
         }
         let profile: BotProfile = self.request_json(Method::PATCH, "/me", Some(req)).await?;
@@ -756,9 +826,11 @@ impl Client {
         let resp: Resp = self
             .request_json::<Resp, ()>(Method::GET, &format!("/servers/{}/roles", server_id), None)
             .await?;
-        self.cache()
-            .update_roles(server_id, resp.roles.clone())
-            .await;
+        if let Some(backend) = &self.inner.lookup_backend {
+            backend.store_roles(server_id, &resp.roles).await;
+        } else {
+            self.cache().update_roles(server_id, &resp.roles).await;
+        }
         Ok(resp.roles)
     }
 
@@ -806,9 +878,13 @@ impl Client {
                 None,
             )
             .await?;
-        self.cache()
-            .update_member(server_id, user_id, resp.member.clone())
-            .await;
+        if let Some(backend) = &self.inner.lookup_backend {
+            backend.store_member(server_id, user_id, &resp.member).await;
+        } else {
+            self.cache()
+                .update_member(server_id, user_id, &resp.member)
+                .await;
+        }
         Ok(resp.member)
     }
 
@@ -1552,5 +1628,136 @@ impl Client {
 impl Client {
     pub(crate) fn worker_output(&self, value: serde_json::Value) -> serde_json::Value {
         crate::security::redact_json(value, &[&self.inner.token])
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod test_support;
+
+#[cfg(test)]
+mod failover_tests {
+    use super::test_support::{mock, response};
+    use super::*;
+    use serde_json::json;
+
+    fn client(primary: String, fallback: String, retries: u32) -> Client {
+        let mut client = Client::builder("test-secret")
+            .base_url(primary)
+            .max_retries(retries)
+            .build();
+        Arc::get_mut(&mut client.inner).unwrap().failover =
+            crate::failover::Failover::for_test(fallback);
+        client
+    }
+
+    #[tokio::test]
+    async fn read_failover_is_shared_and_does_not_loop_back() {
+        let (primary, mut a, ta) = mock(vec![response(502, json!({"error":"gateway"}))]).await;
+        let (fallback, mut b, tb) = mock(vec![
+            response(200, json!({"ok":true})),
+            response(504, json!({"error":"down"})),
+        ])
+        .await;
+        let client = client(primary.clone(), fallback.clone(), 3);
+        let value: serde_json::Value = client
+            .request_json::<_, ()>(Method::GET, "/me", None)
+            .await
+            .unwrap();
+        assert_eq!(value["ok"], true);
+        assert_eq!(client.base_url(), primary);
+        assert_eq!(client.clone().active_base_url(), fallback);
+        let err = client
+            .request_json::<serde_json::Value, ()>(Method::GET, "/me", None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status_code(), Some(504));
+        assert_eq!(client.last_request().unwrap().attempts, 1);
+        assert!(a.recv().await.unwrap().starts_with("GET /me "));
+        assert!(b
+            .recv()
+            .await
+            .unwrap()
+            .contains("authorization: Bot test-secret"));
+        ta.await.unwrap();
+        tb.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ambiguous_writes_are_not_replayed_but_next_request_uses_fallback() {
+        let (primary, mut a, ta) =
+            mock(vec![response(502, json!({"error":"unknown outcome"}))]).await;
+        let (fallback, mut b, tb) = mock(vec![response(200, json!({}))]).await;
+        let client = client(primary, fallback, 3);
+        let err = client
+            .request_json::<serde_json::Value, _>(
+                Method::POST,
+                "/commands",
+                Some(&json!({"commands":[]})),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.status_code(), Some(502));
+        assert!(b.try_recv().is_err());
+        client
+            .request_json::<serde_json::Value, ()>(Method::GET, "/me", None)
+            .await
+            .unwrap();
+        assert!(a.recv().await.unwrap().starts_with("POST /commands "));
+        assert!(b.recv().await.unwrap().starts_with("GET /me "));
+        ta.await.unwrap();
+        tb.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn shared_failover_during_a_server_advised_retry_does_not_move_a_write() {
+        let (primary, mut requests, task) = mock(vec![
+            (
+                503,
+                vec![("Retry-After", "0")],
+                "{\"error\":\"busy\"}".into(),
+            ),
+            response(200, json!({})),
+        ])
+        .await;
+        let fallback = "http://127.0.0.1:1".to_owned();
+        let client = client(primary.clone(), fallback.clone(), 3);
+        client
+            .execute_with_retry(&Method::PUT, "/commands", |url| {
+                let client = client.clone();
+                let primary = primary.clone();
+                async move {
+                    let response = client.inner.http.put(url).send().await;
+                    // Simulate another request activating the shared fallback.
+                    client.inner.failover.activate(&primary);
+                    response
+                }
+            })
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            assert!(requests.recv().await.unwrap().starts_with("PUT /commands "));
+        }
+        assert_eq!(client.active_base_url(), fallback);
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn connection_failure_can_fail_over_and_zero_retries_stays_zero() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let primary = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let (fallback, _rx, task) = mock(vec![response(200, json!({}))]).await;
+        let client = client(primary, fallback, 0);
+        assert!(client
+            .request_json::<serde_json::Value, ()>(Method::GET, "/me", None)
+            .await
+            .is_err());
+        assert_eq!(client.last_request().unwrap().attempts, 1);
+        client
+            .request_json::<serde_json::Value, ()>(Method::GET, "/me", None)
+            .await
+            .unwrap();
+        task.await.unwrap();
     }
 }

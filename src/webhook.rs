@@ -22,6 +22,25 @@ pub struct WebhookMessage {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub components: Vec<serde_json::Value>,
 }
+
+/// Public channel-webhook metadata. Credential fields returned by the server
+/// are deliberately ignored; this value is safe to inspect with `Debug`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookInfo {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub channel_id: Option<uuid::Uuid>,
+    #[serde(default)]
+    pub guild_id: Option<uuid::Uuid>,
+    #[serde(default)]
+    pub server_id: Option<uuid::Uuid>,
+    #[serde(default)]
+    pub avatar: Option<String>,
+    #[serde(rename = "type", default)]
+    pub kind: Option<u8>,
+}
 #[derive(Clone)]
 pub struct WebhookClient {
     url: String,
@@ -38,7 +57,7 @@ impl WebhookClient {
                 .expect("HTTP client"),
         }
     }
-    async fn post<T: Serialize>(&self, message: &T, wait: bool) -> Result<Option<Message>> {
+    fn request_url(&self, wait: Option<bool>) -> Result<url::Url> {
         let mut url = url::Url::parse(&self.url)
             .map_err(|_| YappinError::Config("invalid webhook URL".into()))?;
         let mut destination = url.clone();
@@ -50,9 +69,48 @@ impl WebhookClient {
             .map(|(k, v)| (k.into_owned(), v.into_owned()))
             .collect();
         url.set_query(None);
-        url.query_pairs_mut()
-            .extend_pairs(query)
-            .append_pair("wait", if wait { "true" } else { "false" });
+        if !query.is_empty() || wait.is_some() {
+            let mut pairs = url.query_pairs_mut();
+            pairs.extend_pairs(query);
+            if let Some(wait) = wait {
+                pairs.append_pair("wait", if wait { "true" } else { "false" });
+            }
+        }
+        Ok(url)
+    }
+
+    /// Inspect a webhook using its credential-bearing URL. This never posts a
+    /// message. Returned metadata excludes the webhook token.
+    pub async fn get_info(&self) -> Result<WebhookInfo> {
+        let response = self
+            .http
+            .get(self.request_url(None)?)
+            .send()
+            .await
+            .map_err(|error| YappinError::Http(error.without_url()))?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(YappinError::Api {
+                status: status.as_u16(),
+                message: "webhook inspection failed".into(),
+                retry_after: response
+                    .headers()
+                    .get("Retry-After")
+                    .and_then(|header| header.to_str().ok())
+                    .and_then(crate::rate_limits::retry_after)
+                    .map(|delay| delay.as_secs_f64()),
+            });
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| YappinError::Http(error.without_url()))?;
+        serde_json::from_slice(&bytes)
+            .map_err(|_| YappinError::Config("invalid webhook metadata response".into()))
+    }
+
+    async fn post<T: Serialize>(&self, message: &T, wait: bool) -> Result<Option<Message>> {
+        let url = self.request_url(Some(wait))?;
         let mut value = serde_json::to_value(message)?;
         crate::validation::validate_webhook(&value)?;
         // Channel webhooks use Discord's numeric link-button representation.

@@ -8,7 +8,7 @@
   },
   "servers": [
     {
-      "url": "https://www.yapin.gg/api/bot/v1"
+      "url": "https://bots.yapper.website/api/bot/v1"
     }
   ],
   "security": [

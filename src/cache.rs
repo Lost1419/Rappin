@@ -9,6 +9,23 @@ use crate::models::{MemberDetail, Role};
 use std::{hash::Hash, time::Duration};
 use tokio::time::Instant;
 
+/// Application-owned member/role lookup storage. Implement this with your own
+/// database, Redis client, or cache. The SDK supplies no database dependencies.
+///
+/// Implementations own TTL, capacity and failure policy: return `None` on a miss
+/// (or an unavailable backend) to fetch from the API. Store/invalidation failures
+/// should be handled by the implementation. Never retain credentials here.
+/// `Freshness::Refresh` always bypasses reads, but updates this backend afterward.
+#[async_trait::async_trait]
+pub trait LookupCache: Send + Sync {
+    async fn get_member(&self, server: Uuid, user: Uuid) -> Option<MemberDetail>;
+    async fn get_roles(&self, server: Uuid) -> Option<Vec<Role>>;
+    async fn store_member(&self, server: Uuid, user: Uuid, member: &MemberDetail);
+    async fn store_roles(&self, server: Uuid, roles: &[Role]);
+    async fn invalidate_member(&self, server: Uuid, user: Uuid);
+    async fn invalidate_server(&self, server: Uuid);
+}
+
 /// Bounds for each member/role lookup cache. The default disables lookup caching.
 #[derive(Debug, Clone, Copy)]
 pub struct CachePolicy {
@@ -66,16 +83,24 @@ impl<K: Eq + Hash + Clone, V: Clone> Lookup<K, V> {
         }
     }
     async fn get(&self, key: &K) -> Option<Cached<V>> {
+        if self.policy.capacity == 0 || self.policy.ttl.is_zero() {
+            return None;
+        }
         let mut values = self.values.lock().await;
-        values.retain(|_, v| v.age() < self.policy.ttl);
+        if values.get(key).is_some_and(|v| v.age() >= self.policy.ttl) {
+            values.remove(key);
+            return None;
+        }
         values.get(key).cloned()
     }
-    async fn insert(&self, key: K, value: V) {
+    async fn insert(&self, key: K, value: &V) {
         if self.policy.capacity == 0 || self.policy.ttl.is_zero() {
             return;
         }
         let mut values = self.values.lock().await;
-        values.retain(|_, v| v.age() < self.policy.ttl);
+        if !values.contains_key(&key) && values.len() >= self.policy.capacity {
+            values.retain(|_, v| v.age() < self.policy.ttl);
+        }
         if !values.contains_key(&key) && values.len() >= self.policy.capacity {
             if let Some(oldest) = values
                 .iter()
@@ -88,7 +113,7 @@ impl<K: Eq + Hash + Clone, V: Clone> Lookup<K, V> {
         values.insert(
             key,
             Cached {
-                value,
+                value: value.clone(),
                 fetched_at: Instant::now(),
             },
         );
@@ -123,10 +148,10 @@ impl Cache {
     pub async fn get_roles(&self, server: Uuid) -> Option<Cached<Vec<Role>>> {
         self.roles.get(&server).await
     }
-    pub(crate) async fn update_member(&self, server: Uuid, user: Uuid, value: MemberDetail) {
+    pub(crate) async fn update_member(&self, server: Uuid, user: Uuid, value: &MemberDetail) {
         self.members.insert((server, user), value).await;
     }
-    pub(crate) async fn update_roles(&self, server: Uuid, value: Vec<Role>) {
+    pub(crate) async fn update_roles(&self, server: Uuid, value: &Vec<Role>) {
         self.roles.insert(server, value).await;
     }
     pub async fn invalidate_server_lookups(&self, server: Uuid) {
@@ -216,5 +241,42 @@ impl Cache {
     /// Retrieves the cached bot profile.
     pub async fn get_me(&self) -> Option<BotProfile> {
         self.me.read().await.clone()
+    }
+}
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+    #[tokio::test]
+    async fn ttl_and_capacity_preserve_unexpired_entries_without_read_scans() {
+        let lookup = Lookup::new(CachePolicy::new(2, Duration::from_secs(60)));
+        lookup.insert(1, &"old".to_owned()).await;
+        lookup.insert(2, &"also old".to_owned()).await;
+        for value in lookup.values.lock().await.values_mut() {
+            value.fetched_at = Instant::now() - Duration::from_secs(61);
+        }
+        assert!(lookup.get(&1).await.is_none());
+        assert_eq!(lookup.values.lock().await.len(), 1); // Only the queried key was removed.
+        lookup.insert(3, &"new".to_owned()).await;
+        lookup.insert(4, &"newer".to_owned()).await;
+        assert_eq!(lookup.values.lock().await.len(), 2);
+        assert!(lookup.get(&2).await.is_none());
+        assert!(lookup.get(&3).await.is_some());
+        assert!(lookup.get(&4).await.is_some());
+    }
+    #[tokio::test]
+    async fn disabled_lookup_does_not_clone_values() {
+        struct Counted(Arc<std::sync::atomic::AtomicUsize>);
+        impl Clone for Counted {
+            fn clone(&self) -> Self {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Self(self.0.clone())
+            }
+        }
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let lookup: Lookup<u8, Counted> = Lookup::default();
+        lookup.insert(1, &Counted(count.clone())).await;
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(lookup.values.lock().await.is_empty());
     }
 }

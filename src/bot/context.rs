@@ -243,6 +243,13 @@ pub struct InteractionContext {
 }
 
 impl InteractionContext {
+    async fn respond(&self, callback: &InteractionCallback) -> Result<()> {
+        self.client.track_interaction(&self.event).await?;
+        self.client
+            .respond_interaction(&self.event.id, &self.event.token, callback)
+            .await
+    }
+
     pub async fn response_state(&self) -> Result<crate::interactions::InteractionState> {
         self.client.interaction_state(&self.event).await
     }
@@ -270,9 +277,7 @@ impl InteractionContext {
         page: usize,
     ) -> Result<()> {
         let callback = paginator.build_update(page);
-        self.client
-            .respond_interaction(&self.event.id, &self.event.token, &callback)
-            .await
+        self.respond(&callback).await
     }
 
     /// The interaction ID.
@@ -317,9 +322,7 @@ impl InteractionContext {
     /// Posts a new public reply in the channel.
     pub async fn reply(&self, content: impl Into<String>) -> Result<()> {
         let callback = InteractionCallback::reply(content);
-        self.client
-            .respond_interaction(&self.event.id, &self.event.token, &callback)
-            .await
+        self.respond(&callback).await
     }
 
     /// Sends an ephemeral message visible only to the person who clicked.
@@ -336,9 +339,7 @@ impl InteractionContext {
     /// ```
     pub async fn ephemeral(&self, content: impl Into<String>) -> Result<()> {
         let callback = InteractionCallback::ephemeral(content);
-        self.client
-            .respond_interaction(&self.event.id, &self.event.token, &callback)
-            .await
+        self.respond(&callback).await
     }
 
     /// Updates the message the clicked button is on.
@@ -355,17 +356,13 @@ impl InteractionContext {
     /// ```
     pub async fn update(&self, content: impl Into<String>) -> Result<()> {
         let callback = InteractionCallback::update(content);
-        self.client
-            .respond_interaction(&self.event.id, &self.event.token, &callback)
-            .await
+        self.respond(&callback).await
     }
 
     /// Acknowledges the interaction silently ("got it").
     pub async fn ack(&self) -> Result<()> {
         let callback = InteractionCallback::ack();
-        self.client
-            .respond_interaction(&self.event.id, &self.event.token, &callback)
-            .await
+        self.respond(&callback).await
     }
 
     /// Replies with a Components V2 layout.
@@ -374,9 +371,7 @@ impl InteractionContext {
         components: impl IntoIterator<Item = impl Into<Component>>,
     ) -> Result<()> {
         let callback = InteractionCallback::reply_layout(components);
-        self.client
-            .respond_interaction(&self.event.id, &self.event.token, &callback)
-            .await
+        self.respond(&callback).await
     }
 
     /// Updates the message with a Components V2 layout.
@@ -385,8 +380,6 @@ impl InteractionContext {
         components: impl IntoIterator<Item = impl Into<Component>>,
     ) -> Result<()> {
         let callback = InteractionCallback::update_layout(components);
-        self.client
-            .respond_interaction(&self.event.id, &self.event.token, &callback)
-            .await
+        self.respond(&callback).await
     }
 }
