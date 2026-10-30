@@ -1,47 +1,43 @@
 ---
 name: rappin
-description: Use the Rappin CLI or MCP tools to read Yapin servers, channels, messages and events, send requested bot replies, or manage Yapin bot resources. Applies to Yapin chat automation, not other chat platforms.
+description: "Operate Yapin through the Rappin CLI or MCP tools: discover servers and members, read messages, send requested replies, and consume events. Use for Yapin chat operations, not Rust bot development."
 ---
 
-Use the installed `rappin` command from any directory. Verify with `command -v rappin`
-and `rappin --json doctor --offline`. Set `YAPPER_BOT_TOKEN` through the environment;
-never print it or put it in process arguments. `rappin doctor` verifies auth/network.
-If missing, install from the Rappin checkout with `cargo install --path . --features cli,gateway,voice`.
+Use the installed `rappin` from any working directory. Start with
+`rappin doctor --offline` and `rappin capabilities`. If missing, install with
+`cargo install rappin-rs --features cli,gateway`. Configure `YAPPER_BOT_TOKEN` in
+the environment or `~/.config/rappin/config.toml`; never put credentials in arguments.
+`rappin doctor` checks authentication and the active API origin.
 
-Discover servers, resolve the requested channel in its server, then read context:
-
-```sh
-rappin --json servers list
-rappin --json channels resolve general --server "$SERVER_ID"
-rappin --json messages list "$CHANNEL_ID" --limit 25
-```
-
-Every command emits `{ok,data}` or `{ok:false,error}`. Inspect `ok` and preserve
-returned IDs. Name resolution errors on ambiguity; narrow to a server or use a UUID.
-Message continuation cursors are RFC3339 timestamps, not message IDs. Bound reads
-with `--limit` and `--max-pages`; reuse `next_cursor` with the returned direction.
-
-For a requested write, preview the exact content before executing it:
+Resolve the requested target, then read context before acting:
 
 ```sh
-rappin --dry-run messages send "$CHANNEL_ID" --content "Requested text"
-rappin messages send "$CHANNEL_ID" --content "Requested text" --reply-to "$MESSAGE_ID"
+rappin servers list
+rappin channels resolve general --server "$SERVER_ID"
+rappin messages list "$CHANNEL_ID" --limit 25 --max-items 10 --fields id,author_id,content,created_at
 ```
 
-Do not infer authorization for sending messages or moderation from read access.
-Honor authorization already given by the user; previews need no extra confirmation.
-Use `--body-file -` with piped JSON for complex payloads. Raw escape hatch:
-`rappin request GET "/servers/$SERVER_ID/roles"`. `rappin schema` exposes the full
-OpenAPI snapshot. CLI help lists the narrow write verbs.
+Inspect the `{ok,data}` / `{ok:false,error}` envelope, not just the exit code
+(doctor can succeed while reporting missing auth). Preserve returned IDs.
+Disambiguate names within a server. Message cursors are timestamps; member cursors
+are user UUIDs. Use `next_cursor` with its direction; server/channel output limits
+instead return `next_offset` for `--offset`.
 
-For events, poll with a saved cursor and acknowledge only after handling the complete
-batch. `after=0` starts from now. One consumer per cursor file; separate bots need
-separate files. Do not retry an ambiguous send without checking history: the API has
-no documented idempotency key. A permission failure needs changed permissions, not
-more retries. Voice playback is outbound only and requires the optional Node/ffmpeg
-runtime; `rappin voice --help` describes paths. `rappin mcp` exposes stdio tools when
-an MCP client is preferred. Supply its fixed state file at startup with
-`rappin mcp --cursor-file ./state/events.json`; tool calls cannot select local paths.
+For writes the user requested, `--dry-run` previews the payload. Existing user
+authorization carries forward; a preview does not create an extra approval step.
+Use `--body-file -` for JSON from stdin, and avoid shell interpolation of message
+contents. `rappin request METHOD /path` remains the explicit API escape hatch.
+Read [message workflows](references/messages.md) for rich payloads, MCP equivalents,
+and partial-send recovery. Read [event delivery](references/events.md) before
+polling and acknowledging a durable event stream.
 
-See the repository's `docs/agents.md` for JSON shapes, retry behavior, permissions,
-webhooks, OAuth PKCE, gateway fallback, migration details, and voice setup.
+MCP uses `rappin mcp --cursor-file PATH` with the state path chosen at startup.
+`rappin tools list` describes the same operations and schemas as MCP; invoke one
+from the CLI with `rappin tools call NAME --arguments-file -`. Rich bodies are
+inline MCP objects, never tool-selected filesystem paths. MCP responses include
+both structured results and a compatible text copy; consume one copy.
+
+Use `rappin schema --method POST --path '/channels/{id}/messages'` to inspect only
+one operation and its referenced definitions. The full API guide is at
+https://docs.rs/rappin-rs/latest/rappin/; these bundled references work without
+access to the Rappin source checkout.

@@ -34,7 +34,7 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.8"
+rappin-rs = "0.1.9"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -142,7 +142,9 @@ stdin. `rappin mcp` exposes discovery, history, messages, and explicit event
 acknowledgement as stdio MCP tools. `rappin schema` prints the bundled OpenAPI spec.
 
 See the [agent guide](docs/agents.md) for configuration and tool usage, or use the
-included [agent skill](skills/rappin/SKILL.md).
+included [operator skill](skills/rappin/SKILL.md). Skills for
+[building Rust bots](skills/rappin-bot-dev/SKILL.md) and
+[diagnosing failures](skills/rappin-diagnostics/SKILL.md) are also included.
 
 ## Optional features
 
@@ -162,6 +164,7 @@ The default library build needs neither Node nor the CLI dependencies.
 - [Transport and caching](docs/transport-and-cache.md): API hosts, retries, custom caches, and prefixes.
 - [Hot reloading](docs/hot-reloading.md): native cogs and reloadable Rust workers.
 - [Agent guide](docs/agents.md): CLI, MCP, credentials, OAuth, webhooks, and voice setup.
+- [CLI/MCP workflows](docs/cli-mcp.md): shared operations, bounded results, delivery receipts, and recovery.
 - [Changelog](CHANGELOG.md): release history and migration notes.
 
 Run the examples from a checkout with `YAPPER_BOT_TOKEN` set:

@@ -1299,22 +1299,21 @@ impl Client {
         if before.is_some() && after.is_some() {
             return Err(YappinError::validation("cursor", "choose before or after"));
         }
-        let mut query = url::form_urlencoded::Serializer::new(String::new());
-        if let Some(l) = limit {
-            query.append_pair("limit", &l.to_string());
-        }
-        if let Some(b) = before {
-            query.append_pair("before", &b.to_rfc3339());
-        }
-        if let Some(a) = after {
-            query.append_pair("after", &a.to_rfc3339());
-        }
-        self.request_json::<MessagesResponse, ()>(
-            Method::GET,
-            &format!("/channels/{channel_id}/messages?{}", query.finish()),
-            None,
-        )
-        .await
+        let path = {
+            let mut query = url::form_urlencoded::Serializer::new(String::new());
+            if let Some(l) = limit {
+                query.append_pair("limit", &l.to_string());
+            }
+            if let Some(b) = before {
+                query.append_pair("before", &b.to_rfc3339());
+            }
+            if let Some(a) = after {
+                query.append_pair("after", &a.to_rfc3339());
+            }
+            format!("/channels/{channel_id}/messages?{}", query.finish())
+        };
+        self.request_json::<MessagesResponse, ()>(Method::GET, &path, None)
+            .await
     }
 
     /// Fetches a single message by ID (`GET /channels/{id}/messages/{mid}`).

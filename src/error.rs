@@ -3,6 +3,14 @@ use thiserror::Error;
 /// The error type for operations in the `yappin` crate.
 #[derive(Debug, Error)]
 pub enum YappinError {
+    /// A multi-step write stopped after zero or more confirmed successes.
+    #[error("write failed at step {failed_step}: {source}")]
+    PartialWrite {
+        completed: Vec<serde_json::Value>,
+        failed_step: usize,
+        #[source]
+        source: Box<YappinError>,
+    },
     #[error(transparent)]
     Command(#[from] crate::commands::CommandError),
     #[error(transparent)]
@@ -48,6 +56,7 @@ impl YappinError {
     /// Returns the HTTP status code associated with this error, if available.
     pub fn status_code(&self) -> Option<u16> {
         match self {
+            Self::PartialWrite { source, .. } => source.status_code(),
             Self::Api { status, .. } => Some(*status),
             Self::Http(e) => e.status().map(|s| s.as_u16()),
             Self::Unauthorized => Some(401),
@@ -67,11 +76,17 @@ impl YappinError {
     /// assert!(err.is_rate_limit());
     /// ```
     pub fn is_rate_limit(&self) -> bool {
+        if let Self::PartialWrite { source, .. } = self {
+            return source.is_rate_limit();
+        }
         matches!(self, Self::RateLimited { .. }) || matches!(self, Self::Api { status: 429, .. })
     }
 
     /// Returns the suggested retry wait duration if this error was caused by a rate limit.
     pub fn retry_after(&self) -> Option<std::time::Duration> {
+        if let Self::PartialWrite { source, .. } = self {
+            return source.retry_after();
+        }
         let seconds = match self {
             Self::RateLimited { retry_after } => Some(*retry_after),
             Self::Api { retry_after, .. } => *retry_after,
@@ -89,6 +104,20 @@ impl YappinError {
 
     /// Stable JSON representation for agents. Transport URLs are intentionally omitted.
     pub fn to_json(&self) -> serde_json::Value {
+        if let Self::PartialWrite {
+            completed,
+            failed_step,
+            source,
+        } = self
+        {
+            let mut value = source.to_json();
+            value["cause_kind"] = value["kind"].clone();
+            value["kind"] = "partial_write".into();
+            value["completed_steps"] = serde_json::json!(completed);
+            value["failed_step"] = (*failed_step).into();
+            value["retry_safety"] = "do_not_replay_workflow".into();
+            return value;
+        }
         let kind = match self {
             Self::Command(_) => "command",
             Self::Wait(_) => "event_wait",
@@ -110,6 +139,27 @@ impl YappinError {
         if let Self::Validation { field, .. } = self {
             value["field"] = field.clone().into();
         }
+        let advised = self.retry_after().is_some() && matches!(self.status_code(), Some(429 | 503));
+        value["retry_safety"] = (if advised {
+            "server_advised"
+        } else if matches!(self, Self::Http(_) | Self::Json(_))
+            || self.status_code().is_some_and(|s| s >= 500)
+        {
+            "unknown_write_outcome"
+        } else {
+            "fix_request"
+        })
+        .into();
+        value["outcome"] = (if advised {
+            "not_applied"
+        } else if matches!(self, Self::Http(_) | Self::Json(_))
+            || self.status_code().is_some_and(|s| s >= 500)
+        {
+            "unknown"
+        } else {
+            "rejected"
+        })
+        .into();
         value
     }
 

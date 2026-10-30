@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.9 — 2026-10-29
+
+- Bind agent event acknowledgements to persisted delivery receipts. Replay pending batches, reject unseen/stale IDs, reconcile interrupted commits, and lock cursor files across processes. Numeric SDK checkpoints remain compatible; the explicit CLI `--force` recovery path is unavailable through MCP.
+- Run up to 16 MCP calls concurrently, correlate out-of-order responses, preserve partial input frames, and support read cancellation. Submitted writes finish rather than implying that cancellation undoes them.
+- Share the named operation catalog between MCP and `rappin tools`. Add member discovery, exact resource reads, rich message editing/sending, deletion, reactions and pins, with inline JSON bodies, structured results and output schemas.
+- Add offline capabilities and focused method/path schema lookup. Doctor reports the active API host and its own request timing/retries. Bound collection output by items, bytes or fields while retaining usable continuation boundaries and timestamp groups.
+- Return confirmed results and the failed step for interrupted split sends, with explicit retry/outcome information. Make message-history futures usable in spawned tasks.
+- Add portable operator, Rust bot-development and diagnostics skills, including a Rust starter.
+
+### Migration
+
+- MCP responses may arrive out of order; correlate them by JSON-RPC ID. Existing text results remain alongside structured output.
+- Cursor-setting scripts must poll for a receipt before acknowledging, or deliberately use the CLI-only recovery override. Keep receipt sidecars private.
+- Exhaustive matches on `YappinError` must handle `PartialWrite`. Existing single-send errors retain their original kind.
+
+See [CLI/MCP workflows](docs/cli-mcp.md) for contracts and recovery behavior.
+
 ## 0.1.8 — 2026-10-29
 
 - Use `bots.yapper.website` as the default REST host. Connection failures and HTTP 502/504 activate the website API for ten minutes. Only GET/HEAD can retry across hosts; ambiguous writes return their original error. Custom bases never fail over; `api_fallback(false)` pins the default host.

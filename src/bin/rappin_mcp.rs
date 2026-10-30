@@ -1,244 +1,237 @@
-//! MCP adapter intentionally reuses the CLI command parser and execution contract.
+//! Bounded concurrent stdio transport over the shared CLI operation catalog.
 use super::*;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-fn tool(
-    name: &str,
-    description: &str,
-    properties: Value,
-    required: Vec<&str>,
+use std::collections::HashMap;
+use tokio::{
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader},
+    sync::mpsc,
+    task::{AbortHandle, Id, JoinSet},
+};
+
+struct Job {
+    id: Value,
+    abort: AbortHandle,
     write: bool,
-) -> Value {
-    json!({"name":name,"description":description,"inputSchema":{"type":"object","properties":properties,"required":required,"additionalProperties":false},"annotations":{"readOnlyHint":!write,"destructiveHint":false,"openWorldHint":true}})
+    cancelled: bool,
 }
-fn tools() -> Vec<Value> {
-    vec![
-        tool(
-            "list_servers",
-            "List servers the bot can see",
-            json!({}),
-            vec![],
-            false,
-        ),
-        tool(
-            "list_channels",
-            "List visible channels, optionally in one server",
-            json!({"server":{"type":"string","format":"uuid"}}),
-            vec![],
-            false,
-        ),
-        tool(
-            "resolve_channel",
-            "Resolve a channel name; ambiguity returns an error",
-            json!({"name":{"type":"string"},"server":{"type":"string","format":"uuid"}}),
-            vec!["name"],
-            false,
-        ),
-        tool(
-            "read_messages",
-            "Read bounded history. Cursors are RFC3339 timestamps",
-            json!({"channel":{"type":"string","format":"uuid"},"limit":{"type":"integer","minimum":1,"maximum":100},"before":{"type":"string","format":"date-time"},"after":{"type":"string","format":"date-time"}}),
-            vec!["channel"],
-            false,
-        ),
-        tool(
-            "send_message",
-            "Send a message only when requested; use dry_run to preview",
-            json!({"channel":{"type":"string","format":"uuid"},"content":{"type":"string","maxLength":2000},"reply_to":{"type":"string","format":"uuid"},"dry_run":{"type":"boolean"}}),
-            vec!["channel", "content"],
-            true,
-        ),
-        tool(
-            "poll_events",
-            "Read events without acknowledging them; after=0 starts from now",
-            json!({"after":{"type":"integer","minimum":0},"wait":{"type":"integer","minimum":0,"maximum":25}}),
-            vec![],
-            false,
-        ),
-        tool(
-            "ack_events",
-            "Persist a watermark after handling every delivered event up to it",
-            json!({"id":{"type":"integer","minimum":0},"dry_run":{"type":"boolean"}}),
-            vec!["id"],
-            true,
-        ),
-    ]
+fn response(id: Value, result: Value) -> Value {
+    json!({"jsonrpc":"2.0","id":id,"result":result})
 }
-fn argv(name: &str, a: &Value) -> Result<Vec<String>> {
-    let string = |key: &str| {
-        a[key]
-            .as_str()
-            .map(String::from)
-            .ok_or_else(|| YappinError::validation(key, "required string"))
-    };
-    let mut args: Vec<String> = match name {
-        "list_servers" => vec!["servers".into(), "list".into()],
-        "list_channels" => vec!["channels".into(), "list".into()],
-        "resolve_channel" => vec!["channels".into(), "resolve".into(), string("name")?],
-        "read_messages" => vec!["messages".into(), "list".into(), string("channel")?],
-        "send_message" => vec![
-            "messages".into(),
-            "send".into(),
-            string("channel")?,
-            "--content".into(),
-            string("content")?,
-        ],
-        "poll_events" => vec!["events".into(), "poll".into()],
-        "ack_events" => vec![
-            "events".into(),
-            "ack".into(),
-            a["id"]
-                .as_u64()
-                .ok_or_else(|| YappinError::validation("id", "required unsigned integer"))?
-                .to_string(),
-        ],
-        _ => return Err(YappinError::validation("tool", "unknown tool")),
-    };
-    for key in match name {
-        "list_channels" | "resolve_channel" => vec!["server"],
-        "read_messages" => vec!["limit", "before", "after"],
-        "send_message" => vec!["reply_to"],
-        "poll_events" => vec!["after", "wait"],
-        "ack_events" => vec![],
-        _ => vec![],
-    } {
-        if let Some(value) = a.get(key) {
-            let value = value
-                .as_str()
-                .map(String::from)
-                .or_else(|| value.as_u64().map(|v| v.to_string()))
-                .ok_or_else(|| {
-                    YappinError::validation(key, "expected string or unsigned integer")
-                })?;
-            args.push(format!("--{}", key.replace('_', "-")));
-            args.push(value);
+fn error(id: Value, code: i32, message: &str) -> Value {
+    json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
+}
+async fn send(sender: &mpsc::Sender<Value>, value: Value) -> Result<()> {
+    sender
+        .send(value)
+        .await
+        .map_err(|_| YappinError::Config("MCP output closed".into()))
+}
+async fn frame<R: AsyncBufRead + Unpin>(reader: &mut R) -> std::io::Result<Option<Vec<u8>>> {
+    let mut result = Vec::new();
+    let mut oversized = false;
+    loop {
+        let chunk = reader.fill_buf().await?;
+        if chunk.is_empty() {
+            return Ok((!result.is_empty() || oversized).then_some(result));
+        }
+        let end = chunk.iter().position(|byte| *byte == b'\n');
+        let len = end.map_or(chunk.len(), |n| n + 1);
+        if !oversized {
+            if result.len() + len > 262144 {
+                oversized = true;
+                result.clear();
+            } else {
+                result.extend_from_slice(&chunk[..len]);
+            }
+        }
+        reader.consume(len);
+        if end.is_some() {
+            return Ok(Some(result));
         }
     }
-    Ok(args)
 }
-pub async fn serve(ctx: &Context, cursor: Option<&std::path::Path>) -> Result<()> {
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    let mut stdout = tokio::io::stdout();
-    while let Some(line) = lines.next_line().await? {
-        let request: Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => {
-                let response = json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}});
-                stdout.write_all(format!("{response}\n").as_bytes()).await?;
-                continue;
-            }
-        };
-        let Some(id) = request.get("id") else {
-            continue;
-        };
-        let result: std::result::Result<Value, (i32, &str)> = match request["method"].as_str() {
-            Some("initialize") => Ok(
-                json!({"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"rappin","version":env!("CARGO_PKG_VERSION")}}),
-            ),
-            Some("ping") => Ok(json!({})),
-            Some("tools/list") => Ok(json!({"tools":tools()})),
-            Some("tools/call") => {
-                // MCP permits omitting arguments; explicit null still fails validation.
-                let empty_arguments = json!({});
-                let a = request["params"]
-                    .get("arguments")
-                    .unwrap_or(&empty_arguments);
-                let name = request["params"]["name"].as_str().unwrap_or("");
-                let output: Result<Value> = async {
-                    validate_arguments(name, a)?;
-                    let mut args = vec!["rappin".to_owned()];
-                    args.extend(argv(name, a)?);
-                    if matches!(name, "poll_events" | "ack_events") {
-                        if let Some(path) = cursor {
-                            args.push("--cursor-file".into());
-                            args.push(
-                                path.to_str()
-                                    .ok_or_else(|| {
-                                        YappinError::Config("event cursor path must be UTF-8".into())
-                                    })?
-                                    .into(),
-                            );
-                        } else if name == "ack_events" {
-                            return Err(YappinError::Config(
-                                "start rappin mcp --cursor-file PATH to enable event acknowledgements"
-                                    .into(),
-                            ));
-                        }
-                    }
-                    let parsed = Args::try_parse_from(args).map_err(|_| {
-                        YappinError::validation(
-                            "arguments",
-                            "invalid tool arguments; inspect tools/list",
-                        )
-                    })?;
-                    let mut context = ctx.clone();
-                    context.dry |= a["dry_run"] == true;
-                    run(parsed, &context).await
-                }
-                .await;
-                let (failed, data) = match output {
-                    Ok(data) => (false, json!({"ok":true,"data":data})),
-                    Err(e) => (true, json!({"ok":false,"error":e.to_json()})),
-                };
-                let data = redact(data, ctx.token.as_deref());
-                Ok(json!({"isError":failed,"content":[{"type":"text","text":data.to_string()}]}))
-            }
-            _ => Err((-32601, "Method not found")),
-        };
-        let response = match result {
-            Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
-            Err((code, message)) => {
-                json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
-            }
-        };
-        stdout.write_all(format!("{response}\n").as_bytes()).await?;
-        stdout.flush().await?;
+async fn execute(request: Value, context: Context, cursor: Option<PathBuf>) -> Value {
+    let name = request["params"]["name"].as_str().unwrap_or("");
+    let empty = json!({});
+    let args = request["params"].get("arguments").unwrap_or(&empty);
+    let result = async {
+        let (args, ctx) = agent_catalog::prepare(name, args, &context, cursor.as_deref())?;
+        run(args, &ctx).await
     }
+    .await;
+    let (failed, data) = match result {
+        Ok(data) => (false, json!({"ok":true,"data":data})),
+        Err(error) => (
+            true,
+            json!({"ok":false,"error":error_json(&error,!agent_catalog::is_write(name))}),
+        ),
+    };
+    let data = redact(data, context.token.as_deref());
+    json!({"isError":failed,"structuredContent":data,"content":[{"type":"text","text":data.to_string()}]})
+}
+fn immediate(request: &Value, id: &Value) -> Option<Value> {
+    match request["method"].as_str() {
+        Some("initialize") => {
+            let requested = request["params"]["protocolVersion"]
+                .as_str()
+                .unwrap_or("2025-06-18");
+            let version = if matches!(requested, "2025-06-18" | "2025-11-25") {
+                requested
+            } else {
+                "2025-06-18"
+            };
+            Some(response(
+                id.clone(),
+                json!({"protocolVersion":version,"capabilities":{"tools":{}},"serverInfo":{"name":"rappin","version":env!("CARGO_PKG_VERSION")}}),
+            ))
+        }
+        Some("ping") => Some(response(id.clone(), json!({}))),
+        Some("tools/list") => Some(response(
+            id.clone(),
+            json!({"tools":agent_catalog::tools()}),
+        )),
+        Some("tools/call") => None,
+        _ => Some(error(id.clone(), -32601, "Method not found")),
+    }
+}
+async fn dispatch(
+    request: Value,
+    ctx: &Context,
+    cursor: Option<&std::path::Path>,
+    tasks: &mut JoinSet<Value>,
+    jobs: &mut HashMap<Id, Job>,
+    sender: &mpsc::Sender<Value>,
+) -> Result<()> {
+    if request["jsonrpc"] != "2.0" || !request["method"].is_string() {
+        return send(
+            sender,
+            error(
+                request.get("id").cloned().unwrap_or(Value::Null),
+                -32600,
+                "Invalid Request",
+            ),
+        )
+        .await;
+    }
+    if request["method"] == "notifications/cancelled" {
+        if let Some(id) = request["params"].get("requestId") {
+            for job in jobs.values_mut().filter(|job| &job.id == id && !job.write) {
+                job.cancelled = true;
+                job.abort.abort();
+            }
+        }
+        return Ok(());
+    }
+    let Some(id) = request.get("id").cloned() else {
+        return Ok(());
+    };
+    if !id.is_string() && id.as_i64().is_none() && id.as_u64().is_none() {
+        return send(
+            sender,
+            error(
+                Value::Null,
+                -32600,
+                "Request ID must be a string or integer",
+            ),
+        )
+        .await;
+    }
+    if jobs.values().any(|job| job.id == id) {
+        return send(sender, error(id, -32600, "Request ID is already in use")).await;
+    }
+    if let Some(value) = immediate(&request, &id) {
+        return send(sender, value).await;
+    }
+    if tasks.len() >= 16 {
+        return send(
+            sender,
+            error(
+                id,
+                -32000,
+                "Too many concurrent tool calls; retry after an active call completes",
+            ),
+        )
+        .await;
+    }
+    let write = agent_catalog::is_write(request["params"]["name"].as_str().unwrap_or(""));
+    let abort = tasks.spawn(execute(
+        request,
+        ctx.clone(),
+        cursor.map(std::path::Path::to_path_buf),
+    ));
+    jobs.insert(
+        abort.id(),
+        Job {
+            id,
+            abort,
+            write,
+            cancelled: false,
+        },
+    );
     Ok(())
 }
-
-fn validate_arguments(name: &str, args: &Value) -> Result<()> {
-    let definition = tools()
-        .into_iter()
-        .find(|t| t["name"] == name)
-        .ok_or_else(|| YappinError::validation("tool", "unknown tool"))?;
-    let object = args
-        .as_object()
-        .ok_or_else(|| YappinError::validation("arguments", "expected an object"))?;
-    let schema = &definition["inputSchema"];
-    for key in schema["required"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-    {
-        if !object.contains_key(key) {
-            return Err(YappinError::validation(key, "required argument"));
+pub async fn serve(ctx: &Context, cursor: Option<&std::path::Path>) -> Result<()> {
+    let (sender, mut receiver) = mpsc::channel::<Value>(32);
+    let writer = tokio::spawn(async move {
+        let mut stdout = tokio::io::stdout();
+        while let Some(value) = receiver.recv().await {
+            stdout.write_all(format!("{value}\n").as_bytes()).await?;
+            stdout.flush().await?;
         }
-    }
-    for (key, value) in object {
-        let field = schema["properties"].get(key).ok_or_else(|| {
-            YappinError::validation("arguments", "unknown argument; inspect tools/list")
-        })?;
-        let valid = match field["type"].as_str() {
-            Some("string") => value.is_string(),
-            Some("integer") => value.as_u64().is_some(),
-            Some("boolean") => value.is_boolean(),
-            _ => false,
-        };
-        if !valid {
-            return Err(YappinError::validation(key, "invalid argument type"));
-        }
-        if let Some(n) = value.as_u64() {
-            if field["minimum"].as_u64().is_some_and(|v| n < v)
-                || field["maximum"].as_u64().is_some_and(|v| n > v)
-            {
-                return Err(YappinError::validation(key, "argument out of bounds"));
+        Ok::<_, std::io::Error>(())
+    });
+    // A dedicated reader retains partial frames while tool tasks finish.
+    let (input_sender, mut input) = mpsc::channel(16);
+    let reader_task = tokio::spawn(async move {
+        let mut reader = BufReader::new(tokio::io::stdin());
+        loop {
+            match frame(&mut reader).await {
+                Ok(Some(line)) => {
+                    if input_sender.send(Ok(line)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    let _ = input_sender.send(Err(error)).await;
+                    break;
+                }
             }
         }
-        if field["format"] == "uuid" && value.as_str().is_some_and(|s| Uuid::parse_str(s).is_err())
-        {
-            return Err(YappinError::validation(key, "invalid UUID"));
+    });
+    let mut tasks = JoinSet::new();
+    let mut jobs: HashMap<Id, Job> = HashMap::new();
+    let mut eof = false;
+    while !eof || !tasks.is_empty() {
+        tokio::select! {
+            finished=tasks.join_next_with_id(),if !tasks.is_empty()=>{
+                match finished {
+                    Some(Ok((task_id,result))) => {
+                        if let Some(job)=jobs.remove(&task_id) {
+                            if !job.cancelled { send(&sender,response(job.id,result)).await?; }
+                        }
+                    }
+                    Some(Err(failure)) => {
+                        if let Some(job)=jobs.remove(&failure.id()) {
+                            if !job.cancelled { send(&sender,error(job.id,-32603,"tool execution failed")).await?; }
+                        }
+                    }
+                    None => (),
+                }
+            }
+            line=input.recv(),if !eof=>{
+                if let Some(line)=line {
+                    match serde_json::from_slice(&line?) {
+                        Ok(request)=>dispatch(request,ctx,cursor,&mut tasks,&mut jobs,&sender).await?,
+                        Err(_)=>send(&sender,error(Value::Null,-32700,"Parse error or frame exceeds 256 KiB")).await?,
+                    }
+                } else { eof=true; }
+            }
         }
     }
+    drop(sender);
+    reader_task.abort();
+    writer
+        .await
+        .map_err(|_| YappinError::Config("MCP writer stopped".into()))??;
     Ok(())
 }

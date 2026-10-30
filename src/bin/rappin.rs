@@ -6,6 +6,9 @@ use reqwest::Method;
 use serde_json::{json, Value};
 use std::{io::Read, path::PathBuf};
 use uuid::Uuid;
+mod agent_catalog;
+mod agent_events;
+mod agent_output;
 #[path = "rappin_mcp.rs"]
 mod mcp;
 
@@ -28,6 +31,17 @@ struct Args {
     /// TOML config; default ~/.config/rappin/config.toml.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
+    /// Select top-level item fields on collection reads; IDs/cursors are retained.
+    #[arg(long, global = true, value_delimiter = ',')]
+    fields: Vec<String>,
+    #[arg(long, global = true, value_parser=clap::value_parser!(u32).range(1..=10000))]
+    max_items: Option<u32>,
+    /// Maximum compact JSON envelope bytes on collection reads.
+    #[arg(long, global = true, value_parser=clap::value_parser!(u32).range(256..=4194304))]
+    max_bytes: Option<u32>,
+    /// Local list offset for servers/channels; API cursor reads use before/after.
+    #[arg(long, global = true, value_parser=clap::value_parser!(u32).range(0..=1000000))]
+    offset: Option<u32>,
     #[command(subcommand)]
     command: Command,
 }
@@ -45,7 +59,20 @@ enum Command {
         offline: bool,
     },
     /// Print the bundled OpenAPI spec, or one named component schema.
-    Schema { name: Option<String> },
+    Schema {
+        name: Option<String>,
+        #[arg(long, requires = "method", conflicts_with = "name")]
+        path: Option<String>,
+        #[arg(long, requires = "path", conflicts_with = "name")]
+        method: Option<String>,
+    },
+    /// Offline inventory of CLI commands, MCP tools, feature flags and contracts.
+    Capabilities,
+    /// Shared named operations used by both CLI and MCP.
+    Tools {
+        #[command(subcommand)]
+        action: Tools,
+    },
     /// List or fetch servers.
     Servers {
         #[command(subcommand)]
@@ -93,6 +120,17 @@ enum Command {
         sdk: PathBuf,
         #[arg(long)]
         node_modules: PathBuf,
+    },
+}
+#[derive(Subcommand)]
+enum Tools {
+    List,
+    Call {
+        name: String,
+        #[arg(long)]
+        arguments_file: PathBuf,
+        #[arg(long)]
+        cursor_file: Option<PathBuf>,
     },
 }
 #[derive(Subcommand)]
@@ -224,6 +262,11 @@ enum Events {
         id: u64,
         #[arg(long)]
         cursor_file: PathBuf,
+        #[arg(long)]
+        batch_id: Option<String>,
+        /// Operator recovery only; bypass delivery checks. Never exposed through MCP.
+        #[arg(long, conflicts_with = "batch_id")]
+        force: bool,
     },
 }
 #[derive(Subcommand)]
@@ -250,8 +293,16 @@ struct Context {
     source: &'static str,
     config_path: Option<PathBuf>,
     token: Option<String>,
+    inline_body: Option<Value>,
+    events: std::sync::Arc<tokio::sync::Mutex<()>>,
 }
 impl Context {
+    fn body(&self, path: &PathBuf) -> Result<Value> {
+        self.inline_body
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| input(path))
+    }
     fn client(&self) -> Result<&Client> {
         self.client
             .as_ref()
@@ -342,9 +393,26 @@ fn config(args: &Args) -> Result<Context> {
         source,
         config_path: path,
         token,
+        inline_body: None,
+        events: Default::default(),
     })
 }
 async fn run(args: Args, ctx: &Context) -> Result<Value> {
+    let key = agent_output::collection(&args.command);
+    let limits = agent_output::Limits {
+        fields: args.fields.clone(),
+        max_items: args.max_items.map(|n| n as usize),
+        max_bytes: args.max_bytes.map(|n| n as usize),
+        offset: args.offset.map(|n| n as usize),
+    };
+    agent_output::validate(&limits, key)?;
+    let result = run_inner(args, ctx).await?;
+    match key {
+        Some(key) => agent_output::apply(redact(result, ctx.token.as_deref()), key, &limits),
+        None => Ok(result),
+    }
+}
+async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
     match args.command {
         Command::Mcp { .. } => Err(YappinError::Config("start MCP with rappin mcp".into())),
         Command::Doctor { offline } => {
@@ -363,10 +431,34 @@ async fn run(args: Args, ctx: &Context) -> Result<Value> {
                     }
                 }
             }
+            if let Some(client) = &ctx.client {
+                v["active_base_url"] = client.active_base_url().into();
+                v["last_request"]=client.last_request().map(|r|json!({"method":r.method,"route":r.route,"status":r.status,"duration_ms":r.duration.as_secs_f64()*1000.0,"rate_limit_wait_ms":r.rate_limit_wait.as_secs_f64()*1000.0,"attempts":r.attempts})).unwrap_or(Value::Null);
+            }
             Ok(v)
         }
-        Command::Schema { name } => {
+        Command::Capabilities => Ok(agent_catalog::capabilities()),
+        Command::Tools { action } => match action {
+            Tools::List => Ok(json!({"tools":agent_catalog::tools()})),
+            Tools::Call {
+                name,
+                arguments_file,
+                cursor_file,
+            } => {
+                let (args, context) = agent_catalog::prepare(
+                    &name,
+                    &input(&arguments_file)?,
+                    ctx,
+                    cursor_file.as_deref(),
+                )?;
+                Box::pin(run(args, &context)).await
+            }
+        },
+        Command::Schema { name, path, method } => {
             let spec: Value = serde_json::from_str(include_str!("../../docs/openapi.json"))?;
+            if let (Some(path), Some(method)) = (path, method) {
+                return agent_catalog::endpoint_schema(&spec, &path, &method);
+            }
             match name {
                 Some(n) => spec["components"]["schemas"]
                     .get(&n)
@@ -400,7 +492,7 @@ async fn run(args: Args, ctx: &Context) -> Result<Value> {
             }
             Channels::Create { server, body_file } => {
                 let body: rappin::CreateChannelRequest =
-                    serde_json::from_value(input(&body_file)?)?;
+                    serde_json::from_value(ctx.body(&body_file)?)?;
                 ctx.request(
                     Method::POST,
                     &format!("/servers/{server}/channels"),
@@ -409,7 +501,8 @@ async fn run(args: Args, ctx: &Context) -> Result<Value> {
                 .await
             }
             Channels::Edit { id, body_file } => {
-                let body: rappin::EditChannelRequest = serde_json::from_value(input(&body_file)?)?;
+                let body: rappin::EditChannelRequest =
+                    serde_json::from_value(ctx.body(&body_file)?)?;
                 ctx.request(
                     Method::PATCH,
                     &format!("/channels/{id}"),
@@ -541,7 +634,7 @@ async fn run(args: Args, ctx: &Context) -> Result<Value> {
                 split,
             } => {
                 let mut message = match body_file {
-                    Some(p) => serde_json::from_value::<CreateMessage>(input(&p)?)?,
+                    Some(p) => serde_json::from_value::<CreateMessage>(ctx.body(&p)?)?,
                     None => CreateMessage::new(content.ok_or_else(|| {
                         YappinError::validation("content", "pass --content or --body-file")
                     })?),
@@ -563,17 +656,31 @@ async fn run(args: Args, ctx: &Context) -> Result<Value> {
                         "message cannot be empty",
                     ));
                 }
-                let mut sent = vec![];
-                for message in messages {
+                for message in &messages {
                     message.validate()?;
-                    sent.push(
-                        ctx.request(
+                }
+                let mut sent = vec![];
+                for (step, message) in messages.into_iter().enumerate() {
+                    match ctx
+                        .request(
                             Method::POST,
                             &format!("/channels/{channel}/messages"),
                             Some(serde_json::to_value(message)?),
                         )
-                        .await?,
-                    );
+                        .await
+                    {
+                        Ok(value) => sent.push(value),
+                        Err(source) => {
+                            if !split {
+                                return Err(source);
+                            }
+                            return Err(YappinError::PartialWrite {
+                                completed: sent,
+                                failed_step: step + 1,
+                                source: Box::new(source),
+                            });
+                        }
+                    }
                 }
                 Ok(json!({"messages":sent}))
             }
@@ -582,7 +689,7 @@ async fn run(args: Args, ctx: &Context) -> Result<Value> {
                 message,
                 body_file,
             } => {
-                let body: EditMessage = serde_json::from_value(input(&body_file)?)?;
+                let body: EditMessage = serde_json::from_value(ctx.body(&body_file)?)?;
                 body.validate()?;
                 ctx.request(
                     Method::PATCH,
@@ -648,34 +755,13 @@ async fn run(args: Args, ctx: &Context) -> Result<Value> {
                 cursor_file,
                 wait,
                 max_age,
-            } => {
-                let mut last = after;
-                if last.is_none() {
-                    if let Some(path) = &cursor_file {
-                        last = EventCursor::new(path).load().await?;
-                    }
-                }
-                let batch = ctx
-                    .client()?
-                    .get_events(last.or(Some(0)), Some(wait), max_age)
-                    .await?;
-                Ok(
-                    json!({"events":batch.events,"next_cursor":batch.last,"acknowledged":false,"cursor_file":cursor_file}),
-                )
-            }
-            Events::Ack { id, cursor_file } => {
-                let cursor = EventCursor::new(&cursor_file);
-                if cursor.load().await?.is_some_and(|old| old > id) {
-                    return Err(YappinError::validation(
-                        "id",
-                        "cannot move a cursor backwards",
-                    ));
-                }
-                if !ctx.dry {
-                    cursor.save(id).await?;
-                }
-                Ok(json!({"cursor_file":cursor_file,"last":id,"dry_run":ctx.dry}))
-            }
+            } => agent_events::poll(ctx, after, cursor_file.as_deref(), wait, max_age).await,
+            Events::Ack {
+                id,
+                cursor_file,
+                batch_id,
+                force,
+            } => agent_events::acknowledge(ctx, id, &cursor_file, batch_id.as_deref(), force).await,
         },
         Command::Dm { action } => match action {
             Dm::Open { user } => {
@@ -703,8 +789,12 @@ async fn run(args: Args, ctx: &Context) -> Result<Value> {
         } => {
             let method = Method::from_bytes(method.to_uppercase().as_bytes())
                 .map_err(|_| YappinError::validation("method", "invalid HTTP method"))?;
-            ctx.request(method, &path, body_file.as_ref().map(input).transpose()?)
-                .await
+            ctx.request(
+                method,
+                &path,
+                body_file.as_ref().map(|path| ctx.body(path)).transpose()?,
+            )
+            .await
         }
         #[cfg(feature = "voice")]
         Command::Voice {
@@ -728,6 +818,42 @@ async fn run(args: Args, ctx: &Context) -> Result<Value> {
             Ok(json!({"played":true}))
         }
     }
+}
+fn read_only(command: &Command) -> bool {
+    match command {
+        Command::Doctor { .. }
+        | Command::Capabilities
+        | Command::Schema { .. }
+        | Command::Servers { .. }
+        | Command::Members { .. }
+        | Command::Channels {
+            action: Channels::List { .. } | Channels::Get { .. } | Channels::Resolve { .. },
+        }
+        | Command::Messages {
+            action: Messages::List { .. } | Messages::Get { .. },
+        }
+        | Command::Events {
+            action: Events::Poll { .. },
+        } => true,
+        Command::Request { method, .. } => {
+            method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD")
+        }
+        Command::Tools {
+            action: Tools::List,
+        } => true,
+        Command::Tools {
+            action: Tools::Call { name, .. },
+        } => !agent_catalog::is_write(name),
+        _ => false,
+    }
+}
+fn error_json(error: &YappinError, read_only: bool) -> Value {
+    let mut value = error.to_json();
+    if read_only && value["retry_safety"] == "unknown_write_outcome" {
+        value["retry_safety"] = "safe_read".into();
+        value["outcome"] = "not_a_write".into();
+    }
+    value
 }
 // Keep optional reply construction local to the CLI.
 trait OptionalReply {
@@ -775,6 +901,7 @@ async fn main() {
         }
         return;
     }
+    let read_only = read_only(&args.command);
     let result = match &context {
         Ok(ctx) => run(args, ctx).await,
         Err(e) => Err(YappinError::Config(e.to_string())),
@@ -788,7 +915,7 @@ async fn main() {
             )
         ),
         Err(e) => {
-            let mut value = json!({"ok":false,"error":e.to_json()});
+            let mut value = json!({"ok":false,"error":error_json(&e,read_only)});
             value = redact(
                 value,
                 context.as_ref().ok().and_then(|ctx| ctx.token.as_deref()),

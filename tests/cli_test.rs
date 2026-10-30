@@ -170,8 +170,13 @@ fn mcp_state_is_fixed_at_startup_instead_of_tool_arguments() {
     writeln!(child.stdin.take().unwrap(),"{}",serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ack_events","arguments":{"id":42}}})).unwrap();
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), "42");
-    std::fs::remove_file(file).unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(result["result"]["isError"], true);
+    assert!(
+        !file.exists(),
+        "undelivered acknowledgements must not create checkpoints"
+    );
+    let _ = std::fs::remove_file(format!("{}.lock", file.display()));
     std::fs::remove_file(config).unwrap();
 }
 
@@ -210,11 +215,12 @@ async fn mcp_defaults_omitted_arguments_but_rejects_explicit_invalid_values() {
     drop(input);
     let output = child.wait_with_output().await.unwrap();
     assert!(output.status.success());
-    let replies: Vec<Value> = String::from_utf8(output.stdout)
+    let mut replies: Vec<Value> = String::from_utf8(output.stdout)
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
+    replies.sort_by_key(|value| value["id"].as_u64());
     assert_eq!(replies.len(), 6);
     for reply in &replies[1..3] {
         assert_eq!(reply["result"]["isError"], false);

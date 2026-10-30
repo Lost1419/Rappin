@@ -53,6 +53,8 @@ All commands emit JSON by default; `--json` documents that intent. Help/version 
 text. Output is one success envelope `{"ok":true,"data":...}` or one error envelope
 `{"ok":false,"error":{"kind":"validation","message":"...","field":"content","status":null,"retry_after":null}}`.
 Data is the API response unless a collection/workflow wrapper is described below.
+Collection reads support `--fields`, `--max-items`, and `--max-bytes`; see
+[bounded output](cli-mcp.md#bound-collection-output) for continuation semantics.
 Diagnostics go to stderr. The configured bot token is redacted from JSON strings.
 Exit codes: 0 success (including empty lists and doctor reports), 2 invalid input or
 configuration, 1 API/transport/I/O failure. No implicit confirmations or prompts.
@@ -71,7 +73,7 @@ rappin --json schema Message
 
 `schema` returns the bundled official OpenAPI snapshot; `schema Message` returns
 one component. The spec calls send/edit payloads inline rather than defining a
-`CreateMessage` component, so use `schema` to inspect those paths.
+`CreateMessage` component, so use `schema --method POST --path '/channels/{id}/messages'` to inspect the send operation.
 Name resolution rejects ambiguous names. Member resolution searches a bounded
 number of pages and reports no match within that scope; use a UUID for exact lookup.
 
@@ -103,7 +105,9 @@ Dry runs perform local typed validation and return the proposed method/path/body
 they need no token or network. Sends return `data.messages`, an array of API send
 responses (or dry-run requests). `--split` splits plain text on Unicode boundaries
 into messages of at most 2000 characters; each is a separate write. A later failure
-can leave earlier chunks posted: inspect history before resending a failed batch.
+returns confirmed `completed_steps`, a one-based `failed_step`, and the failed
+step’s outcome. Do not replay the full workflow; reconcile an unknown failed send
+before deliberately retrying it.
 The library's `split_message` and `send_long_message` expose the same operation.
 
 Use `{"embeds":null,"components":null}` to clear existing message fields. Omitted
@@ -137,31 +141,17 @@ history before retrying an ambiguous send; the API has no documented idempotency
 
 ```sh
 rappin events poll --after 0
-rappin events poll --after 1234 --wait 25
-rappin events ack 1234 --cursor-file ./state/events.json
 rappin events poll --cursor-file ./state/events.json --wait 25
+rappin events ack "$NEXT_CURSOR" --batch-id "$BATCH_ID" --cursor-file ./state/events.json
 ```
 
-Poll returns `events`, `next_cursor`, and `acknowledged:false`. It never commits a
-batch automatically. With no saved cursor or `--after`, 0 starts from now. Persist
-the returned watermark after handling **all** events up to it (including empty
-batches where the API skipped expired events). One owner per cursor file. Never
-reuse a file between different bot tokens. Cursor writes use atomic replacement.
-
-`EventConsumer` redelivers a pending batch until acknowledged and validates IDs
-against that batch. `Bot::builder(token).cursor_file(path).handler_concurrency(8)`
-waits for all batch handlers before checkpointing. A failed command/button stops
-the runner without advancing that batch. Restarting may replay successful siblings:
-handlers must tolerate duplicates. Set concurrency to 1 for ordered processing.
-`max_event_age` deliberately skips older events; the API also expires old commands
-and interactions. Bot listeners returning `()` must handle their own failures.
-Shutdown stops polling and drains the active batch; it waits for handlers to finish.
-
-With `gateway`, opt in through `.gateway(rappin::gateway::DEFAULT_GATEWAY)`.
-The transport identifies/resumes, maintains heartbeats, reconnects from the last
-handled ID and falls back to polling. Beta denial retries after 5 minutes; invalid
-auth stops. The same cursor works for both transports. Gateway event filters also apply
-to fallback polling; the bot builder uses all event types by default.
+Process the delivered batch before acknowledging it. Polls with a state file
+persist a receipt and replay unacknowledged events. Acknowledgements accept only
+delivered IDs or the returned watermark; partial acknowledgements rotate the
+receipt. Numeric checkpoints remain compatible with the Rust SDK. Receipt files
+contain raw event data and must remain private. The CLI recovery flag `--force`
+bypasses delivery checks only when explicitly selected; MCP cannot use it.
+See [event receipts and crash recovery](cli-mcp.md#event-receipts-and-checkpoints).
 
 ## Inbound and channel webhooks
 
@@ -191,17 +181,23 @@ validate the callback state. Tokens currently have no refresh-token flow.
 
 ## MCP
 
-Configure an MCP client with command `rappin`, args `["mcp"]`, and an environment
-containing `YAPPER_BOT_TOKEN`. The stdio server exposes server/channel discovery,
-channel resolution, bounded history, message sending, event polling and explicit
-acknowledgement. Configure a fixed cursor at process startup with
-`rappin mcp --cursor-file ./state/events.json`; tool arguments cannot choose local
-file paths. Without that option, acknowledgement is disabled. It uses newline-delimited JSON-RPC; stdout is protocol-only.
-Writes accept `dry_run:true`. Tool errors set `isError` and carry the CLI envelope.
-Since `0.1.6`, tool calls may omit `arguments` when no inputs are needed; explicit
-null or array arguments are invalid. Missing required fields and unknown arguments
-are rejected.
-Example configuration (supply the environment credential through your client):
+Configure a client with command `rappin`, args `["mcp"]`, and an environment
+containing `YAPPER_BOT_TOKEN`. For acknowledgements, start it with
+`rappin mcp --cursor-file ./state/events.json`; tools cannot choose local paths.
+Stdout is newline-delimited JSON-RPC only. Up to 16 calls execute concurrently;
+responses can arrive out of order. Read cancellation is supported, while submitted
+writes finish and return their result.
+
+The shared catalog includes discovery, members, bounded history, exact-message
+reads, rich send/edit, deletion, reactions, pins, events, schemas, and diagnostics.
+`rappin tools list` returns the same definitions; `rappin capabilities` describes
+the installed interface. Results have `structuredContent`, an output schema, and
+a compatible text copy of the CLI envelope. Tool errors set `isError`.
+
+Omitted arguments default to `{}`. Explicit null/arrays, unknown fields, invalid
+types, and out-of-range values are rejected. Writes accept `dry_run:true`.
+See [CLI/MCP workflows](cli-mcp.md) for operation names, inline bodies, bounded
+output, delivery receipts, cancellation, and partial-write recovery.
 
 ```json
 {"mcpServers":{"yapin":{"command":"rappin","args":["mcp"]}}}

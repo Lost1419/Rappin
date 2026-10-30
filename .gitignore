@@ -1,4 +1,5 @@
 /target
+/state/
 /.rappin-voice/
 /node_modules/
 /docs/advert.md
