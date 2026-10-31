@@ -10,6 +10,7 @@
 - Add a common `Api`/`ApiExt` interface for clients and native/worker contexts. Worker protocol v3 retains structured status, retry/outcome details and partial-write receipts while accepting v1/v2 workers. Command/button failures preserve their status instead of becoming configuration strings.
 - Add serializable runtime command schemas with bounded argument parsing, generated help and existing checks. Expose registration preflight for aliases, ownership and advertised-command limits; reject known cog conflicts before lifecycle hooks run.
 - Count HTTP executions and attempts independently of watch subscribers. Add sequenced attempt events with explicit lag reporting and account for cancelled calls/waits. Bounded member searches now distinguish unfinished scans from unique matches; CLI/MCP search tools expose candidates and completion.
+- Retry transient executable-busy errors during worker startup with a bounded 310 ms backoff. Other spawn failures remain immediate; the current cog stays installed until replacement succeeds.
 
 New optional model fields, invite enum variants, `Remote` and `IncompleteSearch` errors require updates to manual struct literals and exhaustive matches. Rebuild workers with the updated host. Bounded resolvers can now reject previously accepted but unproven matches. See [server management](docs/server-management.md) and [shared SDK workflows](docs/sdk-workflows.md) for examples and migration details.
 

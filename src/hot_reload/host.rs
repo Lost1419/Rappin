@@ -173,6 +173,72 @@ fn environment(command: &mut Process, build: bool) {
         }
     }
 }
+
+async fn spawn_worker(process: &mut Process) -> std::io::Result<Child> {
+    // Concurrent fork/exec and executable copying can temporarily leave a
+    // writable descriptor open on Linux. A failed spawn has executed no worker
+    // code, so retry only that specific OS error, for at most 310 ms of waits.
+    for attempt in 0..=5 {
+        match process.spawn() {
+            Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempt < 5 => {
+                tokio::time::sleep(Duration::from_millis(10 << attempt)).await;
+            }
+            result => return result,
+        }
+    }
+    unreachable!("the final spawn attempt always returns")
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn non_busy_spawn_errors_remain_errors() {
+        let missing = std::env::temp_dir().join(format!("rappin-missing-{}", uuid::Uuid::new_v4()));
+        let error = spawn_worker(&mut Process::new(missing)).await.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn executable_busy_retry_recovers_after_writer_closes_and_is_bounded() {
+        let directory =
+            std::env::temp_dir().join(format!("rappin-spawn-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let _cleanup = DirectoryCleanup(Some(directory.clone()));
+        let binary = directory.join("worker");
+        std::fs::copy("/bin/true", &binary).unwrap();
+        let writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&binary)
+            .unwrap();
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            drop(writer);
+        });
+        let mut process = Process::new(&binary);
+        process.kill_on_drop(true);
+        let mut child = tokio::time::timeout(Duration::from_secs(2), spawn_worker(&mut process))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(child.wait().await.unwrap().success());
+        release.await.unwrap();
+        let _writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&binary)
+            .unwrap();
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            spawn_worker(&mut Process::new(&binary)),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::ExecutableFileBusy);
+    }
+}
 struct Io {
     child: Option<Child>,
     input: Option<ChildStdin>,
@@ -233,7 +299,7 @@ impl Generation {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .kill_on_drop(true);
-            let mut child = process.spawn()?;
+            let mut child = spawn_worker(&mut process).await?;
             let pid = child.id();
             let input = child.stdin.take().ok_or_else(protocol::protocol_error)?;
             let mut output =

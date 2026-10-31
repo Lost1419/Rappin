@@ -447,6 +447,10 @@ async fn rust_worker_shares_api_errors_permissions_and_runtime_schemas() {
         tokio::fs::create_dir_all(project.0.join("target"))
             .await
             .unwrap();
+        // Cargo cannot use a dangling target-dir link on a fresh checkout.
+        tokio::fs::create_dir_all(Path::new(env!("CARGO_MANIFEST_DIR")).join("target/rappin-hot"))
+            .await
+            .unwrap();
         std::os::unix::fs::symlink(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("target/rappin-hot"),
             project.0.join("target/rappin-hot"),
