@@ -482,10 +482,7 @@ impl ValidatedOperation {
                 }
             }
             for check in &self.entry.permissions.additional_checks {
-                if matches!(
-                    check,
-                    ExternalCheck::CategoryScope | ExternalCheck::EventDestinationScope
-                ) {
+                if matches!(check, ExternalCheck::CategoryScope) {
                     continue;
                 }
                 self.policy_check(

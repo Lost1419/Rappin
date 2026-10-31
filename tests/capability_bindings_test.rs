@@ -478,6 +478,37 @@ async fn test_server_availability_is_unknown_until_host_evidence_exists() {
 }
 
 #[tokio::test]
+async fn verified_event_server_scope_does_not_imply_requester_destination_access() {
+    let api = MockApi {
+        request_grants: vec!["manage_events"],
+        bot_grants: vec!["manage_events"],
+        ..MockApi::standard()
+    };
+    let call = operation(
+        "create_server_event",
+        json!({"id":server(),"body":{"title":"Meeting","starts_at":"2027-01-01T12:00:00Z","channel_id":channel()}}),
+    );
+    let context = context().test_server_access(true);
+    let report = call.assess(&api, &context).await.unwrap();
+    assert_eq!(report.decision(), AccessDecision::Unknown);
+    for principal in [Principal::Requester, Principal::Bot] {
+        assert!(report.checks.iter().any(|c| c.principal == principal
+            && c.check == "event_destination_scope"
+            && c.decision == AccessDecision::Unknown));
+    }
+    assert!(call.execute(&api, &context).await.is_err());
+    assert_eq!(api.mutations.load(Ordering::SeqCst), 0);
+    assert!(call
+        .execute_with_policy(&api, &context, &HostEvidence::allow())
+        .await
+        .unwrap()
+        .authorization
+        .unwrap()
+        .allowed());
+    assert_eq!(api.mutations.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn mutations_are_not_replayed_and_partial_send_receipts_survive() {
     let api = MockApi {
         mutation_error: Some(503),

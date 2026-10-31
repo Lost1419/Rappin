@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.12 — 2026-10-31
+
+- Keep scheduled-event destination access separate from server-scope verification in capability bindings. Matching channel/server IDs do not establish requester or bot access; require host evidence for both principals before creation, with regression coverage.
+
 ## 0.1.11 — 2026-10-31
 
 - Move the 38-operation catalogue into the default-feature Rust library. CLI/MCP consume the same names, schemas, permission rules and availability metadata; filtered inventories can also validate incoming operation choices.

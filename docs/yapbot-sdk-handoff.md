@@ -74,7 +74,7 @@ async fn run_plan(api: &(impl Api + ?Sized), server: Uuid, requester: Uuid) -> R
 See [`examples/planner_bindings.rs`](../examples/planner_bindings.rs) for an
 offline executable and a permanent-command installation helper. Run
 `cargo run --example planner_bindings` to print capabilities without credentials.
-The library can be used as `rappin-rs = { version = "0.1.11", default-features = false }`.
+The library can be used as `rappin-rs = { version = "0.1.12", default-features = false }`.
 
 ## Authorization and scope
 
@@ -97,7 +97,9 @@ retains those fields for trusted bot workflows.
 Server permission bits are not proof of a requester's channel visibility or
 effective posting rights. The SDK records successful bot channel reads, but asks
 the host policy for other effective channel permissions, content rules, role
-hierarchy and grant/override authority. Test-server-only endpoints need a trusted
+hierarchy, grant/override authority and event-destination access. A channel being
+in the correct server does not establish either principal's access to it.
+Test-server-only endpoints need a trusted
 host availability fact (`test_server_access`) or policy evidence. Missing facts
 remain **unknown**, not implicitly allowed. Policies receive the exact principal,
 actor, server, channel, required permission names and canonical arguments.
@@ -128,6 +130,9 @@ to server-advised requests known not to have applied; uncertain writes are not
 automatically replayed. Split sends preserve completed results and the failed
 step through `PartialWrite`. Do not retry a complete feature/workflow after an
 unknown outcome or partial write.
+Event delivery remains at-least-once. YapBot should persist invocation/outcome
+receipts in its own storage and reconcile uncertain writes before re-executing
+a command after restart; the binding layer does not add durable deduplication.
 
 ## Permanent commands without patching info
 
