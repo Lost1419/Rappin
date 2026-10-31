@@ -40,10 +40,12 @@ Inline arguments are limited to 128 KiB.
 |---|---|
 | Discovery | `list_servers`, `get_server`, `list_channels`, `resolve_channel`, `get_channel` |
 | Members | `list_members`, `resolve_member`, `get_member` |
+| Name searches | `search_members`, `search_channels`: candidates plus complete/unique/ambiguous/incomplete status |
 | Messages | `read_messages`, `get_message`, `send_message`, `edit_message`, `delete_message` |
 | Message state | `add_reaction`, `remove_reaction`, `pin_message`, `unpin_message` |
 | Event delivery | `poll_events`, `ack_events` |
 | Diagnostics | `doctor`, `get_capabilities`, `get_schema` |
+| Server management | Role/permission writes, invites, counts and scheduled events; see [server management](server-management.md) for the full catalog and test-server restrictions |
 
 Writes support `dry_run`. Destructive annotations identify edits, deletion,
 removal and cursor acknowledgement. Annotations describe behavior and do not
@@ -60,7 +62,7 @@ rappin servers list --max-items 10 --offset 10
 ```
 
 MCP collection tools accept `max_items`, `max_bytes`, and comma-separated `fields`.
-Server/channel lists also accept `offset`. These controls apply only to collection
+Server/channel, role, invite, override and scheduled-event lists also accept `offset`. These controls apply only to collection
 reads; applying them to writes or event batches is rejected before execution.
 They bound returned data, not necessarily the provider response size or number of
 requests: set `limit`/`max_pages` to bound fetching.
@@ -78,7 +80,7 @@ messages. Responses report `returned_count` and `truncated`.
   that skips those records. The upstream API still has timestamp-only pagination;
   page-boundary ties in the provider itself remain a documented limitation.
 - Members continue after the last returned user ID.
-- Servers/channels use `next_offset` and `continuation_kind: client_offset`.
+- Servers/channels and the server-management lists use `next_offset` and `continuation_kind: client_offset`.
   This re-fetches the provider list; changes to it can shift offsets.
 
 ## Event receipts and checkpoints

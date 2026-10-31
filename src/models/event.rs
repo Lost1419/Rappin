@@ -134,6 +134,16 @@ impl Event {
                 }
             },
             "test" => Ok(EventData::Test(self.data.clone())),
+            "invite_create" | "invite_delete" => {
+                match serde::Deserialize::deserialize(&self.data) {
+                    Ok(ev) if self.kind == "invite_create" => Ok(EventData::InviteCreate(ev)),
+                    Ok(ev) => Ok(EventData::InviteDelete(ev)),
+                    Err(_) => Ok(EventData::Unknown {
+                        kind: self.kind.clone(),
+                        data: self.data.clone(),
+                    }),
+                }
+            }
             other => Ok(EventData::Unknown {
                 kind: other.to_string(),
                 data: self.data.clone(),
@@ -163,6 +173,8 @@ pub enum EventData {
     ReactionRemove(ReactionEvent),
     VoiceJoin(VoiceEvent),
     VoiceLeave(VoiceEvent),
+    InviteCreate(InviteEvent),
+    InviteDelete(InviteEvent),
     Test(serde_json::Value),
     Unknown {
         kind: String,
@@ -253,6 +265,18 @@ pub struct MemberJoinEvent {
     pub member_count: Option<u64>,
     #[serde(default)]
     pub joined_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub invite_code: Option<String>,
+    #[serde(default)]
+    pub inviter_id: Option<Uuid>,
+}
+
+/// Invite created/deleted events require Manage Server and test-server access.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InviteEvent {
+    pub server_id: Uuid,
+    #[serde(flatten)]
+    pub invite: super::Invite,
 }
 
 /// Data payload for `member_leave` events.

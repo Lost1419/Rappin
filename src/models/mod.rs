@@ -6,6 +6,7 @@ pub mod event;
 pub mod interaction;
 pub mod message;
 pub mod server;
+pub mod server_features;
 pub mod user;
 pub mod voice;
 
@@ -17,5 +18,6 @@ pub use event::*;
 pub use interaction::*;
 pub use message::*;
 pub use server::*;
+pub use server_features::*;
 pub use user::*;
 pub use voice::*;

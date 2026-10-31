@@ -230,8 +230,10 @@ accepts an EventFilter for other flows. Each wait is bounded to five minutes and
 also subject to WorkerProject's handler timeout, which includes queueing and API
 work. Waits count toward the 128 requests per invocation budget. In-flight old
 workers can finish their existing waits during reload; subscriptions do not migrate
-into the new process. Worker protocol v2 adds help/waits; the host still accepts
-v1 workers. Rebuild newer workers with a compatible host.
+into the new process. Worker protocol v3 adds structured errors and parent-owned
+permission lookups; the host still accepts v1/v2 workers. Rebuild newer workers
+with a compatible host. See [shared SDK workflows](sdk-workflows.md) for runtime
+command schemas, registration preflight and shared native/worker helpers.
 
 See [hot-reloading](hot-reloading.md) and `examples/hot_cog_worker.rs`. There is no
 JavaScript-style manager hierarchy, hidden resource fetching, general middleware

@@ -139,6 +139,10 @@ pub trait Cog: Send + Sync + 'static {
 
     /// Optional member leave hook.
     async fn on_member_leave(&self, _client: &Client, _event: &MemberLeaveEvent) {}
+    /// Optional invite-create listener (Manage Server; test servers only).
+    async fn on_invite_create(&self, _client: &Client, _event: &crate::InviteEvent) {}
+    /// Optional invite-delete listener (Manage Server; test servers only).
+    async fn on_invite_delete(&self, _client: &Client, _event: &crate::InviteEvent) {}
 }
 
 /// Builder for dynamically creating a [`Cog`] without implementing the full trait manually.
@@ -184,6 +188,10 @@ impl CogBuilder {
         Fut: Future<Output = crate::Result<()>> + Send + 'static,
     {
         self.registered.push(spec.bind(handler));
+        self
+    }
+    pub fn registered_command(mut self, command: crate::RegisteredCommand) -> Self {
+        self.registered.push(command);
         self
     }
 

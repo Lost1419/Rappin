@@ -341,13 +341,22 @@ async fn checks_refresh_membership_and_fail_closed_on_unassigned_roles() {
             200,
             json!({"server":{"id":server,"name":"server","owner_id":Uuid::new_v4()}}),
         ),
-        response(200, json!({"member":{"id":user,"username":"member","roles":[]}})),
         response(
             200,
-            json!({"roles":[{"id":role,"name":"unassigned","auto":"everyone","manage_messages":true}]}),
+            json!({"member":{"id":user,"username":"member","roles":[]}}),
         ),
-        response(200, json!({"member":{"id":user,"username":"member","roles":[role]}})),
-        response(200, json!({"member":{"id":user,"username":"member","roles":[]}})),
+        response(
+            200,
+            json!({"roles":[{"id":role,"name":"unassigned","auto":"bot","manage_messages":true}]}),
+        ),
+        response(
+            200,
+            json!({"member":{"id":user,"username":"member","roles":[role]}}),
+        ),
+        response(
+            200,
+            json!({"member":{"id":user,"username":"member","roles":[]}}),
+        ),
     ])
     .await;
     let client = Arc::new(

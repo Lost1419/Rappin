@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.10 — 2026-10-31
+
+- Add typed role create/edit/delete, @everyone permissions, channel/category overrides, live member counts, invite lists and scheduled-event APIs from the developer guide. Yapin currently restricts these endpoints to test servers.
+- Preserve online counts and invite attribution. Dispatch invite create/delete events to handlers, cogs, collectors and hot workers. Permission checks recognize the new role `permissions` dictionary, including explicit false values.
+- Expose 14 corresponding CLI/MCP operations with typed inline bodies, dry runs and bounded list output. Supplement schema discovery with clearly marked guide-derived definitions; refresh the upstream biography limit to 300 characters.
+- Invalidate member/role lookup caches after role and category-permission writes, including failed writes whose server outcome may be unknown. Custom cache backends retain ownership of storage and expiry.
+- Share server permission evaluation across command checks, arbitrary members and the bot. Handle owners, assigned Administrator grants, @everyone and permission-field precedence consistently; reject incomplete role snapshots. Native and worker lookups honor the configured cache backend.
+- Add a common `Api`/`ApiExt` interface for clients and native/worker contexts. Worker protocol v3 retains structured status, retry/outcome details and partial-write receipts while accepting v1/v2 workers. Command/button failures preserve their status instead of becoming configuration strings.
+- Add serializable runtime command schemas with bounded argument parsing, generated help and existing checks. Expose registration preflight for aliases, ownership and advertised-command limits; reject known cog conflicts before lifecycle hooks run.
+- Count HTTP executions and attempts independently of watch subscribers. Add sequenced attempt events with explicit lag reporting and account for cancelled calls/waits. Bounded member searches now distinguish unfinished scans from unique matches; CLI/MCP search tools expose candidates and completion.
+
+New optional model fields, invite enum variants, `Remote` and `IncompleteSearch` errors require updates to manual struct literals and exhaustive matches. Rebuild workers with the updated host. Bounded resolvers can now reject previously accepted but unproven matches. See [server management](docs/server-management.md) and [shared SDK workflows](docs/sdk-workflows.md) for examples and migration details.
+
 ## 0.1.9 — 2026-10-29
 
 - Bind agent event acknowledgements to persisted delivery receipts. Replay pending batches, reject unseen/stale IDs, reconcile interrupted commits, and lock cursor files across processes. Numeric SDK checkpoints remain compatible; the explicit CLI `--force` recovery path is unavailable through MCP.

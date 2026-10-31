@@ -331,10 +331,20 @@ impl Generation {
                             Ok(event) => Wire::EventResult {
                                 event: Some(Box::new(event)),
                                 error: None,
+                                structured_error: None,
                             },
                             Err(error) => Wire::EventResult {
                                 event: None,
-                                error: Some(error.to_string()),
+                                error: Some(
+                                    client
+                                        .worker_output(Value::String(error.to_string()))
+                                        .as_str()
+                                        .unwrap_or("event wait failed")
+                                        .into(),
+                                ),
+                                structured_error: Some(serde_json::from_value(
+                                    client.worker_output(error.to_json()),
+                                )?),
                             },
                         };
                         protocol::write(
@@ -343,10 +353,25 @@ impl Generation {
                         )
                         .await?;
                     }
-                    Wire::Done { error } => {
+                    Wire::Done {
+                        error,
+                        structured_error,
+                    } => {
                         io.poisoned = false;
+                        if let Some(error) = structured_error {
+                            let error: crate::RemoteError = serde_json::from_value(
+                                client.worker_output(serde_json::to_value(error)?),
+                            )?;
+                            return Err(error.into());
+                        }
                         return match error {
-                            Some(error) => Err(YappinError::Config(error)),
+                            Some(error) => Err(YappinError::Config(
+                                client
+                                    .worker_output(Value::String(error))
+                                    .as_str()
+                                    .unwrap_or("worker failed")
+                                    .into(),
+                            )),
                             None => Ok(()),
                         };
                     }
@@ -372,9 +397,13 @@ impl Generation {
                             Ok(value) => Wire::ApiResult {
                                 value: Some(client.worker_output(value)),
                                 error: None,
+                                structured_error: None,
                             },
                             Err(error) => Wire::ApiResult {
                                 value: None,
+                                structured_error: Some(serde_json::from_value(
+                                    client.worker_output(error.to_json()),
+                                )?),
                                 error: Some(
                                     client
                                         .worker_output(Value::String(error.to_string()))
@@ -382,6 +411,54 @@ impl Generation {
                                         .unwrap_or("API request failed")
                                         .into(),
                                 ),
+                            },
+                        };
+                        protocol::write(
+                            io.input.as_mut().ok_or_else(protocol::protocol_error)?,
+                            &message,
+                        )
+                        .await?;
+                    }
+                    Wire::Permissions {
+                        server,
+                        actor,
+                        prefer_cache,
+                    } => {
+                        calls += 1;
+                        if calls > 128 {
+                            return Err(YappinError::Config(
+                                "worker exceeded 128 requests per event".into(),
+                            ));
+                        }
+                        let result = crate::Api::permission_snapshot(
+                            client,
+                            server,
+                            actor,
+                            if prefer_cache {
+                                crate::Freshness::PreferCache
+                            } else {
+                                crate::Freshness::Refresh
+                            },
+                        )
+                        .await;
+                        let message = match result {
+                            Ok(snapshot) => Wire::ApiResult {
+                                value: Some(client.worker_output(serde_json::to_value(snapshot)?)),
+                                error: None,
+                                structured_error: None,
+                            },
+                            Err(error) => Wire::ApiResult {
+                                value: None,
+                                error: Some(
+                                    client
+                                        .worker_output(Value::String(error.to_string()))
+                                        .as_str()
+                                        .unwrap_or("permission lookup failed")
+                                        .into(),
+                                ),
+                                structured_error: Some(serde_json::from_value(
+                                    client.worker_output(error.to_json()),
+                                )?),
                             },
                         };
                         protocol::write(
@@ -537,6 +614,26 @@ impl Cog for ProcessCog {
         self.listen(
             Listener::MemberLeave,
             CogEvent::MemberLeave {
+                event: event.clone(),
+            },
+            client,
+        )
+        .await;
+    }
+    async fn on_invite_create(&self, client: &Client, event: &crate::InviteEvent) {
+        self.listen(
+            Listener::InviteCreate,
+            CogEvent::InviteCreate {
+                event: event.clone(),
+            },
+            client,
+        )
+        .await;
+    }
+    async fn on_invite_delete(&self, client: &Client, event: &crate::InviteEvent) {
+        self.listen(
+            Listener::InviteDelete,
+            CogEvent::InviteDelete {
                 event: event.clone(),
             },
             client,

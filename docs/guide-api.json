@@ -1,0 +1,575 @@
+{
+  "source": "https://www.yapin.gg/developers",
+  "checked": "2026-10-31",
+  "paths": {
+    "/servers/{id}/counts": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "summary": "Live member and online counts; ask every few minutes",
+        "description": "In testing: test servers only. See the Yapin developer guide; these operations are not yet in the upstream OpenAPI file.",
+        "x-rappin-source": "https://www.yapin.gg/developers",
+        "x-yapin-test-servers-only": true,
+        "responses": {
+          "200": {
+            "description": "Success; response fields are documented in the developer guide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{id}/invites": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "summary": "List invites (Manage Server)",
+        "description": "In testing: test servers only. See the Yapin developer guide; these operations are not yet in the upstream OpenAPI file.",
+        "x-rappin-source": "https://www.yapin.gg/developers",
+        "x-yapin-test-servers-only": true,
+        "responses": {
+          "200": {
+            "description": "Success; response fields are documented in the developer guide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{id}/roles": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "post": {
+        "summary": "Create a role (Manage Roles)",
+        "description": "In testing: test servers only. See the Yapin developer guide; these operations are not yet in the upstream OpenAPI file.",
+        "x-rappin-source": "https://www.yapin.gg/developers",
+        "x-yapin-test-servers-only": true,
+        "responses": {
+          "200": {
+            "description": "Success; response fields are documented in the developer guide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "color": {
+                    "type": "string"
+                  },
+                  "mentionable": {
+                    "type": "boolean"
+                  },
+                  "permissions": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{id}/roles/{rid}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "rid",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "patch": {
+        "summary": "Patch role fields and supplied permission keys",
+        "description": "In testing: test servers only. See the Yapin developer guide; these operations are not yet in the upstream OpenAPI file.",
+        "x-rappin-source": "https://www.yapin.gg/developers",
+        "x-yapin-test-servers-only": true,
+        "responses": {
+          "200": {
+            "description": "Success; response fields are documented in the developer guide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "color": {
+                    "type": "string"
+                  },
+                  "mentionable": {
+                    "type": "boolean"
+                  },
+                  "permissions": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "boolean"
+                    }
+                  },
+                  "position": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a role (Manage Roles)",
+        "description": "In testing: test servers only. See the Yapin developer guide; these operations are not yet in the upstream OpenAPI file.",
+        "x-rappin-source": "https://www.yapin.gg/developers",
+        "x-yapin-test-servers-only": true,
+        "responses": {
+          "200": {
+            "description": "Success; response fields are documented in the developer guide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{id}/roles/everyone": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "patch": {
+        "summary": "Patch everyone permissions",
+        "description": "In testing: test servers only. See the Yapin developer guide; these operations are not yet in the upstream OpenAPI file.",
+        "x-rappin-source": "https://www.yapin.gg/developers",
+        "x-yapin-test-servers-only": true,
+        "responses": {
+          "200": {
+            "description": "Success; response fields are documented in the developer guide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "permissions": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "required": [
+                  "permissions"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channels/{id}/permissions": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "summary": "List channel overrides",
+        "description": "In testing: test servers only. See the Yapin developer guide; these operations are not yet in the upstream OpenAPI file.",
+        "x-rappin-source": "https://www.yapin.gg/developers",
+        "x-yapin-test-servers-only": true,
+        "responses": {
+          "200": {
+            "description": "Success; response fields are documented in the developer guide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channels/{id}/permissions/{role}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "role",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Role UUID or everyone"
+          }
+        }
+      ],
+      "put": {
+        "summary": "Replace an override (Manage Roles or Manage Channels)",
+        "description": "In testing: test servers only. See the Yapin developer guide; these operations are not yet in the upstream OpenAPI file.",
+        "x-rappin-source": "https://www.yapin.gg/developers",
+        "x-yapin-test-servers-only": true,
+        "responses": {
+          "200": {
+            "description": "Success; response fields are documented in the developer guide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "allow": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "deny": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Clear an override (Manage Roles or Manage Channels)",
+        "description": "In testing: test servers only. See the Yapin developer guide; these operations are not yet in the upstream OpenAPI file.",
+        "x-rappin-source": "https://www.yapin.gg/developers",
+        "x-yapin-test-servers-only": true,
+        "responses": {
+          "200": {
+            "description": "Success; response fields are documented in the developer guide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{id}/categories/{cid}/permissions/{role}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "cid",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "role",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "description": "Role UUID or everyone"
+          }
+        }
+      ],
+      "put": {
+        "summary": "Replace an override (Manage Roles or Manage Channels)",
+        "description": "In testing: test servers only. See the Yapin developer guide; these operations are not yet in the upstream OpenAPI file.",
+        "x-rappin-source": "https://www.yapin.gg/developers",
+        "x-yapin-test-servers-only": true,
+        "responses": {
+          "200": {
+            "description": "Success; response fields are documented in the developer guide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "allow": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "deny": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Clear an override (Manage Roles or Manage Channels)",
+        "description": "In testing: test servers only. See the Yapin developer guide; these operations are not yet in the upstream OpenAPI file.",
+        "x-rappin-source": "https://www.yapin.gg/developers",
+        "x-yapin-test-servers-only": true,
+        "responses": {
+          "200": {
+            "description": "Success; response fields are documented in the developer guide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/servers/{id}/events": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "summary": "List upcoming and live events",
+        "description": "In testing: test servers only. See the Yapin developer guide; these operations are not yet in the upstream OpenAPI file.",
+        "x-rappin-source": "https://www.yapin.gg/developers",
+        "x-yapin-test-servers-only": true,
+        "responses": {
+          "200": {
+            "description": "Success; response fields are documented in the developer guide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a scheduled event (Manage Events or Manage Server)",
+        "description": "In testing: test servers only. See the Yapin developer guide; these operations are not yet in the upstream OpenAPI file.",
+        "x-rappin-source": "https://www.yapin.gg/developers",
+        "x-yapin-test-servers-only": true,
+        "responses": {
+          "200": {
+            "description": "Success; response fields are documented in the developer guide.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "starts_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "ends_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "channel_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "location": {
+                    "type": "string"
+                  },
+                  "announce_channel_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "repeat": {
+                    "enum": [
+                      "none",
+                      "weekly"
+                    ]
+                  },
+                  "tz": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title",
+                  "starts_at"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

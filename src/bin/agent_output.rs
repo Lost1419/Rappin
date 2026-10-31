@@ -17,6 +17,24 @@ impl Limits {
 }
 pub fn collection(command: &Command) -> Option<&'static str> {
     match command {
+        Command::Channels {
+            action: Channels::Search { .. },
+        }
+        | Command::Members {
+            action: Members::Search { .. },
+        } => Some("matches"),
+        Command::Servers {
+            action: Servers::Invites { .. },
+        } => Some("invites"),
+        Command::Servers {
+            action: Servers::Roles { .. },
+        } => Some("roles"),
+        Command::Servers {
+            action: Servers::ScheduledEvents { .. },
+        } => Some("events"),
+        Command::Channels {
+            action: Channels::Permissions { .. },
+        } => Some("overrides"),
         Command::Servers {
             action: Servers::List,
         } => Some("servers"),
@@ -42,7 +60,7 @@ pub fn validate(limits: &Limits, key: Option<&str>) -> Result<()> {
             "output limits apply only to collection reads",
         ));
     }
-    if limits.offset.is_some() && !matches!(key, Some("servers" | "channels")) {
+    if limits.offset.is_some() && matches!(key, Some("messages" | "members")) {
         return Err(YappinError::validation(
             "offset",
             "use API cursors for messages and members",
@@ -135,12 +153,12 @@ pub fn apply(mut data: Value, key: &str, limits: &Limits) -> Result<Value> {
                     return item.clone();
                 }
                 let mut fields = serde_json::Map::new();
-                for name in limits
-                    .fields
-                    .iter()
-                    .map(String::as_str)
-                    .chain(["id", "created_at"])
-                {
+                for name in limits.fields.iter().map(String::as_str).chain([
+                    "id",
+                    "created_at",
+                    "code",
+                    "role_id",
+                ]) {
                     if let Some(value) = item.get(name) {
                         fields.insert(name.into(), value.clone());
                     }
@@ -180,7 +198,7 @@ pub fn apply(mut data: Value, key: &str, limits: &Limits) -> Result<Value> {
                 .map(|item| item["id"].clone())
                 .unwrap_or(Value::Null);
             out["may_have_more"] = true.into();
-        } else if matches!(key, "servers" | "channels") {
+        } else if !matches!(key, "members" | "messages") {
             out["next_offset"] = if cut {
                 json!(offset + count)
             } else {

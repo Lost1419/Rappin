@@ -105,22 +105,31 @@ pub mod validation;
 pub mod voice;
 pub mod webhook;
 
+pub mod api;
+pub mod lookup;
+pub use lookup::{LookupResult, LookupStatus, SearchStop};
+pub mod permissions;
+pub use api::{Api, ApiExt};
+pub use permissions::{PermissionEvaluation, PermissionSnapshot};
+
 pub use bot::{
     Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventHandler,
-    InteractionContext, MessageContext,
+    InteractionContext, MessageContext, RegistrationPlan,
 };
 pub use cache::{Cache, CachePolicy, Cached, Freshness, LookupCache};
 pub use client::{Client, ClientBuilder};
 pub use collectors::{Collectible, Collector, CollectorBuilder, EventFilter, EventHub, WaitError};
 pub use commands::{
-    check_fn, ArgumentInfo, Arguments, BoundedU32, ChannelId, Check, CommandCheck, CommandError,
-    CommandInfo, CommandSpec, FromArgs, HumanDuration, Permission, RegisteredCommand, UserId,
+    check_fn, ArgumentInfo, ArgumentSchema, ArgumentType, Arguments, BoundedU32, ChannelId, Check,
+    CommandCheck, CommandError, CommandInfo, CommandSchema, CommandSpec, CommandValues,
+    DynamicCommandSpec, FromArgs, HumanDuration, Permission, RegisteredCommand, UserId,
 };
 pub use cooldown::{Cooldown, CooldownType};
 pub use diagnostics::{
-    EventTransport, FallbackReason, RequestObservation, TransportMode, TransportStatus,
+    EventTransport, FallbackReason, RequestEvent, RequestMetrics, RequestObservation,
+    TransportMode, TransportStatus,
 };
-pub use error::{Result, YappinError};
+pub use error::{RemoteError, Result, YappinError};
 pub use interactions::{InteractionState, ResponsePhase};
 pub use models::*;
 pub use oauth2::{OAuth2Client, OAuth2Token, OAuth2User, Pkce};
@@ -135,7 +144,7 @@ pub use webhook::{WebhookClient, WebhookInfo, WebhookMessage};
 pub mod prelude {
     pub use crate::bot::{
         Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventHandler,
-        InteractionContext, MessageContext,
+        InteractionContext, MessageContext, RegistrationPlan,
     };
     pub use crate::client::{Client, ClientBuilder};
     pub use crate::cooldown::{Cooldown, CooldownType};
@@ -157,10 +166,12 @@ pub mod prelude {
     pub use crate::validation::split_message;
     pub use crate::webhook::{WebhookClient, WebhookInfo, WebhookMessage};
     pub use crate::{
-        check_fn, ArgumentInfo, Arguments, BoundedU32, Cache, CachePolicy, Cached, ChannelId,
-        Check, Collector, CommandCheck, CommandError, CommandSpec, EventFilter, EventHub,
+        check_fn, Api, ApiExt, ArgumentInfo, ArgumentSchema, ArgumentType, Arguments, BoundedU32,
+        Cache, CachePolicy, Cached, ChannelId, Check, Collector, CommandCheck, CommandError,
+        CommandSchema, CommandSpec, CommandValues, DynamicCommandSpec, EventFilter, EventHub,
         EventTransport, Freshness, FromArgs, HumanDuration, InteractionState, LookupCache,
-        Permission, ResponsePhase, TransportMode, TransportStatus, UserId, WaitError,
+        Permission, PermissionEvaluation, PermissionSnapshot, ResponsePhase, TransportMode,
+        TransportStatus, UserId, WaitError,
     };
 }
 
@@ -172,3 +183,9 @@ pub use hot_reload::{CogEvent, HotReload, Listener, WorkerCog, WorkerContext, Wo
 
 #[doc = include_str!("../docs/transport-and-cache.md")]
 pub mod transport_and_cache_guide {}
+
+#[doc = include_str!("../docs/server-management.md")]
+pub mod server_management_guide {}
+
+#[doc = include_str!("../docs/sdk-workflows.md")]
+pub mod sdk_workflows_guide {}

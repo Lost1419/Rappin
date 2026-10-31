@@ -45,6 +45,7 @@ async fn test_cache_servers_and_channels() {
         icon_path: None,
         owner_id: Uuid::new_v4(),
         member_count: Some(42),
+        online_count: None,
     };
     let s2 = Server {
         id: Uuid::new_v4(),
@@ -52,6 +53,7 @@ async fn test_cache_servers_and_channels() {
         icon_path: None,
         owner_id: Uuid::new_v4(),
         member_count: Some(10),
+        online_count: None,
     };
     cache.update_servers(vec![s1.clone(), s2.clone()]).await;
 

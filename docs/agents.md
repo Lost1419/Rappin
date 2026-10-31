@@ -198,6 +198,8 @@ Omitted arguments default to `{}`. Explicit null/arrays, unknown fields, invalid
 types, and out-of-range values are rejected. Writes accept `dry_run:true`.
 See [CLI/MCP workflows](cli-mcp.md) for operation names, inline bodies, bounded
 output, delivery receipts, cancellation, and partial-write recovery.
+See [server management](server-management.md) for the new role/permission,
+invite, count and scheduled-event tools, which currently require test-server access.
 
 ```json
 {"mcpServers":{"yapin":{"command":"rappin","args":["mcp"]}}}

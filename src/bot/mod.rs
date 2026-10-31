@@ -37,6 +37,15 @@ struct CommandRegistry {
     routes: HashMap<String, CommandDef>,
     roots: std::collections::HashSet<String>,
 }
+
+/// An advisory plan, not a reservation. Installation revalidates under the
+/// registry update lock because other tasks can change routes after preflight.
+#[derive(Debug, Clone)]
+pub struct RegistrationPlan {
+    pub advertised: Vec<Command>,
+    pub routes: Vec<String>,
+    pub replacing_cog: Option<String>,
+}
 impl CommandRegistry {
     fn new(routes: HashMap<String, CommandDef>) -> Self {
         let mut registry = Self {
@@ -102,6 +111,7 @@ fn insert_registered(
     command: crate::commands::RegisteredCommand,
     cog_name: Option<String>,
 ) -> Result<()> {
+    command.info.validate()?;
     let mut names = vec![command.info.name.clone()];
     names.extend(command.info.aliases.clone());
     let mut unique = std::collections::HashSet::new();
@@ -302,6 +312,61 @@ impl BotHandle {
         self.install_cog(Arc::new(cog), true, None).await
     }
 
+    /// Validate runtime definitions and ownership before an application action
+    /// (such as a database write). Does not run checks, handlers, lifecycle hooks or HTTP.
+    pub async fn preflight_commands(
+        &self,
+        commands: &[crate::CommandInfo],
+        replacing_cog: Option<&str>,
+    ) -> Result<RegistrationPlan> {
+        let _update = self.inner.registry_update.lock().await;
+        let mut planned = self.inner.commands.read().await.routes.clone();
+        if let Some(name) = replacing_cog {
+            if name.is_empty() {
+                return Err(YappinError::validation("cog.name", "must not be empty"));
+            }
+            planned.retain(|_, c| c.cog_name.as_deref() != Some(name));
+        }
+        for info in commands {
+            insert_registered(
+                &mut planned,
+                crate::RegisteredCommand {
+                    info: info.clone(),
+                    handler: Arc::new(|_| Box::pin(async { Ok(()) })),
+                },
+                replacing_cog.map(str::to_owned),
+            )?;
+        }
+        let advertised = advertised_commands(&planned)?;
+        let mut routes = planned.keys().cloned().collect::<Vec<_>>();
+        routes.sort();
+        Ok(RegistrationPlan {
+            advertised,
+            routes,
+            replacing_cog: replacing_cog.map(str::to_owned),
+        })
+    }
+
+    /// Check a cog's currently exposed definitions before its on_load hook.
+    /// Cogs that build definitions in on_load are checked again before publication.
+    pub async fn preflight_cog(&self, cog: &dyn Cog) -> Result<RegistrationPlan> {
+        if cog.name().is_empty() {
+            return Err(YappinError::validation("cog.name", "must not be empty"));
+        }
+        let mut infos = cog
+            .commands()
+            .into_iter()
+            .map(|c| crate::CommandInfo {
+                name: c.name,
+                description: c.description,
+                aliases: vec![],
+                arguments: vec![],
+            })
+            .collect::<Vec<_>>();
+        infos.extend(cog.registered_commands().into_iter().map(|c| c.info));
+        self.preflight_commands(&infos, Some(cog.name())).await
+    }
+
     async fn install_cog(
         &self,
         cog: Arc<dyn Cog>,
@@ -312,6 +377,7 @@ impl BotHandle {
         if name.is_empty() {
             return Err(YappinError::validation("cog.name", "must not be empty"));
         }
+        self.preflight_cog(cog.as_ref()).await?;
         cog.on_load(self.client()).await?;
         let result: Result<Option<Arc<dyn Cog>>> = async {
             // Preserve native cogs that initialize their route metadata in on_load.
@@ -604,6 +670,14 @@ impl BotBuilder {
             }
             Ok(())
         })
+    }
+
+    /// Installs an erased typed or runtime-schema command on the builder.
+    pub fn registered_command(mut self, command: crate::RegisteredCommand) -> Self {
+        if let Err(error) = insert_registered(&mut self.commands, command, None) {
+            self.definition_error = Some(error.to_string());
+        }
+        self
     }
 
     /// Registers a command with a name, description, and async handler.
@@ -1123,6 +1197,32 @@ impl Bot {
                     h.on_test(self.handle.client(), &val).await;
                 }
             }
+            EventData::InviteCreate(ev) | EventData::InviteDelete(ev) => {
+                let created = event.kind == "invite_create";
+                if let Some(ref h) = self.handle.inner.event_handler {
+                    if created {
+                        h.on_invite_create(self.handle.client(), &ev).await;
+                    } else {
+                        h.on_invite_delete(self.handle.client(), &ev).await;
+                    }
+                }
+                let cogs: Vec<_> = self
+                    .handle
+                    .inner
+                    .cogs
+                    .read()
+                    .await
+                    .values()
+                    .cloned()
+                    .collect();
+                for cog in cogs {
+                    if created {
+                        cog.on_invite_create(self.handle.client(), &ev).await;
+                    } else {
+                        cog.on_invite_delete(self.handle.client(), &ev).await;
+                    }
+                }
+            }
             EventData::Unknown { kind, data } => {
                 debug!("Received unhandled event type: {}", kind);
                 if let Some(ref h) = self.handle.inner.event_handler {
@@ -1238,7 +1338,7 @@ impl Bot {
                 };
                 if allow {
                     if let Err(e) = handler(ctx.clone()).await {
-                        if matches!(e, YappinError::Command(_)) {
+                        if e.is_command_error() {
                             let text = format!(
                                 "{}{}",
                                 e,
@@ -1251,13 +1351,13 @@ impl Bot {
                         }
                         let message = e.to_string();
                         if let Some(on_err) = &self.handle.inner.command_error_handler {
+                            let returned = e.to_remote();
                             on_err(ctx.clone(), e).await;
+                            return Err(returned.into());
                         } else {
                             error!("Command /{cmd_name} failed: {message}");
                         }
-                        return Err(YappinError::Config(format!(
-                            "command /{cmd_name} failed: {message}"
-                        )));
+                        return Err(e);
                     }
                 }
             }
@@ -1301,13 +1401,13 @@ impl Bot {
             if let Err(e) = handler(ctx.clone()).await {
                 let message = e.to_string();
                 if let Some(on_err) = &self.handle.inner.button_error_handler {
+                    let returned = e.to_remote();
                     on_err(ctx.clone(), e).await;
+                    return Err(returned.into());
                 } else {
                     error!("Button handler failed: {message}");
                 }
-                return Err(YappinError::Config(format!(
-                    "button handler failed: {message}"
-                )));
+                return Err(e);
             }
         }
         if let Some(h) = &self.handle.inner.event_handler {

@@ -106,6 +106,138 @@ fn cleanup(path: &Path) {
 }
 
 #[tokio::test]
+async fn developer_update_tools_preview_typed_payloads_and_reject_path_targets() {
+    let id = Uuid::nil().to_string();
+    let mut mcp = Mcp::new(None, None);
+    for (n, name, args, method, path) in [
+        (
+            1,
+            "create_role",
+            json!({"id":id,"body":{"name":"Helper","permissions":{"manage_messages":true}},"dry_run":true}),
+            "POST",
+            format!("/servers/{id}/roles"),
+        ),
+        (
+            2,
+            "set_channel_permissions",
+            json!({"id":id,"target":"everyone","body":{"allow":[],"deny":["send_messages"]},"dry_run":true}),
+            "PUT",
+            format!("/channels/{id}/permissions/everyone"),
+        ),
+        (
+            3,
+            "create_server_event",
+            json!({"id":id,"body":{"title":"Meetup","starts_at":"2026-11-01T12:00:00Z","location":"Outside"},"dry_run":true}),
+            "POST",
+            format!("/servers/{id}/events"),
+        ),
+    ] {
+        mcp.call(n, name, args).await;
+        let result = mcp.recv().await;
+        assert_eq!(data(&result)["method"], method, "{result}");
+        assert_eq!(data(&result)["path"], path);
+    }
+    mcp.call(
+        4,
+        "clear_channel_permissions",
+        json!({"id":id,"target":"../../me","dry_run":true}),
+    )
+    .await;
+    assert_eq!(mcp.recv().await["result"]["isError"], true);
+    mcp.call(
+        5,
+        "get_schema",
+        json!({"method":"POST","path":"/servers/{id}/events"}),
+    )
+    .await;
+    let schema = mcp.recv().await;
+    assert_eq!(
+        data(&schema)["operation"]["x-yapin-test-servers-only"],
+        true
+    );
+    assert_eq!(
+        data(&schema)["operation"]["x-rappin-source"],
+        "https://www.yapin.gg/developers"
+    );
+    mcp.close().await;
+}
+
+#[tokio::test]
+async fn invite_reads_keep_identity_and_supply_client_offset_continuation() {
+    let path = config();
+    let id = Uuid::nil().to_string();
+    let (base, mut requests, task) = mock(vec![response(
+        200,
+        json!({"invites":[{"code":"a","uses":2},{"code":"b","uses":3}]}),
+    )])
+    .await;
+    let (ok, out) = cli(
+        &path,
+        Some(&base),
+        &[
+            "servers",
+            "invites",
+            &id,
+            "--max-items",
+            "1",
+            "--fields",
+            "uses",
+        ],
+    )
+    .await;
+    assert!(ok, "{out}");
+    assert_eq!(out["data"]["invites"][0]["code"], "a");
+    assert_eq!(out["data"]["next_offset"], 1);
+    assert_eq!(out["data"]["truncated"], true);
+    assert!(requests
+        .recv()
+        .await
+        .unwrap()
+        .starts_with(&format!("GET /servers/{id}/invites ")));
+    task.await.unwrap();
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn member_search_tools_report_incompleteness_and_resolvers_refuse_candidates() {
+    let members:Vec<_>=(1..=500).map(|n|json!({"id":Uuid::from_u128(n),"username":if n==1 {"target".into()} else {format!("user{n}")}})).collect();
+    let (base, mut requests, task) = mock(vec![
+        response(200, json!({"members":members})),
+        response(200, json!({"members":members})),
+    ])
+    .await;
+    let mut mcp = Mcp::new(Some(&base), None);
+    mcp.call(
+        1,
+        "search_members",
+        json!({"server":Uuid::nil(),"name":"target","max_pages":1,"max_items":1}),
+    )
+    .await;
+    let result = mcp.recv().await;
+    assert_eq!(data(&result)["status"], "incomplete");
+    assert_eq!(data(&result)["complete"], false);
+    assert_eq!(data(&result)["scanned"], 500);
+    assert_eq!(data(&result)["matches"].as_array().unwrap().len(), 1);
+    mcp.call(
+        2,
+        "resolve_member",
+        json!({"server":Uuid::nil(),"name":"target","max_pages":1}),
+    )
+    .await;
+    let result = mcp.recv().await;
+    assert_eq!(result["result"]["isError"], true);
+    assert_eq!(
+        result["result"]["structuredContent"]["error"]["kind"],
+        "incomplete_search"
+    );
+    for _ in 0..2 {
+        requests.recv().await.unwrap();
+    }
+    task.await.unwrap();
+    mcp.close().await;
+}
+
+#[tokio::test]
 async fn capabilities_and_catalog_are_identical_across_cli_and_mcp() {
     let path = config();
     let (_, cap) = cli(&path, None, &["capabilities"]).await;

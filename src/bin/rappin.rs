@@ -11,6 +11,7 @@ mod agent_events;
 mod agent_output;
 #[path = "rappin_mcp.rs"]
 mod mcp;
+mod server_features;
 
 #[derive(Parser)]
 #[command(
@@ -136,10 +137,82 @@ enum Tools {
 #[derive(Subcommand)]
 enum Servers {
     List,
-    Get { id: Uuid },
+    Get {
+        id: Uuid,
+    },
+    /// Live counts (test servers only).
+    Counts {
+        id: Uuid,
+    },
+    /// Invite list (Manage Server; test servers only).
+    Invites {
+        id: Uuid,
+    },
+    Roles {
+        id: Uuid,
+    },
+    RoleCreate {
+        id: Uuid,
+        #[arg(long)]
+        body_file: PathBuf,
+    },
+    RoleEdit {
+        id: Uuid,
+        role: Uuid,
+        #[arg(long)]
+        body_file: PathBuf,
+    },
+    RoleDelete {
+        id: Uuid,
+        role: Uuid,
+    },
+    EveryonePermissions {
+        id: Uuid,
+        #[arg(long)]
+        body_file: PathBuf,
+    },
+    CategoryPermissionsSet {
+        id: Uuid,
+        category: Uuid,
+        target: rappin::PermissionTarget,
+        #[arg(long)]
+        body_file: PathBuf,
+    },
+    CategoryPermissionsClear {
+        id: Uuid,
+        category: Uuid,
+        target: rappin::PermissionTarget,
+    },
+    ScheduledEvents {
+        id: Uuid,
+    },
+    EventCreate {
+        id: Uuid,
+        #[arg(long)]
+        body_file: PathBuf,
+    },
 }
 #[derive(Subcommand)]
 enum Channels {
+    /// Return matches and whether the visible scope was completely searched.
+    Search {
+        name: String,
+        #[arg(long)]
+        server: Option<Uuid>,
+    },
+    Permissions {
+        id: Uuid,
+    },
+    PermissionsSet {
+        id: Uuid,
+        target: rappin::PermissionTarget,
+        #[arg(long)]
+        body_file: PathBuf,
+    },
+    PermissionsClear {
+        id: Uuid,
+        target: rappin::PermissionTarget,
+    },
     List {
         #[arg(long)]
         server: Option<Uuid>,
@@ -168,6 +241,13 @@ enum Channels {
 }
 #[derive(Subcommand)]
 enum Members {
+    /// Return candidates without claiming uniqueness after an incomplete scan.
+    Search {
+        server: Uuid,
+        name: String,
+        #[arg(long,default_value_t=1,value_parser=clap::value_parser!(u32).range(1..=100))]
+        max_pages: u32,
+    },
     List {
         server: Uuid,
         #[arg(long,default_value_t=200,value_parser=clap::value_parser!(u32).range(1..=500))]
@@ -455,7 +535,13 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
             }
         },
         Command::Schema { name, path, method } => {
-            let spec: Value = serde_json::from_str(include_str!("../../docs/openapi.json"))?;
+            let mut spec: Value = serde_json::from_str(include_str!("../../docs/openapi.json"))?;
+            let guide: Value = serde_json::from_str(include_str!("../../docs/guide-api.json"))?;
+            for (path, item) in guide["paths"].as_object().expect("bundled guide paths") {
+                for (method, operation) in item.as_object().expect("bundled guide operation") {
+                    spec["paths"][path][method] = operation.clone();
+                }
+            }
             if let (Some(path), Some(method)) = (path, method) {
                 return agent_catalog::endpoint_schema(&spec, &path, &method);
             }
@@ -473,8 +559,42 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                 ctx.request(Method::GET, &format!("/servers/{id}"), None)
                     .await
             }
+            action => server_features::server_action(action, ctx).await,
         },
         Command::Channels { action } => match action {
+            Channels::Search { name, server } => {
+                let result = ctx.client()?.search_channels(server, &name).await?;
+                let status = result.status();
+                let mut value = serde_json::to_value(result)?;
+                value["status"] = serde_json::to_value(status)?;
+                Ok(value)
+            }
+            Channels::Permissions { id } => {
+                ctx.request(Method::GET, &format!("/channels/{id}/permissions"), None)
+                    .await
+            }
+            Channels::PermissionsSet {
+                id,
+                target,
+                body_file,
+            } => {
+                let body: rappin::PermissionOverride =
+                    serde_json::from_value(ctx.body(&body_file)?)?;
+                ctx.request(
+                    Method::PUT,
+                    &format!("/channels/{id}/permissions/{target}"),
+                    Some(serde_json::to_value(body)?),
+                )
+                .await
+            }
+            Channels::PermissionsClear { id, target } => {
+                ctx.request(
+                    Method::DELETE,
+                    &format!("/channels/{id}/permissions/{target}"),
+                    None,
+                )
+                .await
+            }
             Channels::List { server } => {
                 ctx.request(
                     Method::GET,
@@ -516,6 +636,20 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
             }
         },
         Command::Members { action } => match action {
+            Members::Search {
+                server,
+                name,
+                max_pages,
+            } => {
+                let result = ctx
+                    .client()?
+                    .search_members(server, &name, max_pages as usize)
+                    .await?;
+                let status = result.status();
+                let mut value = serde_json::to_value(result)?;
+                value["status"] = serde_json::to_value(status)?;
+                Ok(value)
+            }
             Members::Get { server, user } => {
                 ctx.request(
                     Method::GET,
@@ -824,10 +958,23 @@ fn read_only(command: &Command) -> bool {
         Command::Doctor { .. }
         | Command::Capabilities
         | Command::Schema { .. }
-        | Command::Servers { .. }
+        | Command::Servers {
+            action:
+                Servers::List
+                | Servers::Get { .. }
+                | Servers::Counts { .. }
+                | Servers::Invites { .. }
+                | Servers::Roles { .. }
+                | Servers::ScheduledEvents { .. },
+        }
         | Command::Members { .. }
         | Command::Channels {
-            action: Channels::List { .. } | Channels::Get { .. } | Channels::Resolve { .. },
+            action:
+                Channels::List { .. }
+                | Channels::Get { .. }
+                | Channels::Resolve { .. }
+                | Channels::Search { .. }
+                | Channels::Permissions { .. },
         }
         | Command::Messages {
             action: Messages::List { .. } | Messages::Get { .. },

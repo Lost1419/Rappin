@@ -433,6 +433,109 @@ struct ReadyGate {
     ready: Arc<tokio::sync::Notify>,
     resume: Arc<tokio::sync::Notify>,
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rust_worker_shares_api_errors_permissions_and_runtime_schemas() {
+    let project = Project::new().await;
+    let manifest=format!("[package]\nname=\"fixture-worker\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[workspace]\n[dependencies]\nrappin-rs={{path={:?},features=[\"hot-reload\"]}}\ntokio={{version=\"1\",features=[\"macros\",\"rt-multi-thread\"]}}\nserde_json=\"1\"\nuuid=\"1\"\n",env!("CARGO_MANIFEST_DIR"));
+    tokio::fs::write(project.0.join("Cargo.toml"), manifest)
+        .await
+        .unwrap();
+    // Reuse the existing worker build cache; no acceptance bot is packaged.
+    #[cfg(unix)]
+    {
+        tokio::fs::create_dir_all(project.0.join("target"))
+            .await
+            .unwrap();
+        std::os::unix::fs::symlink(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("target/rappin-hot"),
+            project.0.join("target/rappin-hot"),
+        )
+        .unwrap();
+    }
+    let source = r#"
+use rappin::*;
+use serde_json::{json,Value};
+use uuid::Uuid;
+async fn common(api:&(impl Api+?Sized),path:&str)->Result<Value> {
+    api.api_json::<_,()>("GET".parse().unwrap(),path,None).await
+}
+#[tokio::main]
+async fn main()->Result<()> {
+    let schema:CommandSchema=serde_json::from_value(json!({"name":"dynamic","description":"Runtime","arguments":[{"name":"n","kind":{"type":"integer","min":1,"max":10}}]}))?;
+    WorkerCog::new("fixture")
+        .command("probe","Probe",|ctx|async move {
+            let error=common(&ctx,"/denied").await.unwrap_err();
+            assert!(error.is_forbidden());assert_eq!(error.to_json()["kind"],"api");assert!(!error.to_string().contains("yb_host_secret"));
+            let error=common(&ctx,"/rate").await.unwrap_err();assert!(error.is_rate_limit());assert_eq!(error.retry_after(),Some(std::time::Duration::from_secs(120)));
+            let permissions=ctx.evaluate_permissions(Uuid::nil(),Uuid::nil(),Freshness::Refresh).await?;
+            assert!(permissions.administrator);assert!(permissions.allows(&Permission::new("future_permission")));
+            assert!(ctx.evaluate_permissions(Uuid::nil(),Uuid::nil(),Freshness::PreferCache).await?.administrator);
+            let error=ctx.wait_for_event(EventFilter::default(),std::time::Duration::from_millis(10)).await.unwrap_err();
+            assert_eq!(error.to_json()["kind"],"event_wait");
+            Err(YappinError::Api{status:418,message:"worker failure".into(),retry_after:None})
+        })
+        .dynamic_command(schema,|ctx,values|async move {ctx.say(format!("dynamic {}",values["n"])).await?;Ok(())})?
+        .run().await
+}
+"#;
+    tokio::fs::write(project.0.join("src/main.rs"), source)
+        .await
+        .unwrap();
+    let id = uuid::Uuid::nil();
+    let message = json!({"message":{"id":id,"channel_id":id,"author_id":id,"created_at":"2026-10-31T00:00:00Z","content":"reply"}});
+    let (base, mut requests, http) = support::mock(vec![
+        support::response(403, json!({"error":"yb_host_secret denied"})),
+        (
+            429,
+            vec![("Retry-After", "120")],
+            "{\"error\":\"wait\"}".into(),
+        ),
+        support::response(
+            200,
+            json!({"server":{"id":id,"name":"test","owner_id":uuid::Uuid::from_u128(9)}}),
+        ),
+        support::response(
+            200,
+            json!({"member":{"id":id,"username":"actor","roles":[id]}}),
+        ),
+        support::response(
+            200,
+            json!({"roles":[{"id":id,"name":"admin","permissions":{"administrator":true}}]}),
+        ),
+        support::response(
+            200,
+            json!({"server":{"id":id,"name":"test","owner_id":uuid::Uuid::from_u128(9)}}),
+        ),
+        support::response(200, message.clone()),
+        support::response(200, message),
+    ])
+    .await;
+    let bot = Bot::builder("yb_host_secret")
+        .base_url(base)
+        .lookup_cache(rappin::CachePolicy::new(8, Duration::from_secs(60)))
+        .sync_commands(false)
+        .log(false)
+        .build();
+    bot.cache().set_me(me()).await;
+    let _reload = HotReload::load(bot.handle(), project.spec()).await.unwrap();
+    let error = bot.process_event(event("probe")).await.unwrap_err();
+    assert_eq!(error.status_code(), Some(418));
+    assert_eq!(error.to_json()["kind"], "api");
+    let mut valid = event("dynamic");
+    valid.data["args"] = json!("3");
+    bot.process_event(valid).await.unwrap();
+    let mut invalid = event("dynamic");
+    invalid.data["args"] = json!("11");
+    bot.process_event(invalid).await.unwrap();
+    for _ in 0..8 {
+        let request = requests.recv().await.unwrap();
+        assert!(request
+            .to_lowercase()
+            .contains("authorization: bot yb_host_secret"));
+    }
+    http.await.unwrap();
+}
 #[async_trait::async_trait]
 impl rappin::EventHandler for ReadyGate {
     async fn on_ready(&self, _: &Client, _: &rappin::BotProfile) {

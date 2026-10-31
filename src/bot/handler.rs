@@ -7,6 +7,12 @@ use crate::models::{BotProfile, MemberJoinEvent, MemberLeaveEvent, ReactionEvent
 /// Trait for receiving dispatched Yapin' events.
 #[async_trait]
 pub trait EventHandler: Send + Sync + 'static {
+    /// An invite was created (Manage Server; test servers only).
+    async fn on_invite_create(&self, _client: &Client, _event: &crate::InviteEvent) {}
+
+    /// An invite was deleted (Manage Server; test servers only).
+    async fn on_invite_delete(&self, _client: &Client, _event: &crate::InviteEvent) {}
+
     /// Fired when the bot has connected, verified its token, and synced commands.
     async fn on_ready(&self, _client: &Client, _bot: &BotProfile) {}
 

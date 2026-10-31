@@ -260,7 +260,7 @@
                   },
                   "bio": {
                     "type": "string",
-                    "maxLength": 190
+                    "maxLength": 300
                   }
                 }
               }

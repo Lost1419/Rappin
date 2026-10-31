@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub(super) const VERSION: u32 = 2;
+pub(super) const VERSION: u32 = 3;
 const MAX_FRAME: u64 = 1024 * 1024;
 
 /// Optional listeners implemented by a worker in addition to commands and buttons.
@@ -16,6 +16,8 @@ pub enum Listener {
     Interaction,
     MemberJoin,
     MemberLeave,
+    InviteCreate,
+    InviteDelete,
 }
 
 /// Serializable handler input. The bot credential is never part of this message.
@@ -43,6 +45,12 @@ pub enum CogEvent {
     },
     MemberLeave {
         event: MemberLeaveEvent,
+    },
+    InviteCreate {
+        event: crate::InviteEvent,
+    },
+    InviteDelete {
+        event: crate::InviteEvent,
     },
 }
 impl CogEvent {
@@ -122,6 +130,9 @@ impl Manifest {
                 "help entries require unique existing command names",
             ));
         }
+        for info in &self.help {
+            info.validate()?;
+        }
         let mut seen = std::collections::HashSet::new();
         if self.buttons.len() > 100
             || self
@@ -156,6 +167,8 @@ pub(super) enum Wire {
     EventResult {
         event: Option<Box<crate::Event>>,
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        structured_error: Option<crate::RemoteError>,
     },
     Shutdown,
     Ready {
@@ -170,12 +183,21 @@ pub(super) enum Wire {
         path: String,
         body: Option<Value>,
     },
+    Permissions {
+        server: uuid::Uuid,
+        actor: uuid::Uuid,
+        prefer_cache: bool,
+    },
     ApiResult {
         value: Option<Value>,
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        structured_error: Option<crate::RemoteError>,
     },
     Done {
         error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        structured_error: Option<crate::RemoteError>,
     },
 }
 pub(super) fn protocol_error() -> YappinError {

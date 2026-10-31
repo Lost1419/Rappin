@@ -210,40 +210,23 @@ impl Client {
         server: Option<uuid::Uuid>,
         name: &str,
     ) -> Result<crate::Channel> {
-        let channels = match server {
-            Some(id) => self.get_server_channels(id, None).await?.channels,
-            None => self.get_channels(None).await?,
-        };
-        unique(
-            channels
-                .into_iter()
-                .filter(|c| c.id.to_string() == name || c.name.eq_ignore_ascii_case(name))
-                .collect(),
-            "channel",
-        )
+        self.search_channels(server, name)
+            .await?
+            .into_unique("channel")
     }
-    /// Search a bounded number of member pages; ambiguity is never silently resolved.
+    /// Resolve only a unique match in a fully searched scope. An incomplete
+    /// bounded scan returns IncompleteSearch, never a guessed candidate.
     pub async fn resolve_member(
         &self,
         server: uuid::Uuid,
         name: &str,
         max_pages: usize,
     ) -> Result<crate::Member> {
-        if let Ok(id) = name.parse() {
-            return Ok(self.get_member(server, id).await?.member);
-        }
-        unique(
-            self.member_pages(server, None, max_pages)
-                .await?
-                .into_iter()
-                .filter(|m| {
-                    m.user.username.eq_ignore_ascii_case(name)
-                        || m.effective_name().eq_ignore_ascii_case(name)
-                })
-                .collect(),
-            "member",
-        )
+        self.search_members(server, name, max_pages)
+            .await?
+            .into_unique("member")
     }
+
     pub async fn send_long_message(
         &self,
         channel: uuid::Uuid,
@@ -259,20 +242,6 @@ impl Client {
         Ok(sent)
     }
 }
-fn unique<T>(mut matches: Vec<T>, resource: &str) -> Result<T> {
-    match matches.len() {
-        1 => Ok(matches.remove(0)),
-        0 => Err(YappinError::validation(
-            resource,
-            "no match in the requested search scope",
-        )),
-        _ => Err(YappinError::validation(
-            resource,
-            "ambiguous name; use a stable ID or narrower scope",
-        )),
-    }
-}
-
 /// Verify and deduplicate webhook delivery through a shared cursor. Invoke handlers before saving.
 pub fn event_is_new(event: &Event, last: u64) -> bool {
     event.id > last

@@ -63,8 +63,15 @@ impl WorkerContext {
         )
         .await?;
         match protocol::read(&mut connection.input).await? {
-            Wire::EventResult { event, error } => {
+            Wire::EventResult {
+                event,
+                error,
+                structured_error,
+            } => {
                 connection.poisoned = false;
+                if let Some(error) = structured_error {
+                    return Err(error.into());
+                }
                 if let Some(error) = error {
                     return Err(YappinError::Config(error));
                 }
@@ -120,6 +127,29 @@ impl WorkerContext {
     }
     /// JSON-only API access; paths are checked by the parent Client. No bot token is exposed.
     pub async fn api(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
+        self.proxy(Wire::Api {
+            method: method.into(),
+            path: path.into(),
+            body,
+        })
+        .await
+    }
+    pub(crate) async fn proxy_permissions(
+        &self,
+        server: uuid::Uuid,
+        actor: uuid::Uuid,
+        freshness: crate::Freshness,
+    ) -> Result<crate::PermissionSnapshot> {
+        let value = self
+            .proxy(Wire::Permissions {
+                server,
+                actor,
+                prefer_cache: freshness == crate::Freshness::PreferCache,
+            })
+            .await?;
+        Ok(serde_json::from_value(value)?)
+    }
+    async fn proxy(&self, request: Wire) -> Result<Value> {
         self.ensure_active()?;
         let mut connection = self.connection.lock().await;
         self.ensure_active()?;
@@ -128,18 +158,17 @@ impl WorkerContext {
         }
         // Cancellation during an exchange must not let a later call consume its response.
         connection.poisoned = true;
-        protocol::write(
-            &mut connection.output,
-            &Wire::Api {
-                method: method.into(),
-                path: path.into(),
-                body,
-            },
-        )
-        .await?;
+        protocol::write(&mut connection.output, &request).await?;
         match protocol::read(&mut connection.input).await? {
-            Wire::ApiResult { value, error } => {
+            Wire::ApiResult {
+                value,
+                error,
+                structured_error,
+            } => {
                 connection.poisoned = false;
+                if let Some(error) = structured_error {
+                    return Err(error.into());
+                }
                 match error {
                     Some(error) => Err(YappinError::Config(error)),
                     None => Ok(value.unwrap_or(Value::Null)),
@@ -285,6 +314,39 @@ impl WorkerCog {
             listeners: HashMap::new(),
         }
     }
+    /// Runtime argument schemas on workers use the same parser as native commands.
+    /// Worker routes are single command names; use native commands for aliases/subcommands.
+    pub fn dynamic_command<F, Fut>(
+        mut self,
+        schema: crate::CommandSchema,
+        handler: F,
+    ) -> Result<Self>
+    where
+        F: Fn(WorkerContext, crate::CommandValues) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        schema.validate()?;
+        if schema.name.contains(' ') || !schema.aliases.is_empty() {
+            return Err(crate::CommandError::Definition(
+                "workers require a single command name without local aliases".into(),
+            )
+            .into());
+        }
+        self.manifest.help.push(schema.info());
+        let name = schema.name.clone();
+        let description = schema.description.clone();
+        let schema = Arc::new(schema);
+        let handler = Arc::new(handler);
+        self = self.command(name, description, move |ctx| {
+            let schema = schema.clone();
+            let handler = handler.clone();
+            async move {
+                let values = schema.parse(ctx.args())?;
+                handler(ctx, values).await
+            }
+        });
+        Ok(self)
+    }
     pub fn command<F, Fut>(
         mut self,
         name: impl Into<String>,
@@ -352,6 +414,8 @@ impl WorkerCog {
                 CogEvent::Interaction { .. } => self.listeners.get(&Listener::Interaction),
                 CogEvent::MemberJoin { .. } => self.listeners.get(&Listener::MemberJoin),
                 CogEvent::MemberLeave { .. } => self.listeners.get(&Listener::MemberLeave),
+                CogEvent::InviteCreate { .. } => self.listeners.get(&Listener::InviteCreate),
+                CogEvent::InviteDelete { .. } => self.listeners.get(&Listener::InviteDelete),
             };
             let active = Arc::new(AtomicBool::new(true));
             let result = match handler {
@@ -375,6 +439,7 @@ impl WorkerCog {
             protocol::write(
                 &mut connection.output,
                 &Wire::Done {
+                    structured_error: result.as_ref().err().map(|e| e.to_remote()),
                     error: result.err().map(|e| e.to_string()),
                 },
             )

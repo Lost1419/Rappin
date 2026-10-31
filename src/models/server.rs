@@ -20,6 +20,9 @@ pub struct Server {
     /// Approximate member count.
     #[serde(default)]
     pub member_count: Option<u64>,
+    /// People online now; absent where live counts are not enabled.
+    #[serde(default)]
+    pub online_count: Option<u64>,
 }
 
 impl Server {
@@ -88,6 +91,11 @@ pub struct Role {
     /// System or automatic role indicator.
     #[serde(default)]
     pub auto: Option<String>,
+    #[serde(default)]
+    pub mentionable: Option<bool>,
+    /// Permission dictionary returned by newer role endpoints.
+    #[serde(default)]
+    pub permissions: Option<super::Permissions>,
 }
 
 /// A member of a server.
@@ -129,6 +137,11 @@ pub struct MemberDetail {
     /// Active timeout details, if timed out.
     #[serde(default)]
     pub timeout: Option<serde_json::Value>,
+    /// Available only with Manage Server where invite tracking is enabled.
+    #[serde(default)]
+    pub invite_code: Option<String>,
+    #[serde(default)]
+    pub inviter_id: Option<Uuid>,
 }
 
 /// A banned user entry (`GET /servers/{id}/bans`).

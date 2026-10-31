@@ -13,6 +13,8 @@ use crate::error::{Result, YappinError};
 use crate::models::*;
 use crate::utils::DEFAULT_API_BASE;
 
+mod server_features;
+
 /// Builder for constructing a custom [`Client`].
 pub struct ClientBuilder {
     token: String,
@@ -101,6 +103,7 @@ impl ClientBuilder {
                 events: crate::collectors::EventHub::default(),
                 rate_limits: crate::rate_limits::RateLimits::default(),
                 requests: tokio::sync::watch::channel(None).0,
+                request_telemetry: Default::default(),
                 interactions: crate::interactions::Registry::default(),
                 auto_ack_tasks: std::sync::Mutex::new(Vec::new()),
                 auto_ack_slots: Arc::new(tokio::sync::Semaphore::new(128)),
@@ -110,6 +113,7 @@ impl ClientBuilder {
 }
 
 struct ClientInner {
+    request_telemetry: crate::diagnostics::RequestTelemetry,
     events: crate::collectors::EventHub,
     rate_limits: crate::rate_limits::RateLimits,
     requests: tokio::sync::watch::Sender<Option<crate::diagnostics::RequestObservation>>,
@@ -194,6 +198,16 @@ impl Client {
         &self,
     ) -> tokio::sync::watch::Receiver<Option<crate::diagnostics::RequestObservation>> {
         self.inner.requests.subscribe()
+    }
+    /// Exact totals across clones. The legacy watch subscription is latest-only.
+    pub fn request_metrics(&self) -> crate::diagnostics::RequestMetrics {
+        self.inner.request_telemetry.snapshot()
+    }
+    /// Bounded attempt stream (256 entries); slow readers receive explicit Lagged errors.
+    pub fn subscribe_request_events(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::diagnostics::RequestEvent> {
+        self.inner.request_telemetry.subscribe()
     }
     pub(crate) fn interaction_registry(&self) -> &crate::interactions::Registry {
         &self.inner.interactions
@@ -295,7 +309,26 @@ impl Client {
         &self,
         method: &Method,
         path: &str,
+        operation: F,
+    ) -> Result<Response>
+    where
+        F: FnMut(url::Url) -> Fut,
+        Fut: std::future::Future<Output = std::result::Result<Response, reqwest::Error>>,
+    {
+        let telemetry = self.inner.request_telemetry.start();
+        let result = self
+            .execute_attempts_with_retry(method, path, operation, &telemetry)
+            .await;
+        telemetry.finish(result.is_ok());
+        result
+    }
+
+    async fn execute_attempts_with_retry<F, Fut>(
+        &self,
+        method: &Method,
+        path: &str,
         mut operation: F,
+        telemetry: &crate::diagnostics::RequestGuard<'_>,
     ) -> Result<Response>
     where
         F: FnMut(url::Url) -> Fut,
@@ -313,9 +346,15 @@ impl Client {
         let mut base = self.active_base_url();
 
         loop {
-            wait += self.inner.rate_limits.wait(key, is_message).await;
+            let waiting_metric = telemetry.waiting();
+            let waited = self.inner.rate_limits.wait(key, is_message).await;
+            waiting_metric.finish(waited);
+            wait += waited;
+            let url = crate::security::api_url(&base, path)?;
+            telemetry.attempt(attempts > 0);
             attempts += 1;
-            let res = operation(crate::security::api_url(&base, path)?).await;
+            let attempt_started = tokio::time::Instant::now();
+            let res = operation(url).await;
             let status = res.as_ref().ok().map(|res| res.status().as_u16());
             let label = if matches!(
                 method.as_str(),
@@ -325,16 +364,16 @@ impl Client {
             } else {
                 "OTHER"
             };
-            self.inner
-                .requests
-                .send_replace(Some(crate::diagnostics::RequestObservation {
-                    method: label.into(),
-                    route: route.clone(),
-                    status,
-                    duration: started.elapsed(),
-                    rate_limit_wait: wait,
-                    attempts,
-                }));
+            let observation = crate::diagnostics::RequestObservation {
+                method: label.into(),
+                route: route.clone(),
+                status,
+                duration: started.elapsed(),
+                rate_limit_wait: wait,
+                attempts,
+            };
+            telemetry.observe(observation.clone(), attempt_started.elapsed());
+            self.inner.requests.send_replace(Some(observation));
             tracing::debug!(method=label,route=%route,status,elapsed_ms=started.elapsed().as_millis() as u64,attempts,"REST response headers");
             let unavailable = match &res {
                 Ok(response) => matches!(
@@ -397,8 +436,11 @@ impl Client {
                             "API asked us to retry"
                         );
                         let waiting = tokio::time::Instant::now();
+                        let waiting_metric = telemetry.waiting();
                         sleep(delay).await;
-                        wait += waiting.elapsed();
+                        let waited = waiting.elapsed();
+                        wait += waited;
+                        waiting_metric.finish(waited);
                         retries -= 1;
                         continue;
                     }
@@ -510,8 +552,9 @@ impl Client {
             }
         }
         drop(tracked);
-        let response = response?;
 
+        // Even a failed/ambiguous write may have changed permissions. Invalidate
+        // once here so typed methods, raw requests and worker proxies agree.
         if !matches!(method, Method::GET | Method::HEAD) {
             let parts: Vec<_> = path
                 .split('?')
@@ -521,9 +564,10 @@ impl Client {
                 .split('/')
                 .collect();
             if parts.first() == Some(&"servers")
-                && parts.get(2).is_some_and(|part| {
+                && (parts.get(2).is_some_and(|part| {
                     matches!(*part, "members" | "roles" | "kick" | "bans" | "timeouts")
-                })
+                }) || (parts.get(2) == Some(&"categories")
+                    && parts.get(4) == Some(&"permissions")))
             {
                 if let Some(server) = parts.get(1).and_then(|id| Uuid::parse_str(id).ok()) {
                     self.invalidate_server_lookups(server).await;
@@ -531,6 +575,7 @@ impl Client {
             }
         }
 
+        let response = response?;
         let bytes = response
             .bytes()
             .await

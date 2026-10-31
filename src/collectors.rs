@@ -107,6 +107,7 @@ collectible!(MemberJoinEvent, "member_join");
 collectible!(MemberLeaveEvent, "member_leave");
 collectible!(ReactionEvent, "reaction_add" | "reaction_remove");
 collectible!(VoiceEvent, "voice_join" | "voice_leave");
+collectible!(crate::InviteEvent, "invite_create" | "invite_delete");
 
 type Filter = Arc<dyn Fn(&Event) -> bool + Send + Sync>;
 struct Activity {

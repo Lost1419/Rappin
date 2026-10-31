@@ -1,8 +1,54 @@
 use thiserror::Error;
 
+/// Serializable error crossing a worker boundary. Details retain retry/outcome
+/// hints and partial-write receipts; parent transports redact credentials first.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct RemoteError {
+    pub kind: String,
+    pub message: String,
+    pub status: Option<u16>,
+    pub retry_after: Option<f64>,
+    #[serde(flatten)]
+    pub details: std::collections::BTreeMap<String, serde_json::Value>,
+}
+impl std::fmt::Display for RemoteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for RemoteError {}
+impl RemoteError {
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut value = serde_json::Value::Object(self.details.clone().into_iter().collect());
+        value["kind"] = self.kind.clone().into();
+        value["message"] = self.message.clone().into();
+        value["status"] = serde_json::json!(self.status);
+        value["retry_after"] = serde_json::json!(self.retry_after);
+        value
+    }
+}
+impl serde::Serialize for RemoteError {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(&self.to_json(), serializer)
+    }
+}
+
 /// The error type for operations in the `yappin` crate.
 #[derive(Debug, Error)]
 pub enum YappinError {
+    #[error("{resource} search is incomplete after {pages} pages ({scanned} scanned, {matches} candidates); use an ID or a larger search budget")]
+    IncompleteSearch {
+        resource: String,
+        scanned: usize,
+        pages: usize,
+        next_cursor: Option<uuid::Uuid>,
+        matches: usize,
+    },
+    #[error(transparent)]
+    Remote(#[from] RemoteError),
     /// A multi-step write stopped after zero or more confirmed successes.
     #[error("write failed at step {failed_step}: {source}")]
     PartialWrite {
@@ -56,6 +102,7 @@ impl YappinError {
     /// Returns the HTTP status code associated with this error, if available.
     pub fn status_code(&self) -> Option<u16> {
         match self {
+            Self::Remote(error) => error.status,
             Self::PartialWrite { source, .. } => source.status_code(),
             Self::Api { status, .. } => Some(*status),
             Self::Http(e) => e.status().map(|s| s.as_u16()),
@@ -79,7 +126,7 @@ impl YappinError {
         if let Self::PartialWrite { source, .. } = self {
             return source.is_rate_limit();
         }
-        matches!(self, Self::RateLimited { .. }) || matches!(self, Self::Api { status: 429, .. })
+        self.status_code() == Some(429)
     }
 
     /// Returns the suggested retry wait duration if this error was caused by a rate limit.
@@ -88,6 +135,7 @@ impl YappinError {
             return source.retry_after();
         }
         let seconds = match self {
+            Self::Remote(error) => error.retry_after,
             Self::RateLimited { retry_after } => Some(*retry_after),
             Self::Api { retry_after, .. } => *retry_after,
             _ => None,
@@ -104,6 +152,9 @@ impl YappinError {
 
     /// Stable JSON representation for agents. Transport URLs are intentionally omitted.
     pub fn to_json(&self) -> serde_json::Value {
+        if let Self::Remote(error) = self {
+            return error.to_json();
+        }
         if let Self::PartialWrite {
             completed,
             failed_step,
@@ -119,6 +170,7 @@ impl YappinError {
             return value;
         }
         let kind = match self {
+            Self::IncompleteSearch { .. } => "incomplete_search",
             Self::Command(_) => "command",
             Self::Wait(_) => "event_wait",
             Self::Validation { .. } => "validation",
@@ -138,6 +190,21 @@ impl YappinError {
             "status": self.status_code(), "retry_after": self.retry_after().map(|d| d.as_secs_f64())});
         if let Self::Validation { field, .. } = self {
             value["field"] = field.clone().into();
+        }
+        if let Self::IncompleteSearch {
+            resource,
+            scanned,
+            pages,
+            next_cursor,
+            matches,
+        } = self
+        {
+            value["resource"] = resource.clone().into();
+            value["scanned"] = (*scanned).into();
+            value["pages"] = (*pages).into();
+            value["next_cursor"] = serde_json::json!(next_cursor);
+            value["matches"] = (*matches).into();
+            value["complete"] = false.into();
         }
         let advised = self.retry_after().is_some() && matches!(self.status_code(), Some(429 | 503));
         value["retry_safety"] = (if advised {
@@ -163,9 +230,17 @@ impl YappinError {
         value
     }
 
+    pub fn to_remote(&self) -> RemoteError {
+        serde_json::from_value(self.to_json()).expect("error JSON contains required remote fields")
+    }
+
     /// Checks if this error is an authorization failure (HTTP 401).
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, Self::Unauthorized) || self.status_code() == Some(401)
+    }
+    pub fn is_command_error(&self) -> bool {
+        matches!(self, Self::Command(_))
+            || matches!(self, Self::Remote(error) if error.kind=="command")
     }
 
     /// Checks if this error is a permissions failure (HTTP 403 Forbidden).

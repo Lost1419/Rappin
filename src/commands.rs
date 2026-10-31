@@ -2,6 +2,8 @@
 use crate::{cache::Freshness, MessageContext, Result, YappinError};
 use std::{future::Future, marker::PhantomData, pin::Pin, str::FromStr, sync::Arc, time::Duration};
 use uuid::Uuid;
+mod dynamic;
+pub use dynamic::{ArgumentSchema, ArgumentType, CommandSchema, CommandValues, DynamicCommandSpec};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CommandError {
@@ -371,36 +373,14 @@ impl CommandCheck for Check {
                     let server = ctx
                         .server_id()
                         .ok_or_else(|| deny("this command requires a server"))?;
-                    if ctx.client.get_server(server).await?.owner_id == ctx.author_id() {
-                        return Ok(());
-                    }
-                    let member = ctx
-                        .client
-                        .fetch_member(server, ctx.author_id(), *freshness)
-                        .await?;
-                    let roles = ctx.client.fetch_roles(server, *freshness).await?;
-                    for permission in permissions {
-                        let allowed = roles
-                            .iter()
-                            .filter(|role| member.member.roles.contains(&role.id))
-                            .any(|role| match permission.as_str() {
-                                "manage_server" => role.manage_server == Some(true),
-                                "manage_messages" => role.manage_messages == Some(true),
-                                key => {
-                                    role.perms
-                                        .as_ref()
-                                        .and_then(|p| p.get(key))
-                                        .and_then(|p| p.as_bool())
-                                        == Some(true)
-                                }
-                            });
-                        if !allowed {
-                            return Err(deny(&format!(
-                                "missing permission {}",
-                                permission.as_str()
-                            )));
-                        }
-                    }
+                    crate::ApiExt::evaluate_permissions(
+                        ctx.client.as_ref(),
+                        server,
+                        ctx.author_id(),
+                        *freshness,
+                    )
+                    .await?
+                    .require(permissions)?;
                 }
             }
             Ok(())
@@ -416,6 +396,37 @@ pub struct CommandInfo {
     pub arguments: Vec<ArgumentInfo>,
 }
 impl CommandInfo {
+    /// Definition-only validation; does not call handlers or perform network I/O.
+    pub fn validate(&self) -> Result<()> {
+        let mut names = std::collections::HashSet::new();
+        for name in std::iter::once(&self.name).chain(&self.aliases) {
+            if !names.insert(name) || name.split(' ').count() > 8 {
+                return Err(CommandError::Definition(
+                    "command or alias already registered, or subcommand depth exceeds eight".into(),
+                )
+                .into());
+            }
+            for part in name.split(' ') {
+                crate::validation::validate_commands(&[crate::Command::new(
+                    part,
+                    &self.description,
+                )])?;
+            }
+        }
+        let mut names = std::collections::HashSet::new();
+        for arg in &self.arguments {
+            if arg.name.is_empty()
+                || arg.name.chars().any(char::is_whitespace)
+                || !names.insert(&arg.name)
+            {
+                return Err(CommandError::Definition(
+                    "arguments need unique nonempty names without whitespace".into(),
+                )
+                .into());
+            }
+        }
+        Ok(())
+    }
     pub fn usage(&self) -> String {
         let args = self
             .arguments

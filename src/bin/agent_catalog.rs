@@ -80,6 +80,153 @@ fn build_catalog() -> Vec<Entry> {
         Entry{name:"get_capabilities",description:"Inspect command/tool capabilities and compiled optional features offline",cli:&["capabilities"],fields:vec![],write:false,destructive:false,collection:false},
         Entry{name:"get_schema",description:"Inspect one component or one method/path, with referenced definitions",cli:&["schema"],fields:vec![text("name",None,false),text("path",Some("--path"),false),text("method",Some("--method"),false)],write:false,destructive:false,collection:false},
     ];
+    let target = || {
+        field(
+            "target",
+            None,
+            json!({"type":"string","description":"Role UUID or the literal everyone"}),
+            true,
+        )
+    };
+    entries.extend([
+        Entry{name:"search_channels",description:"Return channel candidates with complete/unique/ambiguous search metadata",cli:&["channels","search"],fields:vec![text("name",None,true),id("server",Some("--server"),false)],write:false,destructive:false,collection:true},
+        Entry{name:"search_members",description:"Return bounded member candidates; a full final page is incomplete, never confirmed unique",cli:&["members","search"],fields:vec![id("server",None,true),text("name",None,true),number("max_pages","--max-pages",1,100)],write:false,destructive:false,collection:true},
+        Entry {
+            name: "get_member_counts",
+            description: "Live counts, refreshed roughly once a minute; test servers only",
+            cli: &["servers", "counts"],
+            fields: vec![id("id", None, true)],
+            write: false,
+            destructive: false,
+            collection: false,
+        },
+        Entry {
+            name: "list_invites",
+            description: "List invites; Manage Server and test-server access required",
+            cli: &["servers", "invites"],
+            fields: vec![id("id", None, true)],
+            write: false,
+            destructive: false,
+            collection: true,
+        },
+        Entry {
+            name: "list_roles",
+            description: "List server roles",
+            cli: &["servers", "roles"],
+            fields: vec![id("id", None, true)],
+            write: false,
+            destructive: false,
+            collection: true,
+        },
+        Entry {
+            name: "create_role",
+            description:
+                "Create a role; Manage Roles, hierarchy checks and test-server access apply",
+            cli: &["servers", "role-create"],
+            fields: vec![id("id", None, true), body()],
+            write: true,
+            destructive: false,
+            collection: false,
+        },
+        Entry {
+            name: "edit_role",
+            description:
+                "Patch role fields; only supplied permission keys change; test servers only",
+            cli: &["servers", "role-edit"],
+            fields: vec![id("id", None, true), id("role", None, true), body()],
+            write: true,
+            destructive: true,
+            collection: false,
+        },
+        Entry {
+            name: "delete_role",
+            description: "Delete a specified role when authorized; test servers only",
+            cli: &["servers", "role-delete"],
+            fields: vec![id("id", None, true), id("role", None, true)],
+            write: true,
+            destructive: true,
+            collection: false,
+        },
+        Entry {
+            name: "set_everyone_permissions",
+            description:
+                "Patch everyone permissions using a permissions dictionary; test servers only",
+            cli: &["servers", "everyone-permissions"],
+            fields: vec![id("id", None, true), body()],
+            write: true,
+            destructive: true,
+            collection: false,
+        },
+        Entry {
+            name: "get_channel_permissions",
+            description: "List role overrides; null role_id means everyone; test servers only",
+            cli: &["channels", "permissions"],
+            fields: vec![id("id", None, true)],
+            write: false,
+            destructive: false,
+            collection: true,
+        },
+        Entry {
+            name: "set_channel_permissions",
+            description: "Replace allow/deny lists for a role or everyone; test servers only",
+            cli: &["channels", "permissions-set"],
+            fields: vec![id("id", None, true), target(), body()],
+            write: true,
+            destructive: true,
+            collection: false,
+        },
+        Entry {
+            name: "clear_channel_permissions",
+            description: "Remove a specified channel override; test servers only",
+            cli: &["channels", "permissions-clear"],
+            fields: vec![id("id", None, true), target()],
+            write: true,
+            destructive: true,
+            collection: false,
+        },
+        Entry {
+            name: "set_category_permissions",
+            description: "Replace category allow/deny lists; test servers only",
+            cli: &["servers", "category-permissions-set"],
+            fields: vec![
+                id("id", None, true),
+                id("category", None, true),
+                target(),
+                body(),
+            ],
+            write: true,
+            destructive: true,
+            collection: false,
+        },
+        Entry {
+            name: "clear_category_permissions",
+            description: "Remove a specified category override; test servers only",
+            cli: &["servers", "category-permissions-clear"],
+            fields: vec![id("id", None, true), id("category", None, true), target()],
+            write: true,
+            destructive: true,
+            collection: false,
+        },
+        Entry {
+            name: "list_server_events",
+            description: "List upcoming/live scheduled server events; test servers only",
+            cli: &["servers", "scheduled-events"],
+            fields: vec![id("id", None, true)],
+            write: false,
+            destructive: false,
+            collection: true,
+        },
+        Entry {
+            name: "create_server_event",
+            description:
+                "Create a scheduled event; Manage Events or Manage Server; test servers only",
+            cli: &["servers", "event-create"],
+            fields: vec![id("id", None, true), body()],
+            write: true,
+            destructive: false,
+            collection: false,
+        },
+    ]);
     for entry in &mut entries {
         if entry.name == "send_message" {
             entry.fields.push(field("split",Some("--split"),json!({"type":"boolean","description":"Split plain text into separate messages; errors report completed steps"}),false));
@@ -94,7 +241,7 @@ fn build_catalog() -> Vec<Entry> {
         }
         if entry.collection {
             entry.fields.extend([field("fields",Some("--fields"),json!({"type":"string","description":"Comma-separated item fields; IDs and timestamps are retained"}),false),number("max_items","--max-items",1,10000),number("max_bytes","--max-bytes",256,4194304)]);
-            if matches!(entry.name, "list_servers" | "list_channels") {
+            if !matches!(entry.name, "read_messages" | "list_members") {
                 entry.fields.push(number("offset", "--offset", 0, 1000000));
             }
         }
