@@ -10,6 +10,10 @@ use uuid::Uuid;
 /// Implement this for application adapters or local test transports as needed.
 #[async_trait]
 pub trait Api: Send + Sync {
+    /// Sanitize operation results before returning them to model-facing code.
+    fn sanitize(&self, value: Value) -> Value {
+        crate::security::redact_fields(value)
+    }
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value>;
 
     /// Server-level permission snapshot for any actor. The default fetches fresh
@@ -103,6 +107,9 @@ impl<T: Api + ?Sized> ApiExt for T {}
 
 #[async_trait]
 impl Api for crate::Client {
+    fn sanitize(&self, value: Value) -> Value {
+        crate::security::redact_fields(self.redact_credentials(value))
+    }
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
         self.request_json(method, path, body.as_ref()).await
     }
@@ -139,6 +146,9 @@ impl Api for crate::Client {
 
 #[async_trait]
 impl<T: Api + ?Sized> Api for std::sync::Arc<T> {
+    fn sanitize(&self, value: Value) -> Value {
+        (**self).sanitize(value)
+    }
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
         (**self).request(method, path, body).await
     }
@@ -156,6 +166,9 @@ macro_rules! native_context {
     ($ty:ty) => {
         #[async_trait]
         impl Api for $ty {
+            fn sanitize(&self, value: Value) -> Value {
+                self.client.sanitize(value)
+            }
             async fn request(
                 &self,
                 method: Method,

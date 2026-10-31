@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.11 — 2026-10-31
+
+- Move the 38-operation catalogue into the default-feature Rust library. CLI/MCP consume the same names, schemas, permission rules and availability metadata; filtered inventories can also validate incoming operation choices.
+- Add validated bindings over `Api`, with host-owned server scope and separate requester/bot permission reports. Check referenced resources, retain unknown channel/hierarchy/availability checks, and require explicit host evidence before execution. Uncertain mutations are not replayed; split-send receipts remain structured.
+- Add serializable permanent-command bindings that derive parsing and help from operation argument schemas, preflight ownership, and install through existing cog replacement. Parameters cannot overwrite fixed arguments. Existing typed commands and worker protocol remain compatible.
+- Share bounded output and lookup engines with the library bindings. Sanitize model-facing results and access-report causes, and document the SDK contract and YapBot migration without adding model or database dependencies.
+
+Exhaustive matches must handle `YappinError::OperationAuthorization` and `ArgumentType::Schema`. Named CLI/MCP calls now validate rich payload schemas before dispatch. See [capability bindings](docs/yapbot-sdk-handoff.md) for public APIs, access limits and integration examples.
+
 ## 0.1.10 — 2026-10-31
 
 - Add typed role create/edit/delete, @everyone permissions, channel/category overrides, live member counts, invite lists and scheduled-event APIs from the developer guide. Yapin currently restricts these endpoints to test servers.

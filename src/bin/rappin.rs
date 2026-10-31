@@ -535,13 +535,7 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
             }
         },
         Command::Schema { name, path, method } => {
-            let mut spec: Value = serde_json::from_str(include_str!("../../docs/openapi.json"))?;
-            let guide: Value = serde_json::from_str(include_str!("../../docs/guide-api.json"))?;
-            for (path, item) in guide["paths"].as_object().expect("bundled guide paths") {
-                for (method, operation) in item.as_object().expect("bundled guide operation") {
-                    spec["paths"][path][method] = operation.clone();
-                }
-            }
+            let spec = rappin::capabilities::bundled_schema().clone();
             if let (Some(path), Some(method)) = (path, method) {
                 return agent_catalog::endpoint_schema(&spec, &path, &method);
             }

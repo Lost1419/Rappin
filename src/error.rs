@@ -39,6 +39,10 @@ impl serde::Serialize for RemoteError {
 /// The error type for operations in the `yappin` crate.
 #[derive(Debug, Error)]
 pub enum YappinError {
+    #[error("operation authorization is denied or incomplete: {operation}",operation=.report.operation)]
+    OperationAuthorization {
+        report: Box<crate::capabilities::AuthorizationReport>,
+    },
     #[error("{resource} search is incomplete after {pages} pages ({scanned} scanned, {matches} candidates); use an ID or a larger search budget")]
     IncompleteSearch {
         resource: String,
@@ -102,6 +106,11 @@ impl YappinError {
     /// Returns the HTTP status code associated with this error, if available.
     pub fn status_code(&self) -> Option<u16> {
         match self {
+            Self::OperationAuthorization { report }
+                if report.decision() == crate::capabilities::AccessDecision::Denied =>
+            {
+                Some(403)
+            }
             Self::Remote(error) => error.status,
             Self::PartialWrite { source, .. } => source.status_code(),
             Self::Api { status, .. } => Some(*status),
@@ -152,6 +161,9 @@ impl YappinError {
 
     /// Stable JSON representation for agents. Transport URLs are intentionally omitted.
     pub fn to_json(&self) -> serde_json::Value {
+        if let Self::OperationAuthorization { report } = self {
+            return serde_json::json!({"kind":"operation_authorization","message":self.to_string(),"status":self.status_code(),"retry_after":null,"decision":report.decision(),"authorization":report,"retry_safety":"fix_request","outcome":"not_applied"});
+        }
         if let Self::Remote(error) = self {
             return error.to_json();
         }

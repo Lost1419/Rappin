@@ -73,18 +73,7 @@ impl Client {
             Some(id) => self.get_server_channels(id, None).await?.channels,
             None => self.get_channels(None).await?,
         };
-        let scanned = channels.len();
-        Ok(LookupResult {
-            matches: channels
-                .into_iter()
-                .filter(|c| c.id.to_string() == name || c.name.eq_ignore_ascii_case(name))
-                .collect(),
-            complete: true,
-            scanned,
-            pages: 1,
-            next_cursor: None,
-            stop: SearchStop::Exhausted,
-        })
+        Ok(channel_matches(channels, name))
     }
     /// Searches at most max_pages pages, preserving candidates on incomplete scans.
     /// A full final page cannot establish uniqueness, even if it contains one match.
@@ -94,72 +83,110 @@ impl Client {
         name: &str,
         max_pages: usize,
     ) -> Result<LookupResult<Member>> {
-        if !(1..=100).contains(&max_pages) {
+        search_members_with(
+            name,
+            max_pages,
+            |id| self.get_member(server, id),
+            |after| self.get_members(server, Some(500), after),
+        )
+        .await
+    }
+}
+
+pub(crate) fn channel_matches(
+    channels: Vec<crate::Channel>,
+    name: &str,
+) -> LookupResult<crate::Channel> {
+    let scanned = channels.len();
+    LookupResult {
+        matches: channels
+            .into_iter()
+            .filter(|c| c.id.to_string() == name || c.name.eq_ignore_ascii_case(name))
+            .collect(),
+        complete: true,
+        scanned,
+        pages: 1,
+        next_cursor: None,
+        stop: SearchStop::Exhausted,
+    }
+}
+pub(crate) async fn search_members_with<F, P, MF, PF>(
+    name: &str,
+    max_pages: usize,
+    get_member: F,
+    get_page: P,
+) -> Result<LookupResult<Member>>
+where
+    F: Fn(Uuid) -> MF + Send + Sync,
+    P: Fn(Option<Uuid>) -> PF + Send + Sync,
+    MF: std::future::Future<Output = Result<crate::MemberDetail>> + Send,
+    PF: std::future::Future<Output = Result<Vec<Member>>> + Send,
+{
+    if !(1..=100).contains(&max_pages) {
+        return Err(YappinError::validation(
+            "max_pages",
+            "must be between 1 and 100",
+        ));
+    }
+    if let Ok(id) = name.parse::<Uuid>() {
+        let member = get_member(id).await?.member;
+        if member.user.id != id {
             return Err(YappinError::validation(
-                "max_pages",
-                "must be between 1 and 100",
+                "member",
+                "API returned a different member ID",
             ));
         }
-        if let Ok(id) = name.parse::<Uuid>() {
-            let member = self.get_member(server, id).await?.member;
-            if member.user.id != id {
-                return Err(YappinError::validation(
-                    "member",
-                    "API returned a different member ID",
-                ));
-            }
-            return Ok(LookupResult {
-                matches: vec![member],
-                complete: true,
-                scanned: 1,
-                pages: 1,
-                next_cursor: None,
-                stop: SearchStop::ExactId,
-            });
-        }
-        let mut out = LookupResult {
-            matches: vec![],
-            complete: false,
-            scanned: 0,
-            pages: 0,
+        return Ok(LookupResult {
+            matches: vec![member],
+            complete: true,
+            scanned: 1,
+            pages: 1,
             next_cursor: None,
-            stop: SearchStop::PageLimit,
-        };
-        let mut seen = std::collections::HashSet::new();
-        for _ in 0..max_pages {
-            let batch = self.get_members(server, Some(500), out.next_cursor).await?;
-            out.pages += 1;
-            let size = batch.len();
-            let next = batch.last().map(|m| m.user.id);
-            let mut progress = true;
-            for member in batch {
-                if out
-                    .next_cursor
-                    .is_some_and(|cursor| member.user.id <= cursor)
-                    || !seen.insert(member.user.id)
-                {
-                    progress = false;
-                    continue;
-                }
-                out.scanned += 1;
-                if member.user.username.eq_ignore_ascii_case(name)
-                    || member.effective_name().eq_ignore_ascii_case(name)
-                {
-                    out.matches.push(member);
-                }
-            }
-            if !progress || (size > 0 && next <= out.next_cursor) {
-                out.stop = SearchStop::NoProgress;
-                break;
-            }
-            if size < 500 {
-                out.complete = true;
-                out.next_cursor = None;
-                out.stop = SearchStop::Exhausted;
-                break;
-            }
-            out.next_cursor = next;
-        }
-        Ok(out)
+            stop: SearchStop::ExactId,
+        });
     }
+    let mut out = LookupResult {
+        matches: vec![],
+        complete: false,
+        scanned: 0,
+        pages: 0,
+        next_cursor: None,
+        stop: SearchStop::PageLimit,
+    };
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..max_pages {
+        let batch = get_page(out.next_cursor).await?;
+        out.pages += 1;
+        let size = batch.len();
+        let next = batch.last().map(|m| m.user.id);
+        let mut progress = true;
+        for member in batch {
+            if out
+                .next_cursor
+                .is_some_and(|cursor| member.user.id <= cursor)
+                || !seen.insert(member.user.id)
+            {
+                progress = false;
+                continue;
+            }
+            out.scanned += 1;
+            if member.user.username.eq_ignore_ascii_case(name)
+                || member.effective_name().eq_ignore_ascii_case(name)
+            {
+                out.matches.push(member);
+            }
+        }
+        if !progress || (size > 0 && next <= out.next_cursor) {
+            out.stop = SearchStop::NoProgress;
+            break;
+        }
+        if size < 500 {
+            out.complete = true;
+            out.next_cursor = None;
+            out.stop = SearchStop::Exhausted;
+            break;
+        }
+        out.next_cursor = next;
+    }
+    Ok(out)
 }

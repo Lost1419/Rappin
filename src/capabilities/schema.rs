@@ -1,0 +1,292 @@
+use super::*;
+pub fn bundled_schema() -> &'static Value {
+    static SPEC: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
+        let mut spec: Value = serde_json::from_str(include_str!("../../docs/openapi.json"))
+            .expect("bundled OpenAPI JSON");
+        let guide: Value = serde_json::from_str(include_str!("../../docs/guide-api.json"))
+            .expect("bundled guide JSON");
+        for (path, item) in guide["paths"].as_object().expect("guide paths") {
+            for (method, operation) in item.as_object().expect("guide operation") {
+                spec["paths"][path][method] = operation.clone();
+            }
+        }
+        spec
+    });
+    &SPEC
+}
+
+pub(super) fn body_schema(name: &str) -> Option<Value> {
+    let (method, path) = match name {
+        "send_message" => ("post", "/channels/{id}/messages"),
+        "edit_message" => ("patch", "/channels/{id}/messages/{mid}"),
+        "create_role" => ("post", "/servers/{id}/roles"),
+        "edit_role" => ("patch", "/servers/{id}/roles/{rid}"),
+        "set_everyone_permissions" => ("patch", "/servers/{id}/roles/everyone"),
+        "set_channel_permissions" => ("put", "/channels/{id}/permissions/{role}"),
+        "set_category_permissions" => ("put", "/servers/{id}/categories/{cid}/permissions/{role}"),
+        "create_server_event" => ("post", "/servers/{id}/events"),
+        _ => return None,
+    };
+    fn expand(value: &Value, depth: usize) -> Value {
+        assert!(
+            depth < 48,
+            "recursive catalogue schema must use an explicit definition"
+        );
+        if let Some(reference) = value["$ref"].as_str() {
+            return expand(
+                bundled_schema()
+                    .pointer(reference.strip_prefix('#').expect("local schema reference"))
+                    .expect("bundled schema reference"),
+                depth + 1,
+            );
+        }
+        match value {
+            Value::Array(a) => Value::Array(a.iter().map(|v| expand(v, depth + 1)).collect()),
+            Value::Object(o) => Value::Object(
+                o.iter()
+                    .map(|(k, v)| (k.clone(), expand(v, depth + 1)))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+    let mut schema = expand(
+        &bundled_schema()["paths"][path][method]["requestBody"]["content"]["application/json"]
+            ["schema"],
+        0,
+    );
+    schema["additionalProperties"] = false.into();
+    Some(schema)
+}
+
+/// Validate the JSON Schema subset used by this catalogue. This is not a
+/// general-purpose validator for untrusted external schema dialects.
+pub fn validate_schema(schema: &Value, value: &Value) -> Result<()> {
+    validate_at(schema, schema, value, "arguments", false, 0)
+}
+pub(super) fn validate_partial(schema: &Value, value: &Value) -> Result<()> {
+    validate_at(schema, schema, value, "arguments", true, 0)
+}
+fn validate_at(
+    root: &Value,
+    schema: &Value,
+    value: &Value,
+    path: &str,
+    partial: bool,
+    depth: usize,
+) -> Result<()> {
+    let invalid = |why: &str| YappinError::validation(path, why);
+    if depth > 64 {
+        return Err(invalid("schema nesting exceeds 64"));
+    }
+    if schema == false {
+        return Err(invalid("value is not permitted"));
+    }
+    if let Some(reference) = schema["$ref"].as_str() {
+        let target = reference
+            .strip_prefix('#')
+            .and_then(|p| root.pointer(p))
+            .ok_or_else(|| invalid("unsupported schema reference"))?;
+        validate_at(root, target, value, path, partial, depth + 1)?;
+    }
+    if let Some(expected) = schema.get("const") {
+        if value != expected {
+            return Err(invalid("unexpected constant"));
+        }
+    }
+    if schema["enum"]
+        .as_array()
+        .is_some_and(|a| !a.contains(value))
+    {
+        return Err(invalid("value is not in the permitted choices"));
+    }
+    let matches_type = |name: &str| match name {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "boolean" => value.is_boolean(),
+        "integer" => value.is_i64() || value.is_u64(),
+        "number" => value.is_number(),
+        "null" => value.is_null(),
+        _ => false,
+    };
+    if let Some(t) = schema.get("type") {
+        let valid = if let Some(t) = t.as_str() {
+            matches_type(t)
+        } else {
+            t.as_array()
+                .is_some_and(|a| a.iter().any(|t| t.as_str().is_some_and(matches_type)))
+        };
+        if !valid {
+            return Err(invalid("invalid argument type"));
+        }
+    }
+    if let Some(n) = value.as_f64() {
+        // Integer comparisons must retain u64 precision (event IDs can exceed 2^53).
+        let below = schema["minimum"]
+            .as_u64()
+            .zip(value.as_u64())
+            .map(|(min, n)| n < min)
+            .unwrap_or_else(|| schema["minimum"].as_f64().is_some_and(|min| n < min));
+        let above = schema["maximum"]
+            .as_u64()
+            .zip(value.as_u64())
+            .map(|(max, n)| n > max)
+            .unwrap_or_else(|| schema["maximum"].as_f64().is_some_and(|max| n > max));
+        if below || above {
+            return Err(invalid("argument out of bounds"));
+        }
+    }
+    if let Some(text) = value.as_str() {
+        let length = text.chars().count() as u64;
+        if schema["minLength"].as_u64().is_some_and(|n| length < n)
+            || schema["maxLength"].as_u64().is_some_and(|n| length > n)
+        {
+            return Err(invalid("string length is out of bounds"));
+        }
+        match schema["format"].as_str() {
+            Some("uuid") if uuid::Uuid::parse_str(text).is_err() => {
+                return Err(invalid("invalid UUID"))
+            }
+            Some("date-time") if chrono::DateTime::parse_from_rfc3339(text).is_err() => {
+                return Err(invalid("invalid RFC3339 timestamp"))
+            }
+            _ => (),
+        }
+    }
+    if let Some(object) = value.as_object() {
+        if !partial {
+            if let Some(required) = schema["required"].as_array() {
+                for key in required.iter().filter_map(Value::as_str) {
+                    if !object.contains_key(key) {
+                        return Err(YappinError::validation(
+                            format!("{path}.{key}"),
+                            "required argument",
+                        ));
+                    }
+                }
+            }
+        }
+        for (key, v) in object {
+            let next = format!("{path}.{key}");
+            if let Some(s) = schema["properties"].get(key) {
+                validate_at(root, s, v, &next, partial, depth + 1)?;
+            } else if let Some(additional) = schema.get("additionalProperties") {
+                validate_at(root, additional, v, &next, partial, depth + 1)?;
+            }
+        }
+    }
+    if let Some(items) = value.as_array() {
+        if schema["minItems"]
+            .as_u64()
+            .is_some_and(|n| items.len() < (n as usize))
+            || schema["maxItems"]
+                .as_u64()
+                .is_some_and(|n| items.len() > (n as usize))
+        {
+            return Err(invalid("array length is out of bounds"));
+        }
+        if schema["uniqueItems"] == true
+            && items
+                .iter()
+                .enumerate()
+                .any(|(i, v)| items[..i].contains(v))
+        {
+            return Err(invalid("array items must be unique"));
+        }
+        if let Some(s) = schema.get("items") {
+            for (i, item) in items.iter().enumerate() {
+                validate_at(root, s, item, &format!("{path}[{i}]"), partial, depth + 1)?;
+            }
+        }
+    }
+    for key in ["allOf", "anyOf", "oneOf"] {
+        if let Some(branches) = schema[key].as_array() {
+            if partial && key != "allOf" {
+                continue;
+            }
+            let matches = branches
+                .iter()
+                .filter(|s| validate_at(root, s, value, path, partial, depth + 1).is_ok())
+                .count();
+            if (key == "allOf" && matches != branches.len())
+                || (key == "anyOf" && matches == 0)
+                || (key == "oneOf" && matches != 1)
+            {
+                return Err(invalid("arguments do not satisfy the schema alternatives"));
+            }
+        }
+    }
+    if !partial {
+        if schema
+            .get("not")
+            .is_some_and(|s| validate_at(root, s, value, path, false, depth + 1).is_ok())
+        {
+            return Err(invalid("conflicting arguments"));
+        }
+        if let Some(condition) = schema.get("if") {
+            let key = if validate_at(root, condition, value, path, false, depth + 1).is_ok() {
+                "then"
+            } else {
+                "else"
+            };
+            if let Some(branch) = schema.get(key) {
+                validate_at(root, branch, value, path, false, depth + 1)?;
+            }
+        }
+    }
+    Ok(())
+}
+pub fn endpoint_schema(spec: &Value, path: &str, method: &str) -> Result<Value> {
+    let method = method.to_ascii_lowercase();
+    let item = spec["paths"]
+        .get(path)
+        .ok_or_else(|| YappinError::validation("path", "unknown API path template"))?;
+    let mut operation = item
+        .get(&method)
+        .filter(|v| v.is_object())
+        .cloned()
+        .ok_or_else(|| YappinError::validation("method", "unknown HTTP operation"))?;
+    if let Some(parameters) = item.get("parameters") {
+        operation["path_parameters"] = parameters.clone();
+    }
+    fn refs(value: &Value, out: &mut Vec<String>) {
+        match value {
+            Value::Object(o) => {
+                if let Some(s) = o.get("$ref").and_then(Value::as_str) {
+                    out.push(s.into());
+                }
+                for value in o.values() {
+                    refs(value, out);
+                }
+            }
+            Value::Array(a) => {
+                for value in a {
+                    refs(value, out);
+                }
+            }
+            _ => (),
+        }
+    }
+    let mut queue = vec![];
+    refs(&operation, &mut queue);
+    let mut seen = std::collections::HashSet::new();
+    let mut components = json!({});
+    while let Some(reference) = queue.pop() {
+        if !seen.insert(reference.clone()) {
+            continue;
+        }
+        let parts: Vec<_> = reference.split('/').collect();
+        if parts.len() != 4 || parts[0] != "#" || parts[1] != "components" {
+            return Err(YappinError::Config("unsupported schema reference".into()));
+        }
+        let value = spec
+            .pointer(reference.trim_start_matches('#'))
+            .ok_or_else(|| YappinError::Config("missing schema reference".into()))?;
+        refs(value, &mut queue);
+        components[parts[2]][parts[3]] = value.clone();
+    }
+    Ok(
+        json!({"path":path,"method":method.to_uppercase(),"operation":operation,"components":components}),
+    )
+}

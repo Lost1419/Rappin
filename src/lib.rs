@@ -106,6 +106,7 @@ pub mod voice;
 pub mod webhook;
 
 pub mod api;
+pub mod capabilities;
 pub mod lookup;
 pub use lookup::{LookupResult, LookupStatus, SearchStop};
 pub mod permissions;
@@ -189,3 +190,6 @@ pub mod server_management_guide {}
 
 #[doc = include_str!("../docs/sdk-workflows.md")]
 pub mod sdk_workflows_guide {}
+
+#[doc = include_str!("../docs/yapbot-sdk-handoff.md")]
+pub mod capability_bindings_guide {}

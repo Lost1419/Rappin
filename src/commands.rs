@@ -388,7 +388,7 @@ impl CommandCheck for Check {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CommandInfo {
     pub name: String,
     pub description: String,

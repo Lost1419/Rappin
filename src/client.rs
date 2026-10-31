@@ -1668,10 +1668,13 @@ impl Client {
     }
 }
 
-#[cfg(feature = "hot-reload")]
 impl Client {
-    pub(crate) fn worker_output(&self, value: serde_json::Value) -> serde_json::Value {
+    pub(crate) fn redact_credentials(&self, value: serde_json::Value) -> serde_json::Value {
         crate::security::redact_json(value, &[&self.inner.token])
+    }
+    #[cfg(feature = "hot-reload")]
+    pub(crate) fn worker_output(&self, value: serde_json::Value) -> serde_json::Value {
+        self.redact_credentials(value)
     }
 }
 

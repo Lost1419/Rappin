@@ -6,6 +6,11 @@ use serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ArgumentType {
+    /// A catalogue argument schema. Strings remain strings; other values use a
+    /// quoted JSON token. Validation uses the catalogue's supported schema subset.
+    Schema {
+        schema: Value,
+    },
     String {
         #[serde(default)]
         min_length: usize,
@@ -87,15 +92,15 @@ impl CommandSchema {
                 ));
             }
             optional |= !arg.required;
-            if arg.rest
-                && (i + 1 != self.arguments.len()
-                    || !matches!(arg.kind, ArgumentType::String { .. }))
-            {
+            let string_kind = matches!(arg.kind, ArgumentType::String { .. })
+                || matches!(&arg.kind,ArgumentType::Schema{schema} if schema["type"]=="string");
+            if arg.rest && (i + 1 != self.arguments.len() || !string_kind) {
                 return Err(definition(
                     "rest is permitted only on the final string argument",
                 ));
             }
             let valid = match &arg.kind {
+                ArgumentType::Schema { schema } => schema.is_object() || schema.is_boolean(),
                 ArgumentType::String {
                     min_length,
                     max_length,
@@ -164,6 +169,27 @@ impl CommandSchema {
                 })
             };
             let value = match &arg.kind {
+                ArgumentType::Schema { schema } => {
+                    let string_type = schema["type"] == "string"
+                        || schema["type"]
+                            .as_array()
+                            .is_some_and(|a| a.iter().any(|t| t == "string") && raw != "null")
+                        || schema["enum"]
+                            .as_array()
+                            .is_some_and(|a| a.iter().all(Value::is_string));
+                    let value = if string_type {
+                        Value::String(raw)
+                    } else {
+                        serde_json::from_str(&raw).map_err(|_| invalid())?
+                    };
+                    crate::capabilities::validate_schema(schema, &value).map_err(|_| {
+                        CommandError::Invalid {
+                            name: arg.name.clone(),
+                            reason: "value does not match the operation argument schema".into(),
+                        }
+                    })?;
+                    value
+                }
                 ArgumentType::String {
                     min_length,
                     max_length,
