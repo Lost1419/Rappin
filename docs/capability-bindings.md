@@ -76,7 +76,7 @@ async fn run_plan(api: &(impl Api + ?Sized), server: Uuid, requester: Uuid) -> R
 }
 ```
 
-See [`examples/planner_bindings.rs`](../examples/planner_bindings.rs) for an
+See [`examples/planner_bindings.rs`](https://github.com/Lost1419/Rappin/blob/main/examples/planner_bindings.rs) for an
 offline executable and a permanent-command installation helper. Run
 `cargo run --example planner_bindings` to print capabilities without credentials.
 The library can be used as `rappin-rs = { version = "0.1.13", default-features = false }`.
