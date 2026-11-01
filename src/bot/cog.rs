@@ -48,18 +48,19 @@ impl CogCommand {
         F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
+        let handler = Arc::new(handler);
         let wrapped = move |ctx: MessageContext| {
             let cd = cooldown.clone();
-            let fut = handler(ctx.clone());
+            let handler = handler.clone();
             async move {
                 if let Some(remaining) = cd.check(&ctx).await {
                     let secs = remaining.as_secs_f32();
-                    let _ = ctx
-                        .reply(format!("⏳ You are on cooldown! Please wait {:.1}s.", secs))
-                        .await;
-                    return Ok(());
+                    return Err(crate::CommandError::Denied(format!(
+                        "You are on cooldown; wait {secs:.1}s"
+                    ))
+                    .into());
                 }
-                fut.await
+                handler(ctx).await
             }
         };
         Self::new(name, description, wrapped)

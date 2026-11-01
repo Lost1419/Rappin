@@ -17,8 +17,23 @@ telemetry. The gateway is feature-gated and may deny a bot's beta access; pollin
 fallback is expected in that case. Distinguish a received cursor from a committed
 cursor. An agent consumer replays its persisted pending batch until acknowledgement;
 acknowledge only delivered IDs after processing them. A failed Rust handler can
-prevent its batch checkpoint from advancing. Check backlog and handler saturation
+block the checkpoint at that event; a completed prefix can advance. Check backlog and handler saturation
 before blaming the gateway. Keep a separate state file for each bot/consumer.
+
+## Handler failures and stopped intake
+
+Typed input/check rejections complete after a successful reply. Failed replies
+and unexpected errors remain unprocessed unless an explicit failure callback
+completes/reconciles them. Legacy error callbacks are observers, not completion
+callbacks. Preserve `FailureHandling.source` and `handling_error`, status, retry
+hints and partial-write receipts.
+
+Inspect `EventProcessing` reports: failed IDs, not-started events, completed but
+uncommitted events, and independent intake/cursor causes. Do not retry a whole
+handler because one request has Retry-After. Worker timeout/completion loss is
+uncertain; reconcile using application receipts before explicitly replacing or
+restarting anything. A cursor-write failure does not make completed work safe
+to repeat.
 
 ## Authentication and permissions
 

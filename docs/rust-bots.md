@@ -37,8 +37,10 @@ let bot = Bot::builder("yb_token")
 `!dice roll 20 "lucky die"`, `/dice roll 20`, and `!roll 20` share one handler.
 Only the root `dice` is advertised to Yapin; nested paths and aliases are local
 routing. Names are normalized to lowercase and paths have at most eight segments.
-Invalid arguments and denied checks receive an error and usage reply without
-terminating the event loop. Transport failures still follow normal error handling.
+Invalid arguments and denied checks complete after their error/usage reply
+succeeds. Failed replies and unexpected errors stop intake by default. The
+[handler failure policy](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md) provides explicit completion
+callbacks and retains original and reply causes.
 The same specs can be registered with `CogBuilder::command_spec` or returned by
 `Cog::registered_commands`. Metadata, checks, and aliases follow cog replacement.
 `BotHandle::command_info()` and `help(path)` reflect the current registry.
@@ -137,8 +139,9 @@ queue and active batch futures separately. Normal API batches contain at most 10
 events, so this is a batch bound rather than a byte-size bound.
 
 A received cursor tracks prefetched delivery. The durable committed cursor moves
-only after whole batches succeed, in delivery order. Failed batches remain
-uncommitted even when a later handler finishes first. Delivery is at least once:
+after the completed event prefix, in delivery order. Full batches can commit
+their watermark; a partial batch commits only before its first unprocessed
+event, even when later handlers finish first. Delivery is at least once:
 use idempotent actions where replay matters. One process must own a cursor file.
 
 When queues fill, intake pauses. A gateway connection is dropped and later resumed

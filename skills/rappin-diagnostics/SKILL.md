@@ -15,6 +15,13 @@ an observation came from the SDK, its transport, a handler, or the Yapin service
 before assigning blame. Retain sanitized status codes, timing boundaries,
 attempt counts, cursor values and a minimal reproduction.
 
+For command/button failures, distinguish typed rejections, unexpected handler
+errors, failed replies and intake/cursor failures. `on_command_failure` and
+`on_button_failure` return explicit dispositions; legacy `()` error observers
+do not complete an invocation. Inspect structured `EventProcessing` reports,
+including completed-but-uncommitted work, before any restart. Never mark an
+uncertain write handled merely to keep intake running.
+
 Use bounded history and exact IDs when possible. Do not clear state, force an
 acknowledgement, change permissions or resend an uncertain write just to make an
 error disappear. Honor the user's existing authorization; ask only for scope or

@@ -60,9 +60,11 @@ outcome hints and partial-write details. `YappinError` status/retry helpers work
 on it. Error JSON is redacted before crossing the parent/worker boundary. Legacy
 string fields remain for v1/v2 workers; rebuild workers to obtain structured
 errors. The new host accepts all three versions; older hosts reject v3 workers.
-Command/button dispatch preserves error status when returning a handler failure,
-including when an error callback consumes the original error. Command validation
-errors still produce usage replies.
+Command/button dispatch preserves structured causes across callbacks and worker
+boundaries. Legacy callbacks observe failures; the explicit
+[failure policy](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md) can complete an invocation. Typed worker
+parse errors reach the parent policy, and only recognized input/check rejections
+receive default terminal replies.
 
 ## Runtime command schemas and preflight
 

@@ -20,6 +20,21 @@ pub enum CommandError {
     #[error("invalid command definition: {0}")]
     Definition(String),
 }
+impl CommandError {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Quoting => "quoting",
+            Self::Missing(_) => "missing",
+            Self::Invalid { .. } => "invalid",
+            Self::Extra => "extra",
+            Self::Denied(_) => "denied",
+            Self::Definition(_) => "definition",
+        }
+    }
+    pub fn is_rejection(&self) -> bool {
+        !matches!(self, Self::Definition(_))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Token {

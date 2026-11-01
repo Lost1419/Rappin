@@ -39,6 +39,23 @@ impl serde::Serialize for RemoteError {
 /// The error type for operations in the `yappin` crate.
 #[derive(Debug, Error)]
 pub enum YappinError {
+    #[error("event processing stopped after cursor {cursor}",cursor=.report.committed_cursor)]
+    EventProcessing {
+        report: Box<crate::bot::EventProcessingFailure>,
+    },
+    #[error(
+        "failure callback/reply did not complete: {handling_error}; original failure: {source}"
+    )]
+    FailureHandling {
+        source: Box<YappinError>,
+        handling_error: Box<YappinError>,
+    },
+    #[error("handler completion is uncertain: {reason}{cause}",cause=.source.as_ref().map(|e|format!(": {e}")).unwrap_or_default())]
+    HandlerInterrupted {
+        reason: String,
+        #[source]
+        source: Option<Box<YappinError>>,
+    },
     #[error("operation authorization is denied or incomplete: {operation}",operation=.report.operation)]
     OperationAuthorization {
         report: Box<crate::capabilities::AuthorizationReport>,
@@ -106,6 +123,16 @@ impl YappinError {
     /// Returns the HTTP status code associated with this error, if available.
     pub fn status_code(&self) -> Option<u16> {
         match self {
+            Self::EventProcessing { report } => report.primary().and_then(|e| e.status),
+            Self::FailureHandling {
+                source,
+                handling_error,
+            } => source
+                .status_code()
+                .or_else(|| handling_error.status_code()),
+            Self::HandlerInterrupted { source, .. } => {
+                source.as_ref().and_then(|e| e.status_code())
+            }
             Self::OperationAuthorization { report }
                 if report.decision() == crate::capabilities::AccessDecision::Denied =>
             {
@@ -140,6 +167,26 @@ impl YappinError {
 
     /// Returns the suggested retry wait duration if this error was caused by a rate limit.
     pub fn retry_after(&self) -> Option<std::time::Duration> {
+        match self {
+            Self::EventProcessing { report } => {
+                return report
+                    .primary()
+                    .and_then(|e| e.retry_after)
+                    .and_then(|s| std::time::Duration::try_from_secs_f64(s).ok())
+            }
+            Self::FailureHandling {
+                source,
+                handling_error,
+            } => {
+                return source
+                    .retry_after()
+                    .or_else(|| handling_error.retry_after())
+            }
+            Self::HandlerInterrupted { source, .. } => {
+                return source.as_ref().and_then(|e| e.retry_after())
+            }
+            _ => (),
+        }
         if let Self::PartialWrite { source, .. } = self {
             return source.retry_after();
         }
@@ -161,6 +208,21 @@ impl YappinError {
 
     /// Stable JSON representation for agents. Transport URLs are intentionally omitted.
     pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::EventProcessing { report } => {
+                return serde_json::json!({"kind":"event_processing","message":self.to_string(),"status":self.status_code(),"retry_after":self.retry_after().map(|d|d.as_secs_f64()),"report":report,"retry_safety":"do_not_replay_workflow","outcome":"incomplete"})
+            }
+            Self::FailureHandling {
+                source,
+                handling_error,
+            } => {
+                return serde_json::json!({"kind":"failure_handling","message":self.to_string(),"status":self.status_code(),"retry_after":self.retry_after().map(|d|d.as_secs_f64()),"source":source.to_json(),"handling_error":handling_error.to_json(),"retry_safety":"do_not_replay_workflow","outcome":"incomplete"})
+            }
+            Self::HandlerInterrupted { source, .. } => {
+                return serde_json::json!({"kind":"handler_interrupted","message":self.to_string(),"status":self.status_code(),"retry_after":self.retry_after().map(|d|d.as_secs_f64()),"source":source.as_ref().map(|e|e.to_json()),"retry_safety":"do_not_replay_workflow","outcome":"unknown"})
+            }
+            _ => (),
+        }
         if let Self::OperationAuthorization { report } = self {
             return serde_json::json!({"kind":"operation_authorization","message":self.to_string(),"status":self.status_code(),"retry_after":null,"decision":report.decision(),"authorization":report,"retry_safety":"fix_request","outcome":"not_applied"});
         }
@@ -202,6 +264,9 @@ impl YappinError {
             "status": self.status_code(), "retry_after": self.retry_after().map(|d| d.as_secs_f64())});
         if let Self::Validation { field, .. } = self {
             value["field"] = field.clone().into();
+        }
+        if let Self::Command(error) = self {
+            value["command_kind"] = error.kind().into();
         }
         if let Self::IncompleteSearch {
             resource,
@@ -253,6 +318,12 @@ impl YappinError {
     pub fn is_command_error(&self) -> bool {
         matches!(self, Self::Command(_))
             || matches!(self, Self::Remote(error) if error.kind=="command")
+    }
+    /// Only recognized typed input/check failures, never definition errors or
+    /// legacy remote strings whose classification was lost.
+    pub fn is_command_rejection(&self) -> bool {
+        matches!(self, Self::Command(error) if error.is_rejection())
+            || matches!(self, Self::Remote(error) if error.kind=="command" && matches!(error.details.get("command_kind").and_then(|v|v.as_str()),Some("quoting"|"missing"|"invalid"|"extra"|"denied")))
     }
 
     /// Checks if this error is a permissions failure (HTTP 403 Forbidden).

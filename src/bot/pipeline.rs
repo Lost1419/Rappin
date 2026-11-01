@@ -9,7 +9,10 @@ use futures_util::{
     StreamExt,
 };
 use std::{
-    sync::{atomic::Ordering, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 use tokio::sync::{mpsc, Semaphore};
@@ -22,6 +25,37 @@ struct Intake(
 struct PreparedBatch {
     last: u64,
     events: Vec<(crate::Event, Option<Box<crate::InteractionEvent>>)>,
+}
+struct IntakeFailure {
+    error: YappinError,
+    unprocessed: Vec<u64>,
+}
+fn retryable_read(error: &YappinError) -> bool {
+    matches!(
+        error,
+        YappinError::Http(_) | YappinError::RateLimited { .. }
+    ) || matches!(error.status_code(), Some(408 | 429 | 500 | 502 | 503 | 504))
+}
+struct CompletedBatch {
+    watermark: u64,
+    outcomes: Vec<(u64, Option<Result<()>>)>,
+}
+struct ExecutionGate {
+    limit: usize,
+    semaphore: Semaphore,
+    serial: tokio::sync::Mutex<()>,
+    halted: AtomicBool,
+    failed: tokio::sync::Notify,
+}
+impl ExecutionGate {
+    fn halt(&self) {
+        if !self.halted.swap(true, Ordering::SeqCst) {
+            self.failed.notify_one();
+        }
+    }
+    fn halted(&self) -> bool {
+        self.halted.load(Ordering::SeqCst)
+    }
 }
 impl Drop for Intake {
     fn drop(&mut self) {
@@ -45,7 +79,8 @@ impl Bot {
         let max_age = self.handle.inner.max_age;
         let capacity = self.handle.inner.pending_batches;
         let auto_ack = self.handle.inner.auto_ack_after;
-        let (sender, mut receiver) = mpsc::channel::<Result<PreparedBatch>>(capacity);
+        let (sender, mut receiver) =
+            mpsc::channel::<std::result::Result<PreparedBatch, IntakeFailure>>(capacity);
         #[cfg(feature = "gateway")]
         let gateway_url = self
             .handle
@@ -57,7 +92,7 @@ impl Bot {
             s.received_cursor = last;
             s.committed_cursor = last;
         });
-        let intake = Intake(
+        let mut intake = Intake(
             tokio::spawn(async move {
                 let mut received = last;
                 let mut failures = 0u32;
@@ -109,8 +144,13 @@ impl Bot {
                                 .max(batch.last)
                                 .max(batch.events.last().map_or(0, |e| e.id));
                             batch.last = received;
-                            let mut events = Vec::with_capacity(batch.events.len());
-                            for event in batch.events {
+                            telemetry.update(|s| s.received_cursor = received);
+                            let mut events: Vec<(
+                                crate::Event,
+                                Option<Box<crate::InteractionEvent>>,
+                            )> = Vec::with_capacity(batch.events.len());
+                            let mut pending = batch.events.into_iter();
+                            while let Some(event) = pending.next() {
                                 let mut prepared = None;
                                 if event.kind == "interaction" {
                                     if let Ok(crate::EventData::Interaction(mut interaction)) =
@@ -121,7 +161,11 @@ impl Bot {
                                         if let Err(error) =
                                             client.track_interaction(&interaction).await
                                         {
-                                            permit.send(Err(error));
+                                            let mut unprocessed: Vec<_> =
+                                                events.iter().map(|(event, _)| event.id).collect();
+                                            unprocessed.push(event.id);
+                                            unprocessed.extend(pending.map(|event| event.id));
+                                            permit.send(Err(IntakeFailure { error, unprocessed }));
                                             return;
                                         }
                                         if let Some(after) = auto_ack {
@@ -133,15 +177,20 @@ impl Bot {
                                 client.receive_event(event.clone()).await;
                                 events.push((event, prepared));
                             }
-                            telemetry.update(|s| s.received_cursor = received);
                             permit.send(Ok(PreparedBatch {
                                 last: batch.last,
                                 events,
                             }));
                         }
                         Err(error) => {
-                            if error.is_unauthorized() || mode == TransportMode::GatewayOnly {
-                                permit.send(Err(error));
+                            if error.is_unauthorized()
+                                || mode == TransportMode::GatewayOnly
+                                || !retryable_read(&error)
+                            {
+                                permit.send(Err(IntakeFailure {
+                                    error,
+                                    unprocessed: vec![],
+                                }));
                                 break;
                             }
                             drop(permit);
@@ -158,12 +207,25 @@ impl Bot {
             self.client().clone(),
             self.handle.inner.telemetry.clone(),
         );
-        let semaphore = Arc::new(Semaphore::new(self.handle.inner.handler_concurrency));
-        let serial_batches = Arc::new(tokio::sync::Mutex::new(()));
-        let mut batches: FuturesOrdered<BoxFuture<'_, (u64, Result<()>)>> = FuturesOrdered::new();
+        let gate = Arc::new(ExecutionGate {
+            limit: self.handle.inner.handler_concurrency,
+            semaphore: Semaphore::new(self.handle.inner.handler_concurrency),
+            serial: tokio::sync::Mutex::new(()),
+            halted: AtomicBool::new(false),
+            failed: tokio::sync::Notify::new(),
+        });
+        let mut batches: FuturesOrdered<BoxFuture<'_, CompletedBatch>> = FuturesOrdered::new();
         let mut stopping = !self.handle.inner.running.load(Ordering::SeqCst);
-        let mut failure = None;
-        let mut committed = last;
+        let mut barrier = false;
+        let mut report = super::EventProcessingFailure {
+            committed_cursor: last,
+            received_cursor: last,
+            failed_events: vec![],
+            unprocessed_events: vec![],
+            completed_uncommitted_events: vec![],
+            intake_error: None,
+            cursor_error: None,
+        };
         loop {
             if stopping {
                 intake.0.abort();
@@ -176,55 +238,181 @@ impl Bot {
             tokio::select! {
                 _=tokio::signal::ctrl_c(), if !stopping => {self.stop();stopping=true;},
                 _=self.handle.inner.stopped.notified(), if !stopping => {stopping=true;},
+                _=gate.failed.notified(), if !stopping => {stopping=true;},
                 next=receiver.recv(), if !stopping && batches.len()<capacity => {
                     match next {
                         Some(Ok(batch))=>{
-                            let semaphore=semaphore.clone();
-                            let limit=self.handle.inner.handler_concurrency;
-                            let serial_batches=serial_batches.clone();
-                            batches.push_back(Box::pin(async move {
-                                let _ordered = if limit==1 {Some(serial_batches.lock().await)} else {None};
-                                let results=stream::iter(batch.events).map(|(event, prepared)|{
-                                    let semaphore=semaphore.clone();
-                                    async move {
-                                        let _permit=semaphore.acquire().await.map_err(|_|YappinError::Config("handler executor closed".into()))?;
-                                        self.dispatch_event(event,me,prepared).await
-                                    }
-                                }).buffer_unordered(limit).collect::<Vec<_>>().await;
-                                let result=results.into_iter().collect::<Result<Vec<_>>>().map(|_|());
-                                (batch.last,result)
-                            }));
+                            batches.push_back(Box::pin(self.dispatch_batch(batch,me,gate.clone())));
                             self.handle.inner.telemetry.update(|s|s.pending_batches=batches.len());
                         }
-                        Some(Err(error))=>{failure=Some(error);stopping=true;},
-                        None=>{failure=Some(YappinError::Config("event intake exited unexpectedly".into()));stopping=true;},
+                        Some(Err(failure))=>{
+                            report.intake_error=Some(self.failure_cause(&failure.error));
+                            report.unprocessed_events.extend(failure.unprocessed);
+                            gate.halt();stopping=true;
+                        }
+                        None=>{
+                            let error=YappinError::Config("event intake exited unexpectedly".into());
+                            report.intake_error=Some(self.failure_cause(&error));
+                            gate.halt();stopping=true;
+                        }
                     }
                 },
                 completed=batches.next(), if !batches.is_empty()=>{
-                    if let Some((watermark,result))=completed {
-                        match result {
-                            Ok(()) if failure.is_none()=>{
-                                if watermark != committed {
-                                    if let Some(cursor)=&self.handle.inner.cursor {
-                                        if let Err(error)=cursor.save(watermark).await{failure=Some(error);stopping=true;}
-                                    }
-                                }
-                                if failure.is_none(){committed=watermark;self.handle.inner.telemetry.update(|s|s.committed_cursor=watermark);}
-                            }
-                            Err(error)=>{if failure.is_none(){failure=Some(error);}stopping=true;},
-                            _=>(),
-                        }
+                    if let Some(batch)=completed {
+                        stopping|=self.checkpoint_batch(batch,&mut report,&mut barrier,&gate).await;
                         self.handle.inner.telemetry.update(|s|s.pending_batches=batches.len());
                     }
                     if !self.handle.inner.running.load(Ordering::SeqCst){stopping=true;}
                 }
             }
         }
+        // These batches were prefetched but never accepted by the executor.
+        intake.0.abort();
+        let _ = (&mut intake.0).await;
+        while let Ok(batch) = receiver.try_recv() {
+            match batch {
+                Ok(batch) => report
+                    .unprocessed_events
+                    .extend(batch.events.into_iter().map(|(event, _)| event.id)),
+                Err(failure) => {
+                    if report.intake_error.is_none() {
+                        report.intake_error = Some(self.failure_cause(&failure.error));
+                    }
+                    report.unprocessed_events.extend(failure.unprocessed);
+                }
+            }
+        }
+        report.received_cursor = self.handle.inner.telemetry.status().received_cursor;
+        report.completed_uncommitted_events.sort_unstable();
+        report.unprocessed_events.sort_unstable();
+        report.unprocessed_events.dedup();
+        report.failed_events.sort_by_key(|event| event.event_id);
         self.handle.inner.telemetry.update(|s| {
             s.active = None;
             s.heartbeat_rtt = None;
             s.pending_batches = 0;
         });
-        failure.map_or(Ok(()), Err)
+        if report.failed_events.is_empty()
+            && report.cursor_error.is_none()
+            && report.intake_error.is_none()
+        {
+            Ok(())
+        } else {
+            Err(YappinError::EventProcessing {
+                report: Box::new(report),
+            })
+        }
+    }
+
+    async fn dispatch_batch(
+        &self,
+        batch: PreparedBatch,
+        me: &BotProfile,
+        gate: Arc<ExecutionGate>,
+    ) -> CompletedBatch {
+        let _ordered = if gate.limit == 1 {
+            Some(gate.serial.lock().await)
+        } else {
+            None
+        };
+        let mut outcomes = stream::iter(batch.events)
+            .map(|(event, prepared)| {
+                let gate = gate.clone();
+                async move {
+                    let id = event.id;
+                    if gate.halted() {
+                        return (id, None);
+                    }
+                    let permit = gate.semaphore.acquire().await;
+                    if gate.halted() {
+                        return (id, None);
+                    }
+                    let result = match permit {
+                        Ok(_permit) => {
+                            super::failure::catch(self.dispatch_event(event, me, prepared)).await
+                        }
+                        Err(_) => Err(YappinError::Config("handler executor closed".into())),
+                    };
+                    if result.is_err() {
+                        gate.halt();
+                    }
+                    (id, Some(result))
+                }
+            })
+            .buffer_unordered(gate.limit)
+            .collect::<Vec<_>>()
+            .await;
+        outcomes.sort_by_key(|(id, _)| *id);
+        CompletedBatch {
+            watermark: batch.last,
+            outcomes,
+        }
+    }
+
+    async fn checkpoint_batch(
+        &self,
+        batch: CompletedBatch,
+        report: &mut super::EventProcessingFailure,
+        barrier: &mut bool,
+        gate: &ExecutionGate,
+    ) -> bool {
+        let mut prefix = report.committed_cursor;
+        let mut complete = !*barrier;
+        let mut stop = false;
+        for (id, result) in batch.outcomes {
+            match result {
+                Some(Ok(())) => {
+                    report.completed_uncommitted_events.push(id);
+                    if complete {
+                        prefix = id;
+                    }
+                }
+                Some(Err(error)) => {
+                    report.failed_events.push(super::EventFailure {
+                        event_id: id,
+                        error: self.failure_cause(&error),
+                    });
+                    complete = false;
+                    stop = true;
+                }
+                None => {
+                    report.unprocessed_events.push(id);
+                    complete = false;
+                    stop = true;
+                }
+            }
+        }
+        if complete {
+            prefix = prefix.max(batch.watermark);
+        }
+        if !*barrier && prefix != report.committed_cursor {
+            let saved = match &self.handle.inner.cursor {
+                Some(cursor) => cursor.save(prefix).await,
+                None => Ok(()),
+            };
+            match saved {
+                Ok(()) => {
+                    report.committed_cursor = prefix;
+                    self.handle
+                        .inner
+                        .telemetry
+                        .update(|s| s.committed_cursor = prefix);
+                }
+                Err(error) => {
+                    report.cursor_error = Some(self.failure_cause(&error));
+                    gate.halt();
+                    stop = true;
+                    complete = false;
+                }
+            }
+        }
+        // Healthy runs must not retain a history of every completed event.
+        report
+            .completed_uncommitted_events
+            .retain(|id| *id > report.committed_cursor);
+        if !complete {
+            *barrier = true;
+        }
+        stop
     }
 }

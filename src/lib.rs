@@ -111,6 +111,10 @@ pub mod lookup;
 pub use lookup::{LookupResult, LookupStatus, SearchStop};
 pub mod permissions;
 pub use api::{Api, ApiExt};
+pub use bot::{
+    EventFailure, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,
+    HandlerKind,
+};
 pub use permissions::{PermissionEvaluation, PermissionSnapshot};
 
 pub use bot::{
@@ -144,8 +148,9 @@ pub use webhook::{WebhookClient, WebhookInfo, WebhookMessage};
 /// Commonly used types for building bots and interacting with Yapin'.
 pub mod prelude {
     pub use crate::bot::{
-        Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventHandler,
-        InteractionContext, MessageContext, RegistrationPlan,
+        Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventFailure,
+        EventHandler, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,
+        HandlerKind, InteractionContext, MessageContext, RegistrationPlan,
     };
     pub use crate::client::{Client, ClientBuilder};
     pub use crate::cooldown::{Cooldown, CooldownType};
@@ -193,3 +198,6 @@ pub mod sdk_workflows_guide {}
 
 #[doc = include_str!("../docs/capability-bindings.md")]
 pub mod capability_bindings_guide {}
+
+#[doc = include_str!("../docs/handler-failures.md")]
+pub mod handler_failures_guide {}

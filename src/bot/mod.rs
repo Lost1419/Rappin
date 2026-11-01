@@ -1,7 +1,12 @@
 pub mod cog;
 pub mod context;
+mod failure;
 pub mod handler;
 mod pipeline;
+pub use failure::{
+    EventFailure, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,
+    HandlerKind,
+};
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -11,7 +16,7 @@ use std::time::Duration;
 
 use crate::events::EventCursor;
 use tokio::sync::RwLock;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 pub use cog::{
     ButtonHandlerFn, Cog, CogBuilder, CogButton, CogCommand, CommandHandlerFn, DynamicCog,
@@ -172,6 +177,23 @@ pub type ButtonErrorHandlerFn = Arc<
         + Sync,
 >;
 
+pub type CommandFailureHandlerFn = Arc<
+    dyn Fn(
+            MessageContext,
+            HandlerFailure,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<FailureDisposition>> + Send>>
+        + Send
+        + Sync,
+>;
+pub type ButtonFailureHandlerFn = Arc<
+    dyn Fn(
+            InteractionContext,
+            HandlerFailure,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<FailureDisposition>> + Send>>
+        + Send
+        + Sync,
+>;
+
 struct BotState {
     client: Arc<Client>,
     prefixes: Vec<String>,
@@ -185,6 +207,8 @@ struct BotState {
     event_handler: Option<Arc<dyn EventHandler>>,
     command_error_handler: Option<CommandErrorHandlerFn>,
     button_error_handler: Option<ButtonErrorHandlerFn>,
+    command_failure_handler: Option<CommandFailureHandlerFn>,
+    button_failure_handler: Option<ButtonFailureHandlerFn>,
     ignore_bots: bool,
     sync_commands: bool,
     log: bool,
@@ -565,6 +589,8 @@ pub struct BotBuilder {
     event_handler: Option<Arc<dyn EventHandler>>,
     command_error_handler: Option<CommandErrorHandlerFn>,
     button_error_handler: Option<ButtonErrorHandlerFn>,
+    command_failure_handler: Option<CommandFailureHandlerFn>,
+    button_failure_handler: Option<ButtonFailureHandlerFn>,
     ignore_bots: bool,
     sync_commands: bool,
     log: bool,
@@ -596,6 +622,8 @@ impl BotBuilder {
             event_handler: None,
             command_error_handler: None,
             button_error_handler: None,
+            command_failure_handler: None,
+            button_failure_handler: None,
             ignore_bots: true,
             sync_commands: true,
             log: true,
@@ -728,18 +756,19 @@ impl BotBuilder {
     {
         let name_str = name.into().to_lowercase();
         let desc_str = description.into();
+        let handler = Arc::new(handler);
         let wrapped_handler: CommandHandlerFn = Arc::new(move |ctx| {
             let cd = cooldown.clone();
-            let fut = handler(ctx.clone());
+            let handler = handler.clone();
             Box::pin(async move {
                 if let Some(remaining) = cd.check(&ctx).await {
                     let secs = remaining.as_secs_f32();
-                    let _ = ctx
-                        .reply(format!("⏳ You are on cooldown! Please wait {:.1}s.", secs))
-                        .await;
-                    return Ok(());
+                    return Err(crate::CommandError::Denied(format!(
+                        "You are on cooldown; wait {secs:.1}s"
+                    ))
+                    .into());
                 }
-                fut.await
+                handler(ctx).await
             })
         });
         if self
@@ -790,7 +819,8 @@ impl BotBuilder {
         self
     }
 
-    /// Registers a custom error handler for commands that return an `Err`.
+    /// Observes unexpected command failures. Returning `()` does not complete them;
+    /// use `on_command_failure` for explicit completion. Last registration wins.
     ///
     /// # Example
     ///
@@ -798,8 +828,8 @@ impl BotBuilder {
     /// use rappin::prelude::*;
     ///
     /// let bot = Bot::builder("yb_token")
-    ///     .on_command_error(|ctx, err| async move {
-    ///         let _ = ctx.reply(format!("⚠️ Command failed: {err}")).await;
+    ///     .on_command_error(|_ctx, err| async move {
+    ///         eprintln!("Command failed: {err}");
     ///     });
     /// ```
     pub fn on_command_error<F, Fut>(mut self, handler: F) -> Self
@@ -807,11 +837,13 @@ impl BotBuilder {
         F: Fn(MessageContext, YappinError) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
+        self.command_failure_handler = None;
         self.command_error_handler = Some(Arc::new(move |ctx, err| Box::pin(handler(ctx, err))));
         self
     }
 
-    /// Registers a custom error handler for button interactions that return an `Err`.
+    /// Observes unexpected button failures without completing them.
+    /// Use `on_button_failure` for explicit completion. Last registration wins.
     ///
     /// # Example
     ///
@@ -819,8 +851,8 @@ impl BotBuilder {
     /// use rappin::prelude::*;
     ///
     /// let bot = Bot::builder("yb_token")
-    ///     .on_button_error(|ctx, err| async move {
-    ///         let _ = ctx.ephemeral(format!("⚠️ Button failed: {err}")).await;
+    ///     .on_button_error(|_ctx, err| async move {
+    ///         eprintln!("Button failed: {err}");
     ///     });
     /// ```
     pub fn on_button_error<F, Fut>(mut self, handler: F) -> Self
@@ -828,7 +860,36 @@ impl BotBuilder {
         F: Fn(InteractionContext, YappinError) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
+        self.button_failure_handler = None;
         self.button_error_handler = Some(Arc::new(move |ctx, err| Box::pin(handler(ctx, err))));
+        self
+    }
+
+    /// Explicitly decide whether a failed invocation completed. Callback errors
+    /// remain unprocessed and retain both the original and handling causes.
+    /// Replaces `on_command_error`; the last registration selects the callback.
+    pub fn on_command_failure<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(MessageContext, HandlerFailure) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<FailureDisposition>> + Send + 'static,
+    {
+        self.command_error_handler = None;
+        self.command_failure_handler = Some(Arc::new(move |ctx, failure| {
+            Box::pin(handler(ctx, failure))
+        }));
+        self
+    }
+    /// Button counterpart of `on_command_failure`. `Handled` completes only the
+    /// failed invocation; remaining matching handlers/listeners still run.
+    pub fn on_button_failure<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(InteractionContext, HandlerFailure) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<FailureDisposition>> + Send + 'static,
+    {
+        self.button_error_handler = None;
+        self.button_failure_handler = Some(Arc::new(move |ctx, failure| {
+            Box::pin(handler(ctx, failure))
+        }));
         self
     }
 
@@ -850,7 +911,7 @@ impl BotBuilder {
         self
     }
 
-    /// Resume only after completed batches. A cursor file must have a single owner.
+    /// Resume after the ordered completed event prefix. A cursor file has one owner.
     pub fn cursor_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.cursor = Some(EventCursor::new(path));
         self
@@ -931,6 +992,8 @@ impl BotBuilder {
             event_handler: self.event_handler,
             command_error_handler: self.command_error_handler,
             button_error_handler: self.button_error_handler,
+            command_failure_handler: self.command_failure_handler,
+            button_failure_handler: self.button_failure_handler,
             ignore_bots: self.ignore_bots,
             sync_commands: self.sync_commands,
             log: self.log,
@@ -1022,10 +1085,21 @@ impl Bot {
 
     /// Runs the bot until stopped or Ctrl+C is received.
     pub async fn run(self) -> Result<()> {
-        let handle = self.handle.clone();
-        let result = self.run_inner().await;
-        handle.inner.running.store(false, Ordering::SeqCst);
-        result
+        struct Running(BotHandle);
+        impl Drop for Running {
+            fn drop(&mut self) {
+                self.0.stop();
+                self.0.inner.client.events().close();
+                self.0.inner.client.cancel_auto_ack();
+                self.0.inner.telemetry.update(|s| {
+                    s.active = None;
+                    s.heartbeat_rtt = None;
+                    s.pending_batches = 0;
+                });
+            }
+        }
+        let _running = Running(self.handle.clone());
+        self.run_inner().await
     }
 
     async fn run_inner(mut self) -> Result<()> {
@@ -1115,7 +1189,7 @@ impl Bot {
             }
         }
         self.client().receive_event(event.clone()).await;
-        self.dispatch_event(event, &me, prepared).await
+        failure::catch(self.dispatch_event(event, &me, prepared)).await
     }
 
     async fn dispatch_event(
@@ -1136,8 +1210,8 @@ impl Bot {
         };
 
         match parsed {
-            EventData::Message(msg) => self.handle_message(msg, me).await?,
-            EventData::Interaction(inter) => self.handle_interaction(inter).await?,
+            EventData::Message(msg) => self.handle_message(msg, me, event.id).await?,
+            EventData::Interaction(inter) => self.handle_interaction(inter, event.id).await?,
             EventData::MemberJoin(ev) => {
                 if let Some(ref h) = self.handle.inner.event_handler {
                     h.on_member_join(self.handle.client(), &ev).await;
@@ -1233,7 +1307,12 @@ impl Bot {
         Ok(())
     }
 
-    async fn handle_message(&self, msg: MessageEvent, me: &BotProfile) -> Result<()> {
+    async fn handle_message(
+        &self,
+        msg: MessageEvent,
+        me: &BotProfile,
+        event_id: u64,
+    ) -> Result<()> {
         if self.handle.inner.ignore_bots && msg.author_bot == Some(true) {
             return Ok(());
         }
@@ -1337,27 +1416,9 @@ impl Bot {
                     None => true,
                 };
                 if allow {
-                    if let Err(e) = handler(ctx.clone()).await {
-                        if e.is_command_error() {
-                            let text = format!(
-                                "{}{}",
-                                e,
-                                usage.map(|u| format!("\nUsage: {u}")).unwrap_or_default()
-                            );
-                            for part in crate::split_message(&text) {
-                                ctx.reply(part).await?;
-                            }
-                            return Ok(());
-                        }
-                        let message = e.to_string();
-                        if let Some(on_err) = &self.handle.inner.command_error_handler {
-                            let returned = e.to_remote();
-                            on_err(ctx.clone(), e).await;
-                            return Err(returned.into());
-                        } else {
-                            error!("Command /{cmd_name} failed: {message}");
-                        }
-                        return Err(e);
+                    if let Err(error) = failure::catch(async { handler(ctx.clone()).await }).await {
+                        self.command_failed(ctx.clone(), event_id, &cmd_name, usage, error)
+                            .await?;
                     }
                 }
             }
@@ -1380,7 +1441,7 @@ impl Bot {
         Ok(())
     }
 
-    async fn handle_interaction(&self, inter: InteractionEvent) -> Result<()> {
+    async fn handle_interaction(&self, inter: InteractionEvent, event_id: u64) -> Result<()> {
         let custom_id = inter.custom_id.clone().unwrap_or_default();
         let ctx = InteractionContext::new(
             self.handle.inner.client.clone(),
@@ -1395,19 +1456,12 @@ impl Bot {
             .await
             .iter()
             .filter(|b| custom_id.starts_with(&b.prefix))
-            .map(|b| b.handler.clone())
+            .map(|b| (b.prefix.clone(), b.handler.clone()))
             .collect();
-        for handler in handlers {
-            if let Err(e) = handler(ctx.clone()).await {
-                let message = e.to_string();
-                if let Some(on_err) = &self.handle.inner.button_error_handler {
-                    let returned = e.to_remote();
-                    on_err(ctx.clone(), e).await;
-                    return Err(returned.into());
-                } else {
-                    error!("Button handler failed: {message}");
-                }
-                return Err(e);
+        for (prefix, handler) in handlers {
+            if let Err(error) = failure::catch(async { handler(ctx.clone()).await }).await {
+                self.button_failed(ctx.clone(), event_id, &prefix, error)
+                    .await?;
             }
         }
         if let Some(h) = &self.handle.inner.event_handler {

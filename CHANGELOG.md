@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.15 — 2026-11-01
+
+- Add command/button failure callbacks returning `Default`, `Handled` or `Stop`. Typed input/check rejections complete after a successful reply; definition errors and unexpected failures stay unprocessed by default. Legacy `()` callbacks remain observers. Failed replies retain original and handling causes, including partial reply receipts.
+- Route typed worker parse errors through the parent policy and carry `command_kind` in structured errors. Preserve HTTP status, retry waits, authorization reports and partial writes. Lost worker completion, timeouts and unwinding panics have an explicit uncertain outcome; handlers are never retried automatically.
+- Checkpoint the ordered completed event prefix instead of discarding all progress in a failed batch. Stop starting work after an unprocessed failure, drain active handlers, and report failed, not-started and completed-but-uncommitted events alongside intake/cursor errors. Graceful stop drains accepted work; cancellation does not complete unfinished events.
+- Restrict polling intake retries to transient read failures. Authentication, permanent status, decode, preparation and cursor-write failures remain outside command completion callbacks. Cooldown checks no longer construct rejected handlers or ignore failed rejection replies.
+
+Exhaustive `YappinError` matches must handle `EventProcessing`, `FailureHandling` and `HandlerInterrupted`. Rebuild workers for rejection subtypes; unclassified legacy command errors are not assumed to be input rejections. See [handler failures](docs/handler-failures.md) for callback migration, cursor boundaries and recovery limits.
+
 ## 0.1.14 — 2026-10-31
 
 - Fix source-watcher races when files or directories disappear during scanning. Ignore disappearing non-source entries, retain required `watch_path` roots, and include path and phase in scan errors. Retry interrupted source snapshots up to three attempts; missing required inputs and access failures still surface.

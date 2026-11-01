@@ -292,11 +292,8 @@ impl WorkerCog {
         self.command(name, description, move |ctx| {
             let handler = handler.clone();
             async move {
-                match ctx.parse::<A>() {
-                    Ok(args) => handler(ctx, args).await,
-                    Err(YappinError::Command(error)) => ctx.reply(error.to_string()).await,
-                    Err(error) => Err(error),
-                }
+                let args = ctx.parse::<A>()?;
+                handler(ctx, args).await
             }
         })
     }

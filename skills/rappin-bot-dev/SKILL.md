@@ -32,8 +32,11 @@ should bypass stale cached permissions.
 Keep authorization checks on moderation and reload commands. Use context helpers
 for replies and interactions; they coordinate response state and expiry. Register
 collectors before sending prompts. Bounded handler concurrency and cursor files
-are configurable, and failed batches can replay after restart; design side
-effects accordingly.
+are configurable. Checkpoints cover the ordered completed prefix; work after an
+unprocessed failure can replay after restart. Typed input/check rejections finish
+after a successful reply. Use explicit failure callbacks for completion decisions;
+legacy observers do not complete failed invocations. Retain original causes and
+receipts, propagate failed replies, and never blindly replay uncertain writes.
 
 Native cogs replace code already linked into the process. Source changes require
 the optional `hot-reload` worker system: the Rust parent retains credentials and

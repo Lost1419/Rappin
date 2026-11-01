@@ -34,7 +34,7 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.14"
+rappin-rs = "0.1.15"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -95,7 +95,9 @@ with heartbeats, resume, and polling fallback when the gateway is unavailable.
 
 Configure `.cursor_file("./state/events.json")` for restart checkpoints and
 `.handler_concurrency(8)` to bound concurrent handlers. Checkpoints advance after
-ordered handler completion; a failed batch remains available for replay.
+ordered completion; unprocessed events and later work remain replayable. Use the
+[failure policy](docs/handler-failures.md) to complete expected rejections or
+explicitly handle a failed invocation while intake continues.
 
 The built-in cache holds profile, server, and channel snapshots. Member/role
 lookup caching is opt-in, and `LookupCache` lets you use your own database or
@@ -161,6 +163,7 @@ The default library build needs neither Node nor the CLI dependencies.
 
 - [API reference](https://docs.rs/rappin-rs): Rust types and client methods.
 - [Rust bot guide](docs/rust-bots.md): typed commands, checks, collectors, and delivery semantics.
+- [Handler failures](docs/handler-failures.md): completion decisions, structured errors, draining, and checkpoints.
 - [Transport and caching](docs/transport-and-cache.md): API hosts, retries, custom caches, and prefixes.
 - [Server management](docs/server-management.md): roles, permission overrides, invites, counts, and scheduled events.
 - [Shared SDK workflows](docs/sdk-workflows.md): permissions, native/worker APIs, runtime schemas, request metrics, and bounded lookups.

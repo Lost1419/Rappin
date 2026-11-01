@@ -341,6 +341,7 @@ impl Generation {
         setup
     }
     async fn invoke(&self, event: CogEvent, client: &Client) -> Result<()> {
+        let completed = std::sync::atomic::AtomicBool::new(false);
         let call = async {
             let mut io = self.io.lock().await;
             if io.poisoned {
@@ -428,6 +429,7 @@ impl Generation {
                         structured_error,
                     } => {
                         io.poisoned = false;
+                        completed.store(true, Ordering::SeqCst);
                         if let Some(error) = structured_error {
                             let error: crate::RemoteError = serde_json::from_value(
                                 client.worker_output(serde_json::to_value(error)?),
@@ -541,14 +543,16 @@ impl Generation {
                 }
             }
         };
-        tokio::time::timeout(self.timeout, call)
-            .await
-            .map_err(|_| {
-                YappinError::Config(
-                    "cog handler timed out; reload the worker before retrying an ambiguous write"
-                        .into(),
-                )
-            })?
+        match tokio::time::timeout(self.timeout, call).await {
+            Ok(Err(error)) if !completed.load(Ordering::SeqCst) => Err(YappinError::HandlerInterrupted {
+                reason: "worker exchange ended before a completion frame; reconcile writes before reloading".into(),
+                source: Some(Box::new(error)),
+            }),
+            Ok(result) => result,
+            Err(_) => Err(YappinError::HandlerInterrupted {
+                reason: "worker handler timed out; reconcile writes before reloading".into(), source: None,
+            }),
+        }
     }
 }
 impl Drop for Generation {
