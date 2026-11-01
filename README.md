@@ -165,6 +165,7 @@ The default library build needs neither Node nor the CLI dependencies.
 - [Server management](docs/server-management.md): roles, permission overrides, invites, counts, and scheduled events.
 - [Shared SDK workflows](docs/sdk-workflows.md): permissions, native/worker APIs, runtime schemas, request metrics, and bounded lookups.
 - [Capability bindings](docs/capability-bindings.md): offline operation discovery, scoped execution, and permanent commands.
+- [Access policy example](docs/authorization-policy.md): fresh permission evidence, native/worker use, and platform limits on effective access.
 - [Hot reloading](docs/hot-reloading.md): native cogs and reloadable Rust workers.
 - [Agent guide](docs/agents.md): CLI, MCP, credentials, OAuth, webhooks, and voice setup.
 - [CLI/MCP workflows](docs/cli-mcp.md): shared operations, bounded results, delivery receipts, and recovery.
