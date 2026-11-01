@@ -456,7 +456,20 @@ impl BotHandle {
             // Do not hold dispatch locks while waiting for the API. Old code stays available.
             if synchronize && self.inner.sync_commands && self.inner.running.load(Ordering::SeqCst)
             {
-                self.client().set_commands(&planned).await?;
+                if let Err(cause) = self.client().set_commands(&planned).await {
+                    #[cfg(feature = "hot-reload")]
+                    if expected.is_some() {
+                        return Err(crate::hot_reload::diagnostics::error(
+                            crate::ReloadPhase::Publication,
+                            "remote command publication failed; local routes were not replaced",
+                            Some(&cause),
+                            true,
+                            true,
+                            Some(self.client()),
+                        ));
+                    }
+                    return Err(cause);
+                }
             }
             // Acquire all routing locks before mutation; no await occurs during publication.
             let mut current = self.inner.commands.write().await;
@@ -499,7 +512,22 @@ impl BotHandle {
 
     #[cfg(feature = "hot-reload")]
     pub(crate) async fn install_worker<C: Cog>(&self, cog: C, replacing: bool) -> Result<()> {
-        self.install_cog(Arc::new(cog), true, Some(replacing)).await
+        self.install_cog(Arc::new(cog), true, Some(replacing))
+            .await
+            .map_err(|cause| {
+                if matches!(cause, YappinError::HotReload { .. }) {
+                    cause
+                } else {
+                    crate::hot_reload::diagnostics::error(
+                        crate::ReloadPhase::Registration,
+                        "candidate registration failed",
+                        Some(&cause),
+                        true,
+                        false,
+                        Some(self.client()),
+                    )
+                }
+            })
     }
 
     /// Remove routing atomically. Existing handler snapshots may finish in flight.

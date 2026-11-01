@@ -2,9 +2,11 @@
 //! The host owns the API token and event loop. Workers speak a versioned local JSON protocol.
 //! Worker source, binaries, build scripts and filesystem access are trusted; this is not a sandbox.
 #![doc = include_str!("../../docs/hot-reloading.md")]
+pub(crate) mod diagnostics;
 mod host;
 mod protocol;
 mod worker;
+pub use crate::{CompilerDiagnostic, CompilerSpan, HotReloadFailure, ProcessExit, ReloadPhase};
 pub use host::{HotReload, WatchGuard, WatchStatus, WorkerProject};
 pub use protocol::{CogEvent, Listener};
 pub use worker::{WorkerCog, WorkerContext};

@@ -98,6 +98,10 @@ pub mod models;
 pub mod oauth2;
 pub mod paginator;
 mod rate_limits;
+mod reload_failure;
+pub use reload_failure::{
+    CompilerDiagnostic, CompilerSpan, HotReloadFailure, ProcessExit, ReloadPhase,
+};
 pub mod security;
 pub mod utils;
 pub mod validation;

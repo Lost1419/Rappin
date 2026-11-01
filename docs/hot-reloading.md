@@ -15,7 +15,7 @@ export YAPPER_BOT_TOKEN="yb_your_token"
 cargo run --features hot-reload --example hot_reload_bot
 ```
 
-Send `/ping`, edit the reply in `examples/hot_cog_worker.rs`, and save. The watcher rebuilds that example and replaces its worker. Send `/ping` again to see the changed code. Compilation or startup errors appear on stderr and leave the previous version available. `make hot-demo` runs the same example.
+Send `/ping`, edit the reply in `examples/hot_cog_worker.rs`, and save. The watcher rebuilds that example and replaces its worker. Send `/ping` again to see the changed code. Failed candidates leave the previous version available; inspect their structured reports as described below. `make hot-demo` runs the same example.
 
 ## Use two Rust binaries in your bot
 
@@ -38,7 +38,7 @@ edition = "2021"
 default-run = "my-bot"
 
 [dependencies]
-rappin = { package = "rappin-rs", version = "0.1.15", features = ["hot-reload"] }
+rappin = { package = "rappin-rs", version = "0.1.16", features = ["hot-reload"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -102,6 +102,100 @@ Reserve stdout for the protocol. Use `eprintln!` or configure your logger for st
 - `fun.unload().await?` removes its routes and lets active invocations finish. Its watcher stops, and that controller cannot reload the unloaded cog. Call `HotReload::load` to load it again.
 - `fun.generation()` starts at 1 and advances after successful replacements. `process_id().await` and `commands().await` expose the current worker and metadata.
 - `watch.status()` returns separate `scan_error` and `reload_error` fields. A successful scan clears its scan error even if the source digest has not changed. A failed build, startup or publication remains visible until a changed candidate installs successfully. `last_error()` reports the scan error first, then any outstanding reload error. Failed candidates are retried after another source change.
+- `watch.status().reload_failure` retains the typed candidate report, independently of scan recovery. It clears when a changed candidate installs successfully.
+
+### Candidate diagnostics
+
+`HotReload::load`, `from_executable` and `reload` return
+`YappinError::HotReload { failure }` for candidate failures. Use
+`YappinError::hot_reload_failure()` or `RemoteError::hot_reload_failure()` to
+recover the same `HotReloadFailure` after a worker boundary or in a failure
+callback. These report types are available without Cargo features; actually
+building/loading workers requires `hot-reload`.
+
+| `ReloadPhase` | Meaning |
+|---|---|
+| `Compilation` | Manifest/Cargo startup, compiler failure, build timeout, missing executable, or unreadable/oversized compiler output |
+| `Startup` | Preparing/spawning the candidate, exit before ready, or startup timeout |
+| `Protocol` | Invalid/incomplete ready frame or unsupported protocol version |
+| `Registration` | Invalid manifest/definitions, name/ownership conflict, unloaded controller, or unavailable parent |
+| `Publication` | Remote slash-command synchronization failed before local routes changed |
+
+`diagnostics` contains compiler codes (for example `E0425`), levels, messages,
+child notes and primary/secondary line/column spans. `CompilerSpan.file` is
+project-relative or absent for outside locations. The report also carries
+`exit` (observed code/signal), `timed_out`, `candidate_started`,
+`publication_attempted`, `routes_published` and an optional structured `source`.
+An absent exit means it was not observed, not success; cleanup-induced exits
+are not substituted for the original status. Failed local candidates do not
+publish routes. A remote publication attempt can nevertheless have an unknown
+outcome: inspect `source` for its HTTP status, retry hint and outcome. Do not
+infer remote rollback from `routes_published == false`.
+
+Reports retain at most 32 diagnostic nodes including child notes, depth 2 of
+children, 8 spans per node, 2,048 UTF-8 bytes per text field and 32 KiB of
+diagnostic text. Structured causes have separate bounded text, 32-entry collection,
+512-node and depth-8 limits; their top-level kind/status/retry and outcome fields remain intact.
+`truncated` reports omitted/shortened fields. Compiler frames above 1 MiB stop
+the build rather than allocate without limit. Raw Cargo/build-script stderr,
+rendered output, source excerpts and suggestions are not returned or printed by
+the builder. Credential-bearing environment values, the configured bot credential
+and path-like message tokens are redacted; external source paths are omitted. Compiler text
+can still contain application data deliberately embedded by trusted code, so
+review reports before sharing them publicly.
+
+Try the runnable offline example (dependencies must already be cached):
+
+```sh
+cargo run --features hot-reload --example hot_reload_diagnostics -- path/to/Cargo.toml worker_binary
+```
+
+It prints the structured report and exits with status 1 on failure. It performs
+no authentication or API requests, but **does compile and execute trusted local
+code**. Cargo build scripts and procedural macros can execute even when
+compilation fails. Neither a timeout nor an unpublished candidate proves there
+were no filesystem/network effects, rolls back build effects, or guarantees
+termination of every descendant process. This is not a side-effect-free sandbox.
+
+### Reporting a rejected reload without stopping intake
+
+A failed candidate remains an unexpected handler error by default. Applications
+can complete a known reload/proposal workflow using the explicit failure policy:
+
+```rust,no_run
+use rappin::{prelude::*, ReloadPhase};
+let bot = Bot::builder("yb_token").on_command_failure(|ctx, failure| async move {
+    if failure.handler == "reload" {
+        if let Some(report) = failure.error.hot_reload_failure() {
+            // Application contract: this operator-only route only attempted the
+            // reload, and rejecting the proposal completes all required work.
+            // Persist any required proposal/diagnostic receipt before Handled.
+            if report.phase == ReloadPhase::Compilation
+                && !report.candidate_started && !report.publication_attempted
+                && !report.routes_published
+            {
+                let mut text = String::from("Candidate did not compile; active routes were kept.");
+                for diagnostic in report.diagnostics.iter().take(3) {
+                    let summary: String = diagnostic.message.chars().take(300).collect();
+                    text.push_str(&format!("\n{}: {}", diagnostic.code.as_deref().unwrap_or("compiler"), summary));
+                }
+                ctx.reply(text).await?;
+                return Ok(FailureDisposition::Handled);
+            }
+        }
+    }
+    Ok(FailureDisposition::Default)
+});
+```
+
+Authorize the reload route separately; the callback does not grant permission.
+This example handles only a known terminal compilation rejection. It does not
+retry compilation or infer that arbitrary build effects were undone. Keep any
+remaining reconciliation or durable recording explicit. A failed reply returns
+an error and retains the original candidate report in `FailureHandling`; startup,
+protocol, registration and publication errors keep the default stop/barrier
+behavior here. The same typed report can be recorded and reconciled for those
+phases without collapsing their uncertain outcomes into a generic rejection.
 - `HotReload::from_executable(handle, path)` loads an existing worker executable. Its watcher fingerprints that file; your deployment tool supplies rebuilt binaries.
 
 ## Source scanning and recovery

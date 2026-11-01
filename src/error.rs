@@ -18,6 +18,20 @@ impl std::fmt::Display for RemoteError {
 }
 impl std::error::Error for RemoteError {}
 impl RemoteError {
+    /// Recover a bounded report after a worker boundary or failure callback.
+    pub fn hot_reload_failure(&self) -> Option<crate::HotReloadFailure> {
+        if let Some(report) = self.details.get("hot_reload") {
+            serde_json::from_value(report.clone()).ok()
+        } else if matches!(
+            self.kind.as_str(),
+            "failure_handling" | "partial_write" | "handler_interrupted"
+        ) {
+            let source: Self = serde_json::from_value(self.details.get("source")?.clone()).ok()?;
+            source.hot_reload_failure()
+        } else {
+            None
+        }
+    }
     pub fn to_json(&self) -> serde_json::Value {
         let mut value = serde_json::Value::Object(self.details.clone().into_iter().collect());
         value["kind"] = self.kind.clone().into();
@@ -39,6 +53,11 @@ impl serde::Serialize for RemoteError {
 /// The error type for operations in the `yappin` crate.
 #[derive(Debug, Error)]
 pub enum YappinError {
+    #[error("{failure}")]
+    HotReload {
+        #[source]
+        failure: Box<crate::HotReloadFailure>,
+    },
     #[error("event processing stopped after cursor {cursor}",cursor=.report.committed_cursor)]
     EventProcessing {
         report: Box<crate::bot::EventProcessingFailure>,
@@ -123,6 +142,7 @@ impl YappinError {
     /// Returns the HTTP status code associated with this error, if available.
     pub fn status_code(&self) -> Option<u16> {
         match self {
+            Self::HotReload { failure } => failure.source.as_ref().and_then(|e| e.status),
             Self::EventProcessing { report } => report.primary().and_then(|e| e.status),
             Self::FailureHandling {
                 source,
@@ -168,6 +188,13 @@ impl YappinError {
     /// Returns the suggested retry wait duration if this error was caused by a rate limit.
     pub fn retry_after(&self) -> Option<std::time::Duration> {
         match self {
+            Self::HotReload { failure } => {
+                return failure
+                    .source
+                    .as_ref()
+                    .and_then(|e| e.retry_after)
+                    .and_then(|s| std::time::Duration::try_from_secs_f64(s).ok())
+            }
             Self::EventProcessing { report } => {
                 return report
                     .primary()
@@ -209,6 +236,9 @@ impl YappinError {
     /// Stable JSON representation for agents. Transport URLs are intentionally omitted.
     pub fn to_json(&self) -> serde_json::Value {
         match self {
+            Self::HotReload { failure } => {
+                return serde_json::json!({"kind":"hot_reload","message":self.to_string(),"status":self.status_code(),"retry_after":self.retry_after().map(|d|d.as_secs_f64()),"hot_reload":failure,"outcome":"incomplete","retry_safety":"do_not_replay_workflow"})
+            }
             Self::EventProcessing { report } => {
                 return serde_json::json!({"kind":"event_processing","message":self.to_string(),"status":self.status_code(),"retry_after":self.retry_after().map(|d|d.as_secs_f64()),"report":report,"retry_safety":"do_not_replay_workflow","outcome":"incomplete"})
             }
@@ -309,6 +339,20 @@ impl YappinError {
 
     pub fn to_remote(&self) -> RemoteError {
         serde_json::from_value(self.to_json()).expect("error JSON contains required remote fields")
+    }
+
+    /// Recover a candidate report from native or structured worker/callback errors.
+    /// Does not classify a failed candidate as a completed command.
+    pub fn hot_reload_failure(&self) -> Option<crate::HotReloadFailure> {
+        match self {
+            Self::HotReload { failure } => Some((**failure).clone()),
+            Self::Remote(error) => error.hot_reload_failure(),
+            Self::FailureHandling { source, .. } | Self::PartialWrite { source, .. } => {
+                source.hot_reload_failure()
+            }
+            Self::HandlerInterrupted { source, .. } => source.as_ref()?.hot_reload_failure(),
+            _ => None,
+        }
     }
 
     /// Checks if this error is an authorization failure (HTTP 401).

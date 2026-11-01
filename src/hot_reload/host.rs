@@ -76,28 +76,42 @@ impl WorkerProject {
         self
     }
     async fn build(&self) -> Result<PathBuf> {
-        let manifest = tokio::fs::canonicalize(&self.manifest).await?;
-        let root = manifest
-            .parent()
-            .ok_or_else(|| YappinError::Config("manifest has no parent".into()))?;
+        use super::diagnostics::{error, CompilerReport};
+        use crate::ReloadPhase::Compilation;
+        let manifest = tokio::fs::canonicalize(&self.manifest).await.map_err(|e| {
+            error(
+                Compilation,
+                "cannot inspect worker manifest",
+                Some(&e.into()),
+                false,
+                false,
+                None,
+            )
+        })?;
+        let root = manifest.parent().ok_or_else(|| {
+            error(
+                Compilation,
+                "manifest has no parent",
+                None,
+                false,
+                false,
+                None,
+            )
+        })?;
+        let mut report = CompilerReport::new(root);
         let mut cargo = Process::new("cargo");
         environment(&mut cargo, true);
         cargo
             .current_dir(root)
-            .args([
-                "build",
-                "--message-format=json-render-diagnostics",
-                "--manifest-path",
-            ])
+            .args(["build", "--message-format=json", "--manifest-path"])
             .arg(&manifest)
             .arg(if self.example { "--example" } else { "--bin" })
             .arg(&self.target)
-            // Separate build lock/cache: cargo run keeps the parent bot alive while we compile.
             .arg("--target-dir")
             .arg(root.join("target/rappin-hot"))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         if !self.features.is_empty() {
             cargo.arg("--features").arg(self.features.join(","));
@@ -108,49 +122,118 @@ impl WorkerProject {
         if self.offline {
             cargo.arg("--offline");
         }
-        let mut child = cargo.spawn()?;
-        let stdout = child.stdout.take().ok_or_else(protocol::protocol_error)?;
+        let mut child = cargo.spawn().map_err(|e| {
+            error(
+                Compilation,
+                "cannot start Cargo",
+                Some(&e.into()),
+                false,
+                false,
+                None,
+            )
+        })?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            error(
+                Compilation,
+                "Cargo stdout unavailable",
+                None,
+                false,
+                false,
+                None,
+            )
+        })?;
+        let mut stderr = child.stderr.take().ok_or_else(|| {
+            error(
+                Compilation,
+                "Cargo stderr unavailable",
+                None,
+                false,
+                false,
+                None,
+            )
+        })?;
         let mut reader = BufReader::new(stdout);
         let build = async {
-            let mut executable = None;
-            loop {
-                let mut line = Vec::new();
-                let n = (&mut reader)
-                    .take(1024 * 1024 + 1)
-                    .read_until(b'\n', &mut line)
-                    .await?;
-                if n == 0 {
-                    break;
-                }
-                if line.len() > 1024 * 1024 {
-                    return Err(YappinError::Config("compiler message exceeds 1 MiB".into()));
-                }
-                if let Ok(value) = serde_json::from_slice::<Value>(&line) {
-                    if value["reason"] == "compiler-artifact"
-                        && value["target"]["name"] == self.target
-                    {
-                        if let Some(path) = value["executable"].as_str() {
-                            executable = Some(PathBuf::from(path));
+            let output = async {
+                let mut executable = None;
+                loop {
+                    let mut line = Vec::new();
+                    let n = (&mut reader)
+                        .take(1024 * 1024 + 1)
+                        .read_until(b'\n', &mut line)
+                        .await?;
+                    if n == 0 {
+                        break;
+                    }
+                    if line.len() > 1024 * 1024 {
+                        report.failure.truncated = true;
+                        return Err(YappinError::Config("compiler frame exceeds 1 MiB".into()));
+                    }
+                    if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+                        if value["reason"] == "compiler-artifact"
+                            && value["target"]["name"] == self.target
+                        {
+                            if let Some(path) = value["executable"].as_str() {
+                                executable = Some(PathBuf::from(path));
+                            }
+                        }
+                        if value["reason"] == "compiler-message" {
+                            report.push(&value["message"]);
                         }
                     }
-                    if value["reason"] == "compiler-message" {
-                        if let Some(rendered) = value["message"]["rendered"].as_str() {
-                            eprint!("{rendered}");
-                        }
-                    }
                 }
+                Ok(executable)
+            };
+            // Drain concurrently with bounded memory. Raw stderr can include paths,
+            // arbitrary build-script output or secrets, so it is not forwarded.
+            let drain = async {
+                tokio::io::copy(&mut stderr, &mut tokio::io::sink())
+                    .await
+                    .map(|_| ())
+                    .map_err(YappinError::from)
+            };
+            let (executable, _) = tokio::try_join!(output, drain)?;
+            let status = child.wait().await?;
+            report.failure.exit = Some(status.into());
+            if !status.success() {
+                report.failure.message =
+                    "Cargo compilation failed; local routes were not replaced".into();
+                return Ok(None);
             }
-            if !child.wait().await?.success() {
-                return Err(YappinError::Config(
-                    "cog compilation failed; active cog was kept".into(),
-                ));
+            if executable.is_none() {
+                report.failure.message = "Cargo succeeded without a worker executable".into();
             }
-            executable
-                .ok_or_else(|| YappinError::Config("Cargo produced no worker executable".into()))
+            Ok::<_, YappinError>(executable)
         };
-        tokio::time::timeout(self.build_timeout, build)
-            .await
-            .map_err(|_| YappinError::Config("cog build timed out; active cog was kept".into()))?
+        match tokio::time::timeout(self.build_timeout, build).await {
+            Ok(Ok(Some(executable))) => return Ok(executable),
+            Ok(Ok(None)) => (),
+            Ok(Err(cause)) => {
+                report.failure.message = "Cargo output could not be processed".into();
+                if let YappinError::HotReload { failure } = error(
+                    Compilation,
+                    "Cargo output could not be processed",
+                    Some(&cause),
+                    false,
+                    false,
+                    None,
+                ) {
+                    report.failure.source = failure.source;
+                    report.failure.truncated |= failure.truncated;
+                }
+            }
+            Err(_) => {
+                report.failure.message = "Cargo compilation timed out".into();
+                report.failure.timed_out = true;
+            }
+        }
+        if report.failure.exit.is_none() {
+            report.failure.exit = child.try_wait().ok().flatten().map(Into::into);
+        }
+        let _ = child.kill().await;
+        Err(YappinError::HotReload {
+            failure: Box::new(report.failure),
+        })
     }
 }
 fn environment(command: &mut Process, build: bool) {
@@ -272,14 +355,32 @@ impl Generation {
         startup: Duration,
         timeout: Duration,
     ) -> Result<Arc<Self>> {
-        let source = tokio::fs::canonicalize(executable).await?;
+        use super::diagnostics::error;
+        use crate::ReloadPhase::{Protocol, Registration, Startup};
+        let startup_error = |cause: std::io::Error| {
+            error(
+                Startup,
+                "candidate executable could not be prepared",
+                Some(&cause.into()),
+                false,
+                false,
+                None,
+            )
+        };
+        let source = tokio::fs::canonicalize(executable)
+            .await
+            .map_err(startup_error)?;
         let directory = std::env::temp_dir().join(format!("rappin-cog-{}", uuid::Uuid::new_v4()));
-        tokio::fs::create_dir(&directory).await?;
+        tokio::fs::create_dir(&directory)
+            .await
+            .map_err(startup_error)?;
         let mut cleanup = DirectoryCleanup(Some(directory.clone()));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            tokio::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).await?;
+            tokio::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))
+                .await
+                .map_err(startup_error)?;
         }
         let setup = async {
             let target = directory.join(if cfg!(windows) {
@@ -287,11 +388,11 @@ impl Generation {
             } else {
                 "worker"
             });
-            tokio::fs::copy(&source, &target).await?;
+            tokio::fs::copy(&source, &target).await.map_err(startup_error)?;
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                tokio::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).await?;
+                tokio::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).await.map_err(startup_error)?;
             }
             let mut process = Process::new(target);
             environment(&mut process, false);
@@ -303,24 +404,39 @@ impl Generation {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .kill_on_drop(true);
-            let mut child = spawn_worker(&mut process).await?;
+            let mut child = spawn_worker(&mut process).await.map_err(startup_error)?;
             let pid = child.id();
-            let input = child.stdin.take().ok_or_else(protocol::protocol_error)?;
+            let input = child.stdin.take().ok_or_else(|| error(Startup, "candidate stdin unavailable", None, true, false, None))?;
             let mut output =
-                BufReader::new(child.stdout.take().ok_or_else(protocol::protocol_error)?);
-            let ready = tokio::time::timeout(startup, protocol::read(&mut output))
-                .await
-                .map_err(|_| {
-                    YappinError::Config("cog startup timed out; active cog was kept".into())
-                })??;
+                BufReader::new(child.stdout.take().ok_or_else(|| error(Startup, "candidate stdout unavailable", None, true, false, None))?);
+            let ready = match tokio::time::timeout(startup, protocol::read(&mut output)).await {
+                Ok(Ok(ready)) => ready,
+                result => {
+                    let (phase, message, cause, timed_out) = match result {
+                        Err(_) => (Startup, "candidate startup timed out", None, true),
+                        Ok(Err(cause)) => {
+                            let exited = matches!(&cause, YappinError::Config(message) if message.contains("exited or closed"));
+                            (if exited { Startup } else { Protocol }, "candidate did not send a valid ready frame", Some(cause), false)
+                        },
+                        _ => unreachable!(),
+                    };
+                    let mut failure = error(phase, message, cause.as_ref(), true, false, None).hot_reload_failure().expect("candidate report");
+                    failure.timed_out = timed_out;
+                    failure.exit = child.try_wait().ok().flatten().map(Into::into);
+                    if failure.exit.is_none() && phase == Startup && !timed_out {
+                        failure.exit = tokio::time::timeout(Duration::from_millis(25), child.wait()).await.ok().and_then(std::result::Result::ok).map(Into::into);
+                    }
+                    return Err(YappinError::HotReload { failure: Box::new(failure) });
+                }
+            };
             let manifest = match ready {
                 Wire::Ready {
                     protocol: version,
                     manifest,
                 } if (1..=protocol::VERSION).contains(&version) => manifest,
-                _ => return Err(protocol::protocol_error()),
+                _ => return Err(error(Protocol, "candidate ready frame has an unsupported protocol", None, true, false, None)),
             };
-            manifest.validate()?;
+            manifest.validate().map_err(|cause| error(Registration, "candidate manifest is invalid", Some(&cause), true, false, None))?;
             Ok(Arc::new(Self {
                 manifest,
                 io: Mutex::new(Io {
@@ -777,37 +893,68 @@ impl HotReload {
     pub async fn from_executable(bot: BotHandle, path: impl Into<PathBuf>) -> Result<Self> {
         Self::load_source(bot, Source::Executable(path.into())).await
     }
-    async fn prepare(source: &Source) -> Result<Arc<Generation>> {
-        match source {
-            Source::Project(project) => {
-                let executable = project.build().await?;
-                let manifest = tokio::fs::canonicalize(&project.manifest).await?;
-                Generation::start(
-                    &executable,
-                    manifest.parent(),
-                    project.startup_timeout,
-                    project.handler_timeout,
-                )
-                .await
-            }
-            Source::Executable(path) => {
-                Generation::start(
-                    path,
-                    None,
-                    Duration::from_secs(10),
-                    Duration::from_secs(120),
-                )
-                .await
+    async fn prepare(source: &Source, client: &Client) -> Result<Arc<Generation>> {
+        let result = async {
+            match source {
+                Source::Project(project) => {
+                    let executable = project.build().await?;
+                    let manifest =
+                        tokio::fs::canonicalize(&project.manifest)
+                            .await
+                            .map_err(|cause| {
+                                super::diagnostics::error(
+                                    crate::ReloadPhase::Startup,
+                                    "manifest disappeared after compilation",
+                                    Some(&cause.into()),
+                                    false,
+                                    false,
+                                    None,
+                                )
+                            })?;
+                    Generation::start(
+                        &executable,
+                        manifest.parent(),
+                        project.startup_timeout,
+                        project.handler_timeout,
+                    )
+                    .await
+                }
+                Source::Executable(path) => {
+                    Generation::start(
+                        path,
+                        None,
+                        Duration::from_secs(10),
+                        Duration::from_secs(120),
+                    )
+                    .await
+                }
             }
         }
+        .await;
+        // Also scrub the parent's known credential, which need not be in env.
+        result.map_err(|cause| match cause {
+            YappinError::HotReload { failure } => {
+                let failure =
+                    serde_json::from_value(client.redact_credentials(
+                        serde_json::to_value(failure).expect("candidate report"),
+                    ))
+                    .expect("redacted candidate report");
+                YappinError::HotReload { failure }
+            }
+            cause => cause,
+        })
     }
     async fn load_source(bot: BotHandle, source: Source) -> Result<Self> {
-        let generation = Self::prepare(&source).await?;
+        let generation = Self::prepare(&source, bot.client()).await?;
         let name = generation.manifest.name.clone();
         if bot.has_cog(&name).await {
-            return Err(YappinError::validation(
-                "cog.name",
+            return Err(super::diagnostics::error(
+                crate::ReloadPhase::Registration,
                 "a cog with this name is already installed",
+                None,
+                true,
+                false,
+                Some(bot.client()),
             ));
         }
         bot.install_worker(
@@ -849,20 +996,36 @@ impl HotReload {
     pub async fn reload(&self) -> Result<()> {
         let _reload = self.inner.reload.lock().await;
         if self.inner.current.read().await.is_none() {
-            return Err(YappinError::Config("cog has been unloaded".into()));
-        }
-        let generation = Self::prepare(&self.inner.source).await?;
-        if generation.manifest.name != self.inner.name {
-            return Err(YappinError::validation(
-                "cog.name",
-                "reload cannot change the cog name",
+            return Err(super::diagnostics::error(
+                crate::ReloadPhase::Registration,
+                "cog has been unloaded",
+                None,
+                false,
+                false,
+                None,
             ));
         }
-        let bot = self
-            .inner
-            .bot
-            .upgrade()
-            .ok_or_else(|| YappinError::Config("parent bot has been dropped".into()))?;
+        let bot = self.inner.bot.upgrade().ok_or_else(|| {
+            super::diagnostics::error(
+                crate::ReloadPhase::Registration,
+                "parent bot has been dropped",
+                None,
+                false,
+                false,
+                None,
+            )
+        })?;
+        let generation = Self::prepare(&self.inner.source, bot.client()).await?;
+        if generation.manifest.name != self.inner.name {
+            return Err(super::diagnostics::error(
+                crate::ReloadPhase::Registration,
+                "reload cannot change the cog name",
+                None,
+                true,
+                false,
+                Some(bot.client()),
+            ));
+        }
         bot.install_worker(
             ProcessCog {
                 generation: generation.clone(),
@@ -909,8 +1072,10 @@ impl HotReload {
                         next_status.scan_error = None;
                         if next != previous {
                             previous = next;
-                            next_status.reload_error =
-                                controller.reload().await.err().map(|e| e.to_string());
+                            let error = controller.reload().await.err();
+                            next_status.reload_failure =
+                                error.as_ref().and_then(YappinError::hot_reload_failure);
+                            next_status.reload_error = error.map(|e| e.to_string());
                             if let Some(error) = &next_status.reload_error {
                                 tracing::warn!("Hot reload failed; active cog kept: {error}");
                             }
@@ -934,10 +1099,11 @@ impl HotReload {
 /// Independent source scan and candidate reload failures.
 /// A recovered scan clears only `scan_error`; a failed candidate remains visible
 /// until a changed candidate is successfully installed.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct WatchStatus {
     pub scan_error: Option<String>,
     pub reload_error: Option<String>,
+    pub reload_failure: Option<crate::HotReloadFailure>,
 }
 /// Dropping the guard stops watching; the currently installed cog keeps running.
 pub struct WatchGuard {

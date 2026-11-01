@@ -1,6 +1,6 @@
 [package]
 name = "rappin-rs"
-version = "0.1.15"
+version = "0.1.16"
 edition = "2021"
 rust-version = "1.88"
 autobins = false
@@ -64,4 +64,8 @@ required-features = ["hot-reload"]
 
 [[example]]
 name = "hot_reload_bot"
+required-features = ["hot-reload"]
+
+[[example]]
+name = "hot_reload_diagnostics"
 required-features = ["hot-reload"]

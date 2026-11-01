@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.16 — 2026-11-01
+
+- Return `HotReloadFailure` for failed worker candidates, with compilation/startup/protocol/registration/publication phases, bounded compiler codes/messages/spans, observed exit status, timeout and candidate/publication state. Preserve reports in remote errors, failure callbacks and watcher status.
+- Drain Cargo stderr without forwarding raw build-script output. Omit rendered diagnostics/source excerpts, redact environment values and path-like message tokens, and expose project-relative source locations. Report truncation rather than silently losing bounded diagnostics.
+- Add an offline diagnostics example and document explicit completion of a rejected reload. Failed candidates remain unexpected errors by default; no build, handler or uncertain publication is automatically replayed. Compilation may execute trusted build scripts/macros and is not a sandbox.
+
+Exhaustive error matches must handle `YappinError::HotReload`. `WatchStatus` adds `reload_failure` and retains `PartialEq` rather than `Eq` because structured retry hints are floating-point values.
+
 ## 0.1.15 — 2026-11-01
 
 - Add command/button failure callbacks returning `Default`, `Handled` or `Stop`. Typed input/check rejections complete after a successful reply; definition errors and unexpected failures stay unprocessed by default. Legacy `()` callbacks remain observers. Failed replies retain original and handling causes, including partial reply receipts.

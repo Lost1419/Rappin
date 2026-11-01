@@ -150,7 +150,12 @@ async fn edited_rust_is_rebuilt_while_inflight_old_code_finishes_and_failed_buil
     tokio::fs::write(project.0.join("src/main.rs"), "this is not valid Rust")
         .await
         .unwrap();
-    assert!(reload.reload().await.is_err());
+    let error = reload.reload().await.unwrap_err();
+    let failure = error.hot_reload_failure().unwrap();
+    assert_eq!(failure.phase, rappin::ReloadPhase::Compilation);
+    assert!(!failure.candidate_started);
+    assert!(!failure.routes_published);
+    assert!(!failure.diagnostics.is_empty());
     assert_eq!(reload.process_id().await, new_pid);
     bot.process_event(event("ping")).await.unwrap();
     assert!(requests
@@ -165,7 +170,15 @@ async fn edited_rust_is_rebuilt_while_inflight_old_code_finishes_and_failed_buil
     )
     .await
     .unwrap();
-    assert!(reload.reload().await.is_err());
+    let failure = reload
+        .reload()
+        .await
+        .unwrap_err()
+        .hot_reload_failure()
+        .unwrap();
+    assert_eq!(failure.phase, rappin::ReloadPhase::Protocol);
+    assert!(failure.candidate_started);
+    assert!(!failure.routes_published);
     assert_eq!(reload.generation(), 2);
     bot.process_event(event("ping")).await.unwrap();
     assert!(requests
@@ -219,6 +232,10 @@ async fn watcher_reloads_source_and_registration_conflicts_preserve_existing_rou
     })
     .await
     .unwrap();
+    assert_eq!(
+        watch.status().reload_failure.unwrap().phase,
+        rappin::ReloadPhase::Compilation
+    );
     assert_eq!(reload.generation(), 2);
     bot.process_event(event("ping")).await.unwrap();
     assert!(requests
@@ -236,7 +253,15 @@ async fn watcher_reloads_source_and_registration_conflicts_preserve_existing_rou
     .unwrap();
     drop(watch);
     project.code("conflict", &["reserved"], 0, None).await;
-    assert!(reload.reload().await.is_err());
+    let failure = reload
+        .reload()
+        .await
+        .unwrap_err()
+        .hot_reload_failure()
+        .unwrap();
+    assert_eq!(failure.phase, rappin::ReloadPhase::Registration);
+    assert!(failure.candidate_started);
+    assert!(!failure.publication_attempted);
     assert_eq!(reload.generation(), 3);
     bot.process_event(event("ping")).await.unwrap();
     assert!(requests
@@ -691,7 +716,14 @@ async fn failed_slash_sync_preserves_old_worker_and_main_bot_still_handles_event
     let runner = tokio::spawn(bot.run());
     ready.notified().await;
     project.code("two", &["ping", "new"], 0, None).await;
-    assert!(reload.reload().await.is_err());
+    let error = reload.reload().await.unwrap_err();
+    let failure = error.hot_reload_failure().unwrap();
+    assert_eq!(failure.phase, rappin::ReloadPhase::Publication);
+    assert!(failure.candidate_started);
+    assert!(failure.publication_attempted);
+    assert!(!failure.routes_published);
+    assert_eq!(error.status_code(), Some(503));
+    assert_eq!(failure.source.unwrap().details["outcome"], "unknown");
     assert_eq!(reload.process_id().await, old);
     assert_eq!(reload.generation(), 1);
     resume.notify_one();
@@ -817,4 +849,202 @@ async fn worker_inherits_no_credentials_and_unload_prevents_future_reloads() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!bot.handle().has_cog("fixture").await);
     drop(watch);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn compiler_codes_spans_and_build_script_effects_are_reported_without_source_or_environment()
+{
+    let project = Project::new().await;
+    tokio::fs::write(
+        project.0.join("build.rs"),
+        r#"fn main() { std::fs::write("build-executed", "yes").unwrap(); }"#,
+    )
+    .await
+    .unwrap();
+    tokio::fs::write(
+        project.0.join("src/main.rs"),
+        "fn one(_: u8) {}\nfn main() { absent(); one(); ().missing_method(); }\n",
+    )
+    .await
+    .unwrap();
+    let bot = Bot::builder("yb_report_private")
+        .sync_commands(false)
+        .log(false)
+        .build();
+    let error = match HotReload::load(bot.handle(), project.spec()).await {
+        Ok(_) => panic!("must not compile"),
+        Err(error) => error,
+    };
+    let failure = error.hot_reload_failure().unwrap();
+    assert_eq!(failure.phase, rappin::ReloadPhase::Compilation);
+    assert!(
+        !failure.candidate_started && !failure.routes_published && !failure.publication_attempted
+    );
+    assert!(!failure.timed_out);
+    assert_ne!(failure.exit.as_ref().unwrap().code, Some(0));
+    for code in ["E0425", "E0061", "E0599"] {
+        let diagnostic = failure
+            .diagnostics
+            .iter()
+            .find(|item| item.code.as_deref() == Some(code))
+            .unwrap_or_else(|| panic!("missing {code}: {failure:?}"));
+        assert!(diagnostic
+            .spans
+            .iter()
+            .any(|span| span.file.as_deref() == Some("src/main.rs")
+                && span.line_start == 2
+                && span.is_primary));
+        assert!(!diagnostic.message.is_empty());
+    }
+    assert!(
+        project.0.join("build-executed").exists(),
+        "compilation is not a side-effect-free sandbox"
+    );
+    let encoded = error.to_json().to_string();
+    assert!(!encoded.contains(&project.0.to_string_lossy().to_string()));
+    assert_eq!(error.to_remote().hot_reload_failure(), Some(failure));
+
+    tokio::fs::write(
+        project.0.join("src/main.rs"),
+        "compile_error!(env!(\"HOME\"));\nfn main() {}\n",
+    )
+    .await
+    .unwrap();
+    let error = match HotReload::load(bot.handle(), project.spec()).await {
+        Ok(_) => panic!("must not compile"),
+        Err(error) => error,
+    };
+    let text = error.to_json().to_string();
+    assert!(!text.contains(&std::env::var("HOME").unwrap()));
+    assert!(!text.contains("compile_error!(env!"), "no source excerpts");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn candidate_timeout_exit_and_protocol_phases_are_explicit() {
+    let project = Project::new().await;
+    let bot = Bot::builder("fixture")
+        .sync_commands(false)
+        .log(false)
+        .build();
+    tokio::fs::write(
+        project.0.join("src/main.rs"),
+        "fn main() { std::thread::sleep(std::time::Duration::from_secs(60)); }",
+    )
+    .await
+    .unwrap();
+    let mut spec = project.spec();
+    spec.build_timeout = Duration::ZERO;
+    let error = match HotReload::load(bot.handle(), spec).await {
+        Ok(_) => panic!("must time out"),
+        Err(error) => error,
+    };
+    let failure = error.hot_reload_failure().unwrap();
+    assert_eq!(failure.phase, rappin::ReloadPhase::Compilation);
+    assert!(failure.timed_out);
+    assert!(!failure.candidate_started);
+
+    let mut spec = project.spec();
+    spec.startup_timeout = Duration::from_millis(50);
+    let error = match HotReload::load(bot.handle(), spec).await {
+        Ok(_) => panic!("must time out"),
+        Err(error) => error,
+    };
+    let failure = error.hot_reload_failure().unwrap();
+    assert_eq!(failure.phase, rappin::ReloadPhase::Startup);
+    assert!(failure.timed_out && failure.candidate_started);
+    assert!(!failure.routes_published);
+
+    tokio::fs::write(
+        project.0.join("src/main.rs"),
+        "fn main() { std::process::exit(17); }",
+    )
+    .await
+    .unwrap();
+    let error = match HotReload::load(bot.handle(), project.spec()).await {
+        Ok(_) => panic!("must exit"),
+        Err(error) => error,
+    };
+    let failure = error.hot_reload_failure().unwrap();
+    assert_eq!(failure.phase, rappin::ReloadPhase::Startup);
+    assert_eq!(failure.exit.as_ref().unwrap().code, Some(17));
+    assert!(!failure.timed_out && failure.candidate_started);
+
+    for (version, commands, phase) in [
+        (
+            99,
+            vec![Command::new("ping", "test")],
+            rappin::ReloadPhase::Protocol,
+        ),
+        (
+            3,
+            vec![Command::new("INVALID!", "test")],
+            rappin::ReloadPhase::Registration,
+        ),
+    ] {
+        let ready = json!({"op":"ready","protocol":version,"manifest":{"name":"fixture","commands":commands,"buttons":[],"listeners":[]}}).to_string();
+        let source = format!(r#"fn main() {{ println!("{{}}",{ready:?}); }}"#);
+        tokio::fs::write(project.0.join("src/main.rs"), source)
+            .await
+            .unwrap();
+        let failure = match HotReload::load(bot.handle(), project.spec()).await {
+            Ok(_) => panic!("invalid candidate"),
+            Err(error) => error.hot_reload_failure().unwrap(),
+        };
+        assert_eq!(failure.phase, phase);
+        assert!(failure.candidate_started && !failure.routes_published);
+    }
+
+    let missing = HotReload::from_executable(bot.handle(), project.0.join("missing")).await;
+    let failure = match missing {
+        Ok(_) => panic!("missing executable"),
+        Err(error) => error.hot_reload_failure().unwrap(),
+    };
+    assert_eq!(failure.phase, rappin::ReloadPhase::Startup);
+    assert!(!failure.candidate_started);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn structured_candidate_failure_crosses_worker_and_callback_without_implicit_completion() {
+    use rappin::{FailureClass, FailureDisposition, HotReloadFailure, ReloadPhase};
+    let project = Project::new().await;
+    let failure: HotReloadFailure = serde_json::from_value(json!({
+        "phase":"compilation","message":"Cargo compilation failed", "diagnostics":[{"code":"E0425","level":"error","message":"cannot find value","spans":[{"file":"src/main.rs","line_start":2,"line_end":2,"column_start":1,"column_end":4,"is_primary":true}],"children":[]}],
+        "truncated":false,"exit":{"code":101,"signal":null},"timed_out":false,"candidate_started":false,"publication_attempted":false,"routes_published":false,"source":null
+    })).unwrap();
+    let original = YappinError::HotReload {
+        failure: Box::new(failure.clone()),
+    };
+    let ready = json!({"op":"ready","protocol":3,"manifest":{"name":"fixture","commands":[Command::new("proposal","test")],"buttons":[],"listeners":[]}}).to_string();
+    let done =
+        json!({"op":"done","error":original.to_string(),"structured_error":original.to_remote()})
+            .to_string();
+    let source = format!(
+        r#"use std::io::{{BufRead,Write}};fn main() {{ println!("{{}}",{ready:?});std::io::stdout().flush().unwrap();for line in std::io::stdin().lock().lines() {{ if line.unwrap().contains("shutdown") {{break;}} println!("{{}}",{done:?}); std::io::stdout().flush().unwrap(); }} }}"#
+    );
+    tokio::fs::write(project.0.join("src/main.rs"), source)
+        .await
+        .unwrap();
+    let observed = Arc::new(std::sync::Mutex::new(None));
+    let saved = observed.clone();
+    let bot = Bot::builder("fixture")
+        .sync_commands(false)
+        .log(false)
+        .on_command_failure(move |_ctx, info| {
+            let saved = saved.clone();
+            async move {
+                assert_eq!(info.class, FailureClass::Unexpected);
+                *saved.lock().unwrap() = info.error.hot_reload_failure();
+                Ok(FailureDisposition::Stop)
+            }
+        })
+        .build();
+    bot.cache().set_me(me()).await;
+    let reload = HotReload::load(bot.handle(), project.spec()).await.unwrap();
+    let error = bot.process_event(event("proposal")).await.unwrap_err();
+    assert_eq!(
+        error.hot_reload_failure().unwrap().phase,
+        ReloadPhase::Compilation
+    );
+    assert_eq!(*observed.lock().unwrap(), Some(failure));
+    reload.unload().await.unwrap();
 }
