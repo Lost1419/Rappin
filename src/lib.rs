@@ -191,5 +191,5 @@ pub mod server_management_guide {}
 #[doc = include_str!("../docs/sdk-workflows.md")]
 pub mod sdk_workflows_guide {}
 
-#[doc = include_str!("../docs/yapbot-sdk-handoff.md")]
+#[doc = include_str!("../docs/capability-bindings.md")]
 pub mod capability_bindings_guide {}

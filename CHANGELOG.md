@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.13 — 2026-10-31
+
+- Document capability bindings at `docs/capability-bindings.md`, with operation discovery, scoped execution, authorization policies and permanent-command examples. Update README and rustdoc links to the public guide. No runtime or API changes.
+
 ## 0.1.12 — 2026-10-31
 
 - Keep scheduled-event destination access separate from server-scope verification in capability bindings. Matching channel/server IDs do not establish requester or bot access; require host evidence for both principals before creation, with regression coverage.
@@ -9,9 +13,9 @@
 - Move the 38-operation catalogue into the default-feature Rust library. CLI/MCP consume the same names, schemas, permission rules and availability metadata; filtered inventories can also validate incoming operation choices.
 - Add validated bindings over `Api`, with host-owned server scope and separate requester/bot permission reports. Check referenced resources, retain unknown channel/hierarchy/availability checks, and require explicit host evidence before execution. Uncertain mutations are not replayed; split-send receipts remain structured.
 - Add serializable permanent-command bindings that derive parsing and help from operation argument schemas, preflight ownership, and install through existing cog replacement. Parameters cannot overwrite fixed arguments. Existing typed commands and worker protocol remain compatible.
-- Share bounded output and lookup engines with the library bindings. Sanitize model-facing results and access-report causes, and document the SDK contract and YapBot migration without adding model or database dependencies.
+- Share bounded output and lookup engines with the library bindings. Sanitize model-facing results and access-report causes without adding model or database dependencies.
 
-Exhaustive matches must handle `YappinError::OperationAuthorization` and `ArgumentType::Schema`. Named CLI/MCP calls now validate rich payload schemas before dispatch. See [capability bindings](docs/yapbot-sdk-handoff.md) for public APIs, access limits and integration examples.
+Exhaustive matches must handle `YappinError::OperationAuthorization` and `ArgumentType::Schema`. Named CLI/MCP calls now validate rich payload schemas before dispatch. See [capability bindings](docs/capability-bindings.md) for public APIs, access limits and integration examples.
 
 ## 0.1.10 — 2026-10-31
 

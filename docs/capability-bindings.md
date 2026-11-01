@@ -1,10 +1,15 @@
-# Capability bindings: SDK handoff for YapBot
+# Capability bindings
 
-This is the Rappin-side integration contract. YapBot's model selection, prompts,
-inference, conversations, persistence, feature ACLs and database transactions stay
-in YapBot. No YapBot source files were read or changed for this implementation.
+Discover API operations, validate calls and build runtime commands from the same
+catalogue used by Rappin's CLI and MCP tools. Capability bindings combine typed
+argument validation, server scope and separate requester/bot authorization through
+the shared `Api` interface.
 
-## Features and public APIs
+Use them for application-defined commands, administrative workflows or AI tool
+calling. Applications choose which operations to expose and retain control of
+their storage, cache backend, command prefixes and model integration.
+
+## Public APIs and feature requirements
 
 All APIs below are in **`rappin::capabilities`**, available with **default
 features disabled**. No CLI, Clap, configuration files, authentication or network
@@ -45,7 +50,7 @@ even if an application edits a cloned descriptor. Filtering alone does not
 authorize execution. Use the host-selected filter's `validate` method when a
 model is restricted to a subset, then enforce execution authorization as well.
 
-## Small integration example
+## Discover and execute an operation
 
 ```rust,no_run
 use rappin::{Api, Result, capabilities::*};
@@ -61,8 +66,8 @@ async fn run_plan(api: &(impl Api + ?Sized), server: Uuid, requester: Uuid) -> R
     };
     let model_metadata: Vec<Value> = filtered_catalogue(&selection)
         .into_iter().map(Capability::tool_definition).collect();
-    // YapBot supplies these definitions to its own planner. The example plan
-    // below stands in for the model response; inference stays in the bot.
+    // Supply these definitions to your planner or application UI, then validate
+    // its selected operation against the same inventory before execution.
     let _ = model_metadata;
     let call = selection.validate("list_roles", &json!({"id": server}))?;
     let result = call.execute(api, &OperationContext::server(server, requester)).await?;
@@ -74,7 +79,7 @@ async fn run_plan(api: &(impl Api + ?Sized), server: Uuid, requester: Uuid) -> R
 See [`examples/planner_bindings.rs`](../examples/planner_bindings.rs) for an
 offline executable and a permanent-command installation helper. Run
 `cargo run --example planner_bindings` to print capabilities without credentials.
-The library can be used as `rappin-rs = { version = "0.1.12", default-features = false }`.
+The library can be used as `rappin-rs = { version = "0.1.13", default-features = false }`.
 
 ## Authorization and scope
 
@@ -130,11 +135,11 @@ to server-advised requests known not to have applied; uncertain writes are not
 automatically replayed. Split sends preserve completed results and the failed
 step through `PartialWrite`. Do not retry a complete feature/workflow after an
 unknown outcome or partial write.
-Event delivery remains at-least-once. YapBot should persist invocation/outcome
-receipts in its own storage and reconcile uncertain writes before re-executing
+Event delivery remains at-least-once. Applications should persist invocation/outcome
+receipts in their own storage and reconcile uncertain writes before re-executing
 a command after restart; the binding layer does not add durable deduplication.
 
-## Permanent commands without patching info
+## Permanent commands
 
 Store an `OperationCommandBinding` as ordinary serializable bot data:
 
@@ -169,35 +174,27 @@ path. Workers can use `command_schema()` with `WorkerCog::dynamic_command` and
 
 Preflight is advisory and final publication revalidates under the registry lock.
 An invalid candidate or failed slash-command publication retains old local
-routes/help. An ambiguous remote publication can still require reconciliation;
-Rappin does not transact with YapBot's database or blindly replay publication.
+routes/help. Applications manage their own database transactions and reconcile
+ambiguous remote publication outcomes before trying again.
 
-## YapBot migration outline
+## Application integration
 
-- **`features.rs`:** replace hand-maintained operation/schema tables with catalogue
-  lookups. Store operation name, fixed arguments and parameter mapping in the
-  existing database. Retain feature ownership, guild enablement, quotas and
-  application ACLs. Validate definitions and preflight before preparing a change;
-  mark a definition active only after installation succeeds. Keep the prior active
-  definition available if publication fails.
-- **`feature_commands.rs`:** reconstruct `OperationCommandBinding`, obtain its
-  `command_schema`, preflight, then `bind` and install/replace the native cog.
-  Remove post-binding edits to `RegisteredCommand.info`. Continue using the
-  application's prefixes and server dispatch policy.
-- **`api.rs`:** accept `&(impl Api + ?Sized)` in shared helpers. Validate a named
-  operation through the selected filter and execute with an `OperationContext`
-  derived from the real event. Implement `OperationPolicy` using YapBot's trusted
-  access data for unresolved checks. Preserve structured errors/retry outcomes,
-  report unknown checks, and keep requester/bot authorization separate.
-- **AI capability prompt:** serialize only the selected `tool_definition()` values.
+- **Saved command definitions:** store the operation name, fixed arguments and
+  parameter mapping in your chosen database. Retain ownership, per-server
+  enablement, quotas and application ACLs. Reconstruct `OperationCommandBinding`,
+  preflight, then `bind` and install through the native cog API. Mark a definition
+  active after installation succeeds and keep the prior active definition if
+  publication fails. Parsing and help come from the binding; existing prefix
+  resolvers and dispatch policies continue to apply.
+- **Shared API helpers:** accept `&(impl Api + ?Sized)` to support native and worker
+  contexts. Validate through the selected filter and execute with an
+  `OperationContext` derived from the authenticated event. Implement
+  `OperationPolicy` using trusted access data for unresolved checks. Preserve
+  structured errors and retry outcomes, report unknown checks, and keep requester
+  and bot authorization separate.
+- **AI tools:** serialize only the selected `tool_definition()` values.
   Filter by enabled features/domains, read/write needs, library support and trusted
   availability. Require an operation name plus JSON arguments; keep identity,
   scope and policy inputs out of model control. Validate against the same filter
-  on receipt. Continue owning all model selection, prompt construction, inference,
-  conversation state and storage in YapBot.
-
-The SDK-side tests cover default-feature discovery, schema/CLI/MCP consistency,
-typed validation, separate principals, unknown access, server/resource boundaries,
-no replay of uncertain writes, partial receipts, command metadata, alias reloads
-and failed publication. Actual YapBot source integration is intentionally left to
-its own conversation.
+  on receipt. Model selection, prompting, inference, conversation state and storage
+  remain application choices.
