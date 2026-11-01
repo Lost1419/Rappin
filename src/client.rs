@@ -1104,15 +1104,14 @@ impl Client {
         category_id: Uuid,
         name: &str,
     ) -> Result<()> {
-        #[derive(Serialize)]
-        struct Req<'a> {
-            name: &'a str,
-        }
+        let req = EditCategoryRequest {
+            name: name.to_owned(),
+        };
         let _: OkResponse = self
             .request_json(
                 Method::PATCH,
                 &format!("/servers/{}/categories/{}", server_id, category_id),
-                Some(&Req { name }),
+                Some(&req),
             )
             .await?;
         Ok(())
@@ -1299,6 +1298,7 @@ impl Client {
         channel_id: Uuid,
         req: &EditChannelRequest,
     ) -> Result<Channel> {
+        req.validate()?;
         #[derive(Deserialize)]
         struct Resp {
             channel: Channel,

@@ -174,12 +174,12 @@ impl OperationPolicy for HostEvidence {
 
 #[test]
 fn catalogue_is_offline_filtered_complete_and_has_one_schema_source() {
-    assert_eq!(catalogue().len(), 38);
+    assert_eq!(catalogue().len(), 44);
     let names = catalogue()
         .iter()
         .map(|c| c.name)
         .collect::<std::collections::HashSet<_>>();
-    assert_eq!(names.len(), 38);
+    assert_eq!(names.len(), 44);
     for descriptor in catalogue() {
         let tool = descriptor.tool_definition();
         assert_eq!(tool["inputSchema"], descriptor.input_schema());
@@ -312,7 +312,7 @@ async fn preview_and_local_metadata_need_no_api_access() {
     assert!(api.requests.lock().unwrap().is_empty());
     let call = operation("get_capabilities", json!({}));
     let result = call.execute(&api, &context()).await.unwrap();
-    assert_eq!(result.data["tools"].as_array().unwrap().len(), 38);
+    assert_eq!(result.data["tools"].as_array().unwrap().len(), 44);
     assert!(api.requests.lock().unwrap().is_empty());
     for name in ["ack_events", "poll_events", "doctor"] {
         let args = if name == "ack_events" {
@@ -813,4 +813,462 @@ fn library_and_cli_publish_identical_operation_metadata() {
     let value: Value = serde_json::from_slice(&result.stdout).unwrap();
     assert_eq!(value["data"]["tools"], json!(tools()));
     std::fs::remove_dir_all(root).unwrap();
+}
+
+fn management_calls() -> Vec<(&'static str, Value, Method, String)> {
+    let category = Uuid::from_u128(6);
+    vec![
+        (
+            "create_channel",
+            json!({"server":server(),"body":{"name":"chat","kind":"text","category_id":category}}),
+            Method::POST,
+            format!("/servers/{}/channels", server()),
+        ),
+        (
+            "create_channel",
+            json!({"server":server(),"body":{"name":"voice","kind":"voice"}}),
+            Method::POST,
+            format!("/servers/{}/channels", server()),
+        ),
+        (
+            "edit_channel",
+            json!({"id":channel(),"body":{"name":"renamed","category_id":null,"slowmode":21600,"read_only":false}}),
+            Method::PATCH,
+            format!("/channels/{}", channel()),
+        ),
+        (
+            "delete_channel",
+            json!({"id":channel()}),
+            Method::DELETE,
+            format!("/channels/{}", channel()),
+        ),
+        (
+            "create_category",
+            json!({"id":server(),"body":{"name":"Topics","position":-1}}),
+            Method::POST,
+            format!("/servers/{}/categories", server()),
+        ),
+        (
+            "edit_category",
+            json!({"id":server(),"category":category,"body":{"name":"Renamed"}}),
+            Method::PATCH,
+            format!("/servers/{}/categories/{}", server(), category),
+        ),
+        (
+            "delete_category",
+            json!({"id":server(),"category":category}),
+            Method::DELETE,
+            format!("/servers/{}/categories/{}", server(), category),
+        ),
+    ]
+}
+
+#[test]
+fn channel_category_schemas_validate_bounds_types_and_nullable_patch_semantics() {
+    for (name, args, _, _) in management_calls() {
+        let call = operation(name, args.clone());
+        assert_eq!(call.arguments(), &args, "canonical body for {name}");
+        assert!(!call.capability().availability.test_servers_only);
+        assert_eq!(
+            call.capability().availability.library,
+            LibrarySupport::ScopedApi
+        );
+    }
+    let edit = capability("edit_channel").unwrap();
+    for body in [
+        json!({"slowmode":-1}),
+        json!({"slowmode":21601}),
+        json!({"slowmode":1.5}),
+        json!({"category_id":"invalid"}),
+        json!({"read_only":null}),
+        json!({"role_ids":["invalid"]}),
+        json!({"unknown":true}),
+    ] {
+        assert!(
+            edit.validate(&json!({"id":channel(),"body":body})).is_err(),
+            "{body}"
+        );
+    }
+    for body in [
+        json!({"slowmode":0}),
+        json!({"category_id":null}),
+        json!({"category_id":Uuid::from_u128(6)}),
+        json!({"read_only":true}),
+        json!({"private":false,"role_ids":[],"post_role_ids":[role()]}),
+    ] {
+        assert_eq!(
+            edit.validate(&json!({"id":channel(),"body":body}))
+                .unwrap()
+                .arguments()["body"],
+            body
+        );
+    }
+    let unchanged = edit
+        .validate(&json!({"id":channel(),"body":{"name":"x"}}))
+        .unwrap();
+    assert!(unchanged.arguments()["body"].get("category_id").is_none());
+    assert!(EditChannelRequest::new()
+        .slowmode(21601)
+        .validate()
+        .is_err());
+    assert!(capability("create_channel")
+        .unwrap()
+        .validate(&json!({"server":server(),"body":{"name":"x","kind":"video"}}))
+        .is_err());
+    for position in [json!(i32::MIN), json!(i32::MAX)] {
+        operation(
+            "create_category",
+            json!({"id":server(),"body":{"name":"x","position":position}}),
+        );
+    }
+    assert!(capability("create_category")
+        .unwrap()
+        .validate(&json!({"id":server(),"body":{"name":"x","position":2147483648_i64}}))
+        .is_err());
+    assert!(capability("edit_category")
+        .unwrap()
+        .validate(&json!({"id":server(),"category":Uuid::from_u128(6),"body":{}}))
+        .is_err());
+}
+
+#[tokio::test]
+async fn channel_category_bindings_use_separate_principals_and_exact_typed_requests() {
+    for (name, args, method, path) in management_calls() {
+        let api = MockApi {
+            request_grants: vec!["manage_channels"],
+            bot_grants: vec!["manage_channels"],
+            ..MockApi::standard()
+        };
+        let call = operation(name, args);
+        let result = call
+            .execute_with_policy(&api, &context(), &HostEvidence::allow())
+            .await
+            .unwrap();
+        assert!(result.authorization.unwrap().allowed());
+        let mutations: Vec<_> = api
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(m, _, _)| *m != Method::GET)
+            .cloned()
+            .collect();
+        assert_eq!(mutations.len(), 1);
+        assert_eq!(
+            (&mutations[0].0, &mutations[0].1, &mutations[0].2),
+            (&method, &path, &call.arguments().get("body").cloned())
+        );
+        assert_eq!(
+            api.principals
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(actor, _)| *actor)
+                .collect::<Vec<_>>(),
+            vec![requester(), bot_id()]
+        );
+        for (request_grants, bot_grants) in [
+            (vec![], vec!["administrator"]),
+            (vec!["administrator"], vec![]),
+        ] {
+            let api = MockApi {
+                request_grants,
+                bot_grants,
+                ..MockApi::standard()
+            };
+            assert!(
+                call.execute_with_policy(&api, &context(), &HostEvidence::allow())
+                    .await
+                    .unwrap_err()
+                    .is_forbidden(),
+                "{name}"
+            );
+            assert_eq!(api.mutations.load(Ordering::SeqCst), 0);
+        }
+        let api = MockApi {
+            request_grants: vec!["manage_channels"],
+            bot_grants: vec!["manage_channels"],
+            mutation_error: Some(503),
+            ..MockApi::standard()
+        };
+        let error = call
+            .execute_with_policy(&api, &context(), &HostEvidence::allow())
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_json()["retry_safety"], "unknown_write_outcome");
+        assert_eq!(
+            api.mutations.load(Ordering::SeqCst),
+            1,
+            "must not replay {name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn management_scope_and_category_permissions_require_evidence_before_mutation() {
+    let managed = || MockApi {
+        request_grants: vec!["manage_channels"],
+        bot_grants: vec!["manage_channels"],
+        ..MockApi::standard()
+    };
+    for (name, args, _, _) in management_calls() {
+        let api = managed();
+        let call = operation(name, args);
+        let report = call.assess(&api, &context()).await.unwrap();
+        if matches!(name, "create_category")
+            || (name == "create_channel" && call.arguments()["body"]["category_id"].is_null())
+        {
+            assert!(report.allowed());
+        } else {
+            assert_eq!(report.decision(), AccessDecision::Unknown, "{name}");
+        }
+        assert_eq!(api.mutations.load(Ordering::SeqCst), 0);
+    }
+    let foreign = Uuid::from_u128(999);
+    for (name, args) in [
+        (
+            "create_channel",
+            json!({"server":foreign,"body":{"name":"x"}}),
+        ),
+        (
+            "create_channel",
+            json!({"server":server(),"body":{"name":"x","category_id":foreign}}),
+        ),
+        (
+            "edit_channel",
+            json!({"id":channel(),"body":{"category_id":foreign}}),
+        ),
+        (
+            "edit_channel",
+            json!({"id":channel(),"body":{"role_ids":[role(),foreign]}}),
+        ),
+        (
+            "edit_channel",
+            json!({"id":channel(),"body":{"post_role_ids":[foreign]}}),
+        ),
+        (
+            "edit_category",
+            json!({"id":server(),"category":foreign,"body":{"name":"x"}}),
+        ),
+        ("delete_category", json!({"id":server(),"category":foreign})),
+        ("create_category", json!({"id":foreign,"body":{"name":"x"}})),
+    ] {
+        let api = managed();
+        assert!(
+            operation(name, args)
+                .execute_with_policy(&api, &context(), &HostEvidence::allow())
+                .await
+                .unwrap_err()
+                .is_forbidden(),
+            "{name}"
+        );
+        assert_eq!(api.mutations.load(Ordering::SeqCst), 0);
+    }
+    for name in ["edit_channel", "delete_channel"] {
+        let api = MockApi {
+            channel_server: Some(foreign),
+            ..managed()
+        };
+        let args = if name == "edit_channel" {
+            json!({"id":channel(),"body":{"name":"x"}})
+        } else {
+            json!({"id":channel()})
+        };
+        assert!(operation(name, args)
+            .execute_with_policy(&api, &context(), &HostEvidence::allow())
+            .await
+            .unwrap_err()
+            .is_forbidden());
+        assert_eq!(api.mutations.load(Ordering::SeqCst), 0);
+    }
+    let call = operation(
+        "create_channel",
+        json!({"server":server(),"body":{"name":"x","category_id":Uuid::from_u128(6)}}),
+    );
+    let report = call.assess(&managed(), &context()).await.unwrap();
+    for principal in [Principal::Requester, Principal::Bot] {
+        assert!(report
+            .checks
+            .iter()
+            .any(|c| c.check == "category_permissions"
+                && c.principal == principal
+                && c.decision == AccessDecision::Unknown));
+    }
+}
+
+fn channel_binding() -> OperationCommandBinding {
+    serde_json::from_value(json!({"operation":"edit_channel","name":"configure","description":"Configure a channel","aliases":["cfg"],"fixed_arguments":{"id":channel()},"parameters":[{"name":"category","target":"/body/category_id"},{"name":"slowmode","target":"/body/slowmode"},{"name":"read_only","target":"/body/read_only"}]})).unwrap()
+}
+#[tokio::test]
+async fn channel_command_parsing_help_preflight_and_reload_share_operation_metadata() {
+    let binding = channel_binding();
+    let schema = binding.command_schema().unwrap();
+    let call = binding
+        .prepare(&schema.parse("null 21600 false").unwrap())
+        .unwrap();
+    assert_eq!(
+        call.arguments()["body"],
+        json!({"category_id":null,"slowmode":21600,"read_only":false})
+    );
+    assert!(schema.parse("null 21601 false").is_err());
+    assert!(schema.parse("invalid 0 false").is_err());
+    let bot = Bot::builder("fixture")
+        .sync_commands(false)
+        .log(false)
+        .prefix("?")
+        .build();
+    bot.cache()
+        .set_me(serde_json::from_value(support::profile()).unwrap())
+        .await;
+    let calls = Arc::new(Mutex::new(vec![]));
+    let install = |binding: &OperationCommandBinding| {
+        let observed = calls.clone();
+        binding
+            .clone()
+            .bind(move |_, call| {
+                let observed = observed.clone();
+                async move {
+                    observed.lock().unwrap().push(call.arguments().clone());
+                    Ok(())
+                }
+            })
+            .unwrap()
+    };
+    binding
+        .preflight(&bot.handle(), Some("settings"))
+        .await
+        .unwrap();
+    bot.handle()
+        .add_cog(
+            CogBuilder::new("settings")
+                .registered_command(install(&binding))
+                .build(),
+        )
+        .await
+        .unwrap();
+    assert!(binding.preflight(&bot.handle(), None).await.is_err());
+    assert!(bot
+        .handle()
+        .help("configure")
+        .await
+        .contains("<category> <slowmode> <read_only>"));
+    let event = |content: &str| {
+        serde_json::from_value(json!({"id":1,"type":"message","data":{"id":Uuid::nil(),"channel_id":channel(),"author_id":requester(),"server_id":server(),"content":content}})).unwrap()
+    };
+    bot.process_event(event("?cfg null 0 true")).await.unwrap();
+    let mut replacement = binding.clone();
+    replacement.aliases = vec!["settings".into()];
+    replacement
+        .preflight(&bot.handle(), Some("settings"))
+        .await
+        .unwrap();
+    bot.handle()
+        .reload_cog(
+            CogBuilder::new("settings")
+                .registered_command(install(&replacement))
+                .build(),
+        )
+        .await
+        .unwrap();
+    bot.process_event(event("?cfg null 0 true")).await.unwrap();
+    assert_eq!(calls.lock().unwrap().len(), 1);
+    bot.process_event(event("?settings null 12 false"))
+        .await
+        .unwrap();
+    assert_eq!(
+        calls.lock().unwrap()[1]["body"],
+        json!({"category_id":null,"slowmode":12,"read_only":false})
+    );
+}
+
+#[test]
+fn create_and_rename_command_schemas_cover_required_names_and_channel_kinds() {
+    for (name, fixed) in [
+        (
+            "create_channel",
+            json!({"server":server(),"body":{"kind":"voice"}}),
+        ),
+        (
+            "create_category",
+            json!({"id":server(),"body":{"position":1}}),
+        ),
+        (
+            "edit_category",
+            json!({"id":server(),"category":Uuid::from_u128(6)}),
+        ),
+    ] {
+        let binding: OperationCommandBinding = serde_json::from_value(json!({"operation":name,"name":"label","description":"Set a name","fixed_arguments":fixed,"parameters":[{"name":"name","target":"/body/name","rest":true}]})).unwrap();
+        let values = binding
+            .command_schema()
+            .unwrap()
+            .parse("two words")
+            .unwrap();
+        assert_eq!(
+            binding.prepare(&values).unwrap().arguments()["body"]["name"],
+            "two words"
+        );
+        let mut incomplete = binding.clone();
+        incomplete.parameters.clear();
+        assert!(
+            incomplete.validate().is_err(),
+            "required name must be bound for {name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn typed_channel_slowmode_validation_precedes_http() {
+    let client = Client::builder("fixture")
+        .base_url("http://127.0.0.1:1")
+        .build();
+    let error = client
+        .edit_channel(channel(), &EditChannelRequest::new().slowmode(21601))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, YappinError::Validation { .. }));
+}
+
+#[tokio::test]
+async fn category_access_and_privacy_authority_are_independent_host_facts() {
+    let managed = || MockApi {
+        request_grants: vec!["manage_channels"],
+        bot_grants: vec!["manage_channels"],
+        ..MockApi::standard()
+    };
+    let call = operation(
+        "create_channel",
+        json!({"server":server(),"body":{"name":"x","category_id":Uuid::from_u128(6)}}),
+    );
+    for (requester, bot) in [
+        (AccessDecision::Denied, AccessDecision::Allowed),
+        (AccessDecision::Allowed, AccessDecision::Denied),
+    ] {
+        let api = managed();
+        assert!(call
+            .execute_with_policy(&api, &context(), &HostEvidence { requester, bot })
+            .await
+            .unwrap_err()
+            .is_forbidden());
+        assert_eq!(api.mutations.load(Ordering::SeqCst), 0);
+    }
+    let api = managed();
+    let call = operation(
+        "edit_channel",
+        json!({"id":channel(),"body":{"private":true,"role_ids":[role()],"post_role_ids":[role()]}}),
+    );
+    let report = call.assess(&api, &context()).await.unwrap();
+    for principal in [Principal::Requester, Principal::Bot] {
+        assert!(report.checks.iter().any(|c| c.check == "override_authority"
+            && c.principal == principal
+            && c.decision == AccessDecision::Unknown));
+    }
+    assert_eq!(
+        api.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, path, _)| path.ends_with("/roles"))
+            .count(),
+        1
+    );
 }

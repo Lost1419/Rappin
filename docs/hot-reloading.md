@@ -38,7 +38,7 @@ edition = "2021"
 default-run = "my-bot"
 
 [dependencies]
-rappin = { package = "rappin-rs", version = "0.1.13", features = ["hot-reload"] }
+rappin = { package = "rappin-rs", version = "0.1.14", features = ["hot-reload"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -101,8 +101,40 @@ Reserve stdout for the protocol. Use `eprintln!` or configure your logger for st
 - `fun.reload().await?` builds and activates a candidate explicitly. Controllers are cloneable, so an owner-only native command can capture one. Keep project paths and target names operator-controlled.
 - `fun.unload().await?` removes its routes and lets active invocations finish. Its watcher stops, and that controller cannot reload the unloaded cog. Call `HotReload::load` to load it again.
 - `fun.generation()` starts at 1 and advances after successful replacements. `process_id().await` and `commands().await` expose the current worker and metadata.
-- `watch.last_error()` returns the latest watcher failure; successful watched reloads clear it. A failed build is retried after another source change, rather than continuously compiling the same broken code.
+- `watch.status()` returns separate `scan_error` and `reload_error` fields. A successful scan clears its scan error even if the source digest has not changed. A failed build, startup or publication remains visible until a changed candidate installs successfully. `last_error()` reports the scan error first, then any outstanding reload error. Failed candidates are retried after another source change.
 - `HotReload::from_executable(handle, path)` loads an existing worker executable. Its watcher fingerprints that file; your deployment tool supplies rebuilt binaries.
+
+## Source scanning and recovery
+
+Project watchers fingerprint Rust files, TOML files and `Cargo.lock`. They skip
+hidden entries, `target` and `node_modules`. Database journals and session files
+are not source inputs and can change without triggering a build. Rust/TOML files
+under `data` or `state` still participate in source discovery. Use
+`WorkerProject::watch_path(...)` to include additional shared source/config roots
+or sources inside normally skipped directories. Explicit roots are required to
+exist; keep their paths operator-controlled.
+
+Disappearing non-source entries are tolerated. A source read interrupted by
+replacement makes up to three whole-scan attempts, with 5 ms between attempts.
+Persistent manifest, explicit-root, executable or access errors include the path
+and phase, such as `resolve manifest`, `inspect entry`, `enumerate directory` or
+`read source`. Source deletions detected by a changed inventory still trigger a
+Cargo build: removing a required module is a failed candidate, not a successful
+scan of an empty project. The active worker and routes remain installed on failure.
+
+```rust,no_run
+use rappin::hot_reload::WatchGuard;
+
+fn report_watch(watch: &WatchGuard) {
+    let status = watch.status();
+    if let Some(error) = status.scan_error {
+        eprintln!("Source scan: {error}");
+    }
+    if let Some(error) = status.reload_error {
+        eprintln!("Candidate reload: {error}");
+    }
+}
+```
 
 The cog name must remain stable. Commands cannot collide with another cog or a native bot command. Slash commands synchronize before the local route switch while the parent is running, unless `.sync_commands(false)` was selected. API registration and local routing cannot form one distributed transaction: a network timeout may leave the server's slash menu uncertain, while local handlers remain on the previous version. Retry or call `BotHandle::sync_commands()` to reconcile it.
 

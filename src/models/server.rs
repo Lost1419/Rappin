@@ -66,6 +66,12 @@ impl CreateCategoryRequest {
     }
 }
 
+/// Request to rename a category in a server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EditCategoryRequest {
+    pub name: String,
+}
+
 /// A server role with permissions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Role {

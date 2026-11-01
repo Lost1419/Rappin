@@ -25,6 +25,7 @@ pub enum ExternalCheck {
     GrantablePermissions,
     OverrideAuthority,
     CategoryScope,
+    CategoryPermissions,
     EventDestinationScope,
     TestServerAvailability,
 }
@@ -485,6 +486,20 @@ impl ValidatedOperation {
                 if matches!(check, ExternalCheck::CategoryScope) {
                     continue;
                 }
+                if *check == ExternalCheck::CategoryPermissions
+                    && matches!(self.name(), "create_channel" | "edit_channel")
+                    && self.args["body"]["category_id"].as_str().is_none()
+                {
+                    continue;
+                }
+                if *check == ExternalCheck::OverrideAuthority
+                    && self.name() == "edit_channel"
+                    && !["private", "role_ids", "post_role_ids"]
+                        .iter()
+                        .any(|key| self.args["body"].get(key).is_some())
+                {
+                    continue;
+                }
                 self.policy_check(
                     &mut report,
                     policy,
@@ -509,10 +524,22 @@ impl ValidatedOperation {
         report: &mut AuthorizationReport,
     ) -> bool {
         let server = context.server_id;
-        let role = self.args["role"]
+        let mut roles: Vec<&str> = self.args["role"]
             .as_str()
-            .or_else(|| self.args["target"].as_str().filter(|s| *s != "everyone"));
-        if let Some(role) = role {
+            .or_else(|| self.args["target"].as_str().filter(|s| *s != "everyone"))
+            .into_iter()
+            .collect();
+        if self.name() == "edit_channel" {
+            for key in ["role_ids", "post_role_ids"] {
+                if let Some(ids) = self.args["body"][key].as_array() {
+                    roles.extend(ids.iter().filter_map(Value::as_str));
+                }
+            }
+        }
+        roles.sort_unstable();
+        roles.dedup();
+        // Fetch one server role list for all references in a channel edit.
+        if !roles.is_empty() {
             match api
                 .request(
                     "GET".parse().unwrap(),
@@ -522,16 +549,18 @@ impl ValidatedOperation {
                 .await
             {
                 Ok(value) => match value["roles"].as_array() {
-                    Some(roles)
-                        if roles.iter().any(|r| {
-                            r["id"].as_str().and_then(|s| s.parse::<Uuid>().ok())
-                                == role.parse().ok()
+                    Some(listed)
+                        if roles.iter().all(|role| {
+                            listed.iter().any(|row| {
+                                row["id"].as_str().and_then(|s| s.parse::<Uuid>().ok())
+                                    == role.parse().ok()
+                            })
                         }) =>
                     {
                         report.record(
                             "role_scope",
                             Principal::Context,
-                            CheckResolution::allowed("role is listed in the host server"),
+                            CheckResolution::allowed("roles are listed in the host server"),
                             None,
                         )
                     }
@@ -562,7 +591,11 @@ impl ValidatedOperation {
                 }
             }
         }
-        if let Some(category) = self.args["category"].as_str() {
+        if let Some(category) = self.args["category"].as_str().or_else(|| {
+            matches!(self.name(), "create_channel" | "edit_channel")
+                .then(|| self.args["body"]["category_id"].as_str())
+                .flatten()
+        }) {
             match api
                 .request(
                     "GET".parse().unwrap(),

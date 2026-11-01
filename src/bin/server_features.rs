@@ -2,6 +2,37 @@ use super::*;
 
 pub async fn server_action(action: Servers, ctx: &Context) -> Result<Value> {
     match action {
+        Servers::CategoryCreate { id, body_file } => {
+            let body: rappin::CreateCategoryRequest =
+                serde_json::from_value(ctx.body(&body_file)?)?;
+            ctx.request(
+                Method::POST,
+                &format!("/servers/{id}/categories"),
+                Some(serde_json::to_value(body)?),
+            )
+            .await
+        }
+        Servers::CategoryEdit {
+            id,
+            category,
+            body_file,
+        } => {
+            let body: rappin::EditCategoryRequest = serde_json::from_value(ctx.body(&body_file)?)?;
+            ctx.request(
+                Method::PATCH,
+                &format!("/servers/{id}/categories/{category}"),
+                Some(serde_json::to_value(body)?),
+            )
+            .await
+        }
+        Servers::CategoryDelete { id, category } => {
+            ctx.request(
+                Method::DELETE,
+                &format!("/servers/{id}/categories/{category}"),
+                None,
+            )
+            .await
+        }
         Servers::Counts { id } => {
             ctx.request(Method::GET, &format!("/servers/{id}/counts"), None)
                 .await

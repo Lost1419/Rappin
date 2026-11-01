@@ -182,6 +182,17 @@ pub struct EditChannelRequest {
 }
 
 impl EditChannelRequest {
+    /// Validate documented slowmode bounds before making an API request.
+    pub fn validate(&self) -> crate::Result<()> {
+        if self.slowmode.is_some_and(|seconds| seconds > 21600) {
+            return Err(crate::YappinError::validation(
+                "slowmode",
+                "must be between 0 and 21600 seconds",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

@@ -136,6 +136,21 @@ enum Tools {
 }
 #[derive(Subcommand)]
 enum Servers {
+    CategoryCreate {
+        id: Uuid,
+        #[arg(long)]
+        body_file: PathBuf,
+    },
+    CategoryEdit {
+        id: Uuid,
+        category: Uuid,
+        #[arg(long)]
+        body_file: PathBuf,
+    },
+    CategoryDelete {
+        id: Uuid,
+        category: Uuid,
+    },
     List,
     Get {
         id: Uuid,
@@ -617,6 +632,7 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
             Channels::Edit { id, body_file } => {
                 let body: rappin::EditChannelRequest =
                     serde_json::from_value(ctx.body(&body_file)?)?;
+                body.validate()?;
                 ctx.request(
                     Method::PATCH,
                     &format!("/channels/{id}"),

@@ -19,7 +19,7 @@ already implement it; `WorkerContext` requires the existing `hot-reload` feature
 
 | API | Contract |
 |---|---|
-| `catalogue() -> &'static [Capability]` | Shared 38-operation inventory used by CLI/MCP |
+| `catalogue() -> &'static [Capability]` | Shared 44-operation inventory used by CLI/MCP |
 | `capability(name) -> Option<&'static Capability>` | Exact operation lookup |
 | `filtered_catalogue(&CapabilityFilter)` | Select by names, domains, write/read, library support and test-server restriction |
 | `CapabilityFilter::validate(name, &Value)` | Enforce the selected inventory and validate a call |
@@ -79,7 +79,42 @@ async fn run_plan(api: &(impl Api + ?Sized), server: Uuid, requester: Uuid) -> R
 See [`examples/planner_bindings.rs`](https://github.com/Lost1419/Rappin/blob/main/examples/planner_bindings.rs) for an
 offline executable and a permanent-command installation helper. Run
 `cargo run --example planner_bindings` to print capabilities without credentials.
-The library can be used as `rappin-rs = { version = "0.1.13", default-features = false }`.
+The library can be used as `rappin-rs = { version = "0.1.14", default-features = false }`.
+
+## Channel and category management
+
+The following operations are available through the library, CLI and MCP without
+an additional Cargo feature in the library:
+
+| Operation | Arguments | Changes |
+|---|---|---|
+| `create_channel` | `server`, `body` | Name, `kind: "text"` or `"voice"`, optional `category_id` |
+| `edit_channel` | `id`, `body` | Name, category, slowmode, read-only and privacy settings |
+| `delete_channel` | `id` | Delete the specified channel |
+| `create_category` | `id` (server), `body` | Name and optional signed 32-bit position |
+| `edit_category` | `id` (server), `category`, `body` | Rename the specified category |
+| `delete_category` | `id` (server), `category` | Delete the specified category |
+
+Bodies use the SDK's `CreateChannelRequest`, `EditChannelRequest`,
+`CreateCategoryRequest` and `EditCategoryRequest` contracts. Slowmode is an integer
+from 0 through 21600 seconds; 0 disables it. For channel edits, omitting
+`category_id` keeps the current category, a UUID moves the channel, and JSON
+`null` removes the category. `false` remains a supplied boolean value.
+
+Both principals need Manage Channels. Existing channel scope and effective
+channel permission checks apply to edits/deletes. Category references and privacy
+role lists must belong to the host server. A verified category ID alone does not
+establish access: `ExternalCheck::CategoryPermissions` asks the host policy about
+each principal when assigning a destination category or editing/deleting one.
+Privacy and role-list changes also require `OverrideAuthority` evidence.
+Unestablished checks remain unknown and block execution. These six operations
+are not marked test-server-only; permission override operations have their own
+availability restrictions.
+
+The CLI uses `channels create/edit/delete` and
+`servers category-create/category-edit/category-delete`. Supply JSON bodies with
+`--body-file`; named `tools call` and MCP operations accept an inline `body`.
+Dry runs validate and preview without claiming authorization or sending writes.
 
 ## Authorization and scope
 

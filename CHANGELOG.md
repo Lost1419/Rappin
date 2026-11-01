@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.14 — 2026-10-31
+
+- Fix source-watcher races when files or directories disappear during scanning. Ignore disappearing non-source entries, retain required `watch_path` roots, and include path and phase in scan errors. Retry interrupted source snapshots up to three attempts; missing required inputs and access failures still surface.
+- Expose `WatchGuard::status()` with separate scan and candidate-reload errors. Healthy scans clear recovered scan errors without requiring a changed digest; failed builds, startups and publications remain visible until a changed candidate installs. Active workers and routes remain installed on failure.
+- Add `create_channel`, `edit_channel`, `delete_channel`, `create_category`, `edit_category` and `delete_category` to the shared Rust/CLI/MCP catalogue. Reuse typed request bodies, separate requester/bot Manage Channels checks, verify category/role references, and retain unknown effective-access checks. Channel edits preserve explicit null category removal and false booleans; uncertain writes are not replayed.
+- Add `EditCategoryRequest` and validate the documented 0–21600-second slowmode range in typed channel edits as well as bindings. Permanent commands derive parsing/help from these same schemas and retain registration preflight and transactional replacement.
+
+Exhaustive matches on `ExternalCheck` must handle `CategoryPermissions`.
+
 ## 0.1.13 — 2026-10-31
 
 - Document capability bindings at `docs/capability-bindings.md`, with operation discovery, scoped execution, authorization policies and permanent-command examples. Update README and rustdoc links to the public guide. No runtime or API changes.

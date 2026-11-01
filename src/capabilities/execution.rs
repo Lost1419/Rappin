@@ -149,6 +149,47 @@ impl ValidatedOperation {
             }
             "get_server" => get(format!("/servers/{server}")).await,
             "list_channels" => get(format!("/servers/{server}/channels")).await,
+            "create_channel" => {
+                request(
+                    "POST",
+                    format!("/servers/{server}/channels"),
+                    Some(self.args["body"].clone()),
+                )
+                .await
+            }
+            "edit_channel" => {
+                request(
+                    "PATCH",
+                    format!("/channels/{}", id()),
+                    Some(self.args["body"].clone()),
+                )
+                .await
+            }
+            "delete_channel" => request("DELETE", format!("/channels/{}", id()), None).await,
+            "create_category" => {
+                request(
+                    "POST",
+                    format!("/servers/{server}/categories"),
+                    Some(self.args["body"].clone()),
+                )
+                .await
+            }
+            "edit_category" => {
+                request(
+                    "PATCH",
+                    format!("/servers/{server}/categories/{}", self.uuid("category")),
+                    Some(self.args["body"].clone()),
+                )
+                .await
+            }
+            "delete_category" => {
+                request(
+                    "DELETE",
+                    format!("/servers/{server}/categories/{}", self.uuid("category")),
+                    None,
+                )
+                .await
+            }
             "get_channel" => get(format!("/channels/{}", id())).await,
             "list_roles" => get(format!("/servers/{server}/roles")).await,
             "get_member_counts" => get(format!("/servers/{server}/counts")).await,

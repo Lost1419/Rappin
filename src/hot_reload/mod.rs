@@ -5,6 +5,6 @@
 mod host;
 mod protocol;
 mod worker;
-pub use host::{HotReload, WatchGuard, WorkerProject};
+pub use host::{HotReload, WatchGuard, WatchStatus, WorkerProject};
 pub use protocol::{CogEvent, Listener};
 pub use worker::{WorkerCog, WorkerContext};

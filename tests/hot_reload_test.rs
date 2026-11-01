@@ -249,6 +249,103 @@ async fn watcher_reloads_source_and_registration_conflicts_preserve_existing_rou
 
 struct BadCog;
 
+async fn watch_status_until(
+    watch: &rappin::hot_reload::WatchGuard,
+    predicate: impl Fn(rappin::hot_reload::WatchStatus) -> bool,
+) {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !predicate(watch.status()) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn recovered_scans_clear_only_scan_errors_and_missing_sources_keep_active_routes() {
+    let project = Project::new().await;
+    project.code("stable", &["ping"], 0, None).await;
+    let source = project.0.join("src/main.rs");
+    let original = tokio::fs::read(&source).await.unwrap();
+    let shared = project.0.join("shared.toml");
+    tokio::fs::write(&shared, "shared = true\n").await.unwrap();
+    let (base, mut requests, http) = support::mock(vec![
+        support::response(200, json!({})),
+        support::response(200, json!({})),
+    ])
+    .await;
+    let bot = Bot::builder("fixture")
+        .base_url(base)
+        .sync_commands(false)
+        .log(false)
+        .build();
+    bot.cache().set_me(me()).await;
+    let reload = HotReload::load(bot.handle(), project.spec().watch_path(&shared))
+        .await
+        .unwrap();
+    let pid = reload.process_id().await;
+    let watch = reload.watch(Duration::from_millis(20)).await.unwrap();
+
+    tokio::fs::remove_file(&shared).await.unwrap();
+    watch_status_until(&watch, |s| s.scan_error.is_some()).await;
+    let error = watch.last_error().unwrap();
+    assert!(
+        error.contains("resolve watch root") && error.contains("shared.toml"),
+        "{error}"
+    );
+    tokio::fs::write(&shared, "shared = true\n").await.unwrap();
+    watch_status_until(&watch, |s| s.scan_error.is_none()).await;
+    assert!(watch.last_error().is_none());
+    assert_eq!(
+        reload.generation(),
+        1,
+        "unchanged scan recovery must not rebuild"
+    );
+
+    // A required Rust source removed before enumeration changes the digest;
+    // Cargo must reject it instead of accepting a truncated source inventory.
+    tokio::fs::remove_file(&source).await.unwrap();
+    watch_status_until(&watch, |s| s.reload_error.is_some()).await;
+    assert_eq!(reload.process_id().await, pid);
+    bot.process_event(event("ping")).await.unwrap();
+    assert!(requests
+        .recv()
+        .await
+        .unwrap()
+        .contains("\"content\":\"stable\""));
+    let failed_candidate = watch.status().reload_error.unwrap();
+
+    tokio::fs::remove_file(&shared).await.unwrap();
+    watch_status_until(&watch, |s| s.scan_error.is_some()).await;
+    assert_eq!(
+        watch.status().reload_error.as_ref(),
+        Some(&failed_candidate)
+    );
+    tokio::fs::write(&shared, "shared = true\n").await.unwrap();
+    watch_status_until(&watch, |s| s.scan_error.is_none()).await;
+    assert_eq!(watch.last_error().as_ref(), Some(&failed_candidate));
+    assert_eq!(reload.generation(), 1);
+
+    let replacement = source.with_extension("new");
+    tokio::fs::write(&replacement, original).await.unwrap();
+    tokio::fs::rename(replacement, &source).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while reload.generation() < 2 || watch.last_error().is_some() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    bot.process_event(event("ping")).await.unwrap();
+    assert!(requests
+        .recv()
+        .await
+        .unwrap()
+        .contains("\"content\":\"stable\""));
+    http.await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reload_removes_old_buttons_and_listeners_and_installs_new_ones() {
     let project = Project::new().await;

@@ -130,6 +130,12 @@ fn build_catalog() -> Vec<Capability> {
         )
     };
     entries.extend([
+        Entry{name:"create_channel",description:"Create a text or voice channel in a server; category access requires host evidence",cli:&["channels","create"],fields:vec![id("server",None,true),body()],write:true,destructive:false,collection:false},
+        Entry{name:"edit_channel",description:"Rename, move or configure a channel; null category_id removes its category",cli:&["channels","edit"],fields:vec![id("id",None,true),body()],write:true,destructive:true,collection:false},
+        Entry{name:"delete_channel",description:"Delete a channel when both principals can manage it",cli:&["channels","delete"],fields:vec![id("id",None,true)],write:true,destructive:true,collection:false},
+        Entry{name:"create_category",description:"Create a category in a server",cli:&["servers","category-create"],fields:vec![id("id",None,true),body()],write:true,destructive:false,collection:false},
+        Entry{name:"edit_category",description:"Rename a category within its verified server scope",cli:&["servers","category-edit"],fields:vec![id("id",None,true),id("category",None,true),body()],write:true,destructive:true,collection:false},
+        Entry{name:"delete_category",description:"Delete a category within its verified server scope",cli:&["servers","category-delete"],fields:vec![id("id",None,true),id("category",None,true)],write:true,destructive:true,collection:false},
         Entry{name:"search_channels",description:"Return channel candidates with complete/unique/ambiguous search metadata",cli:&["channels","search"],fields:vec![text("name",None,true),id("server",Some("--server"),false)],write:false,destructive:false,collection:true},
         Entry{name:"search_members",description:"Return bounded member candidates; a full final page is incomplete, never confirmed unique",cli:&["members","search"],fields:vec![id("server",None,true),text("name",None,true),number("max_pages","--max-pages",1,100)],write:false,destructive:false,collection:true},
         Entry {

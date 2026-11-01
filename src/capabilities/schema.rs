@@ -17,6 +17,10 @@ pub fn bundled_schema() -> &'static Value {
 
 pub(super) fn body_schema(name: &str) -> Option<Value> {
     let (method, path) = match name {
+        "create_channel" => ("post", "/servers/{id}/channels"),
+        "edit_channel" => ("patch", "/channels/{id}"),
+        "create_category" => ("post", "/servers/{id}/categories"),
+        "edit_category" => ("patch", "/servers/{id}/categories/{cid}"),
         "send_message" => ("post", "/channels/{id}/messages"),
         "edit_message" => ("patch", "/channels/{id}/messages/{mid}"),
         "create_role" => ("post", "/servers/{id}/roles"),
@@ -56,6 +60,19 @@ pub(super) fn body_schema(name: &str) -> Option<Value> {
         0,
     );
     schema["additionalProperties"] = false.into();
+    // Fill gaps in the bundled OpenAPI using the existing typed SDK contract.
+    match name {
+        "edit_channel" => {
+            schema["properties"]["category_id"]["format"] = "uuid".into();
+            schema["properties"]["slowmode"]["minimum"] = 0.into();
+        }
+        "create_category" => {
+            schema["properties"]["position"] =
+                json!({"type":"integer","minimum":i32::MIN,"maximum":i32::MAX});
+        }
+        "edit_category" => schema["required"] = json!(["name"]),
+        _ => (),
+    }
     Some(schema)
 }
 

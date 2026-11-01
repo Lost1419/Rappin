@@ -112,6 +112,92 @@ fn mcp_lists_tools_and_previews_writes_without_auth() {
 }
 
 #[test]
+fn channel_and_category_tools_dispatch_offline_and_preserve_null_category_removal() {
+    use serde_json::json;
+    use std::{io::Write, process::Stdio};
+    let (mut command, config) = command();
+    let server = uuid::Uuid::from_u128(1);
+    let channel = uuid::Uuid::from_u128(2);
+    let category = uuid::Uuid::from_u128(3);
+    let calls = [
+        (
+            "create_channel",
+            json!({"server":server,"body":{"name":"Voice","kind":"voice"}}),
+            "POST",
+            format!("/servers/{server}/channels"),
+        ),
+        (
+            "edit_channel",
+            json!({"id":channel,"body":{"category_id":null,"slowmode":21600,"read_only":false}}),
+            "PATCH",
+            format!("/channels/{channel}"),
+        ),
+        (
+            "delete_channel",
+            json!({"id":channel}),
+            "DELETE",
+            format!("/channels/{channel}"),
+        ),
+        (
+            "create_category",
+            json!({"id":server,"body":{"name":"Topics","position":2}}),
+            "POST",
+            format!("/servers/{server}/categories"),
+        ),
+        (
+            "edit_category",
+            json!({"id":server,"category":category,"body":{"name":"Renamed"}}),
+            "PATCH",
+            format!("/servers/{server}/categories/{category}"),
+        ),
+        (
+            "delete_category",
+            json!({"id":server,"category":category}),
+            "DELETE",
+            format!("/servers/{server}/categories/{category}"),
+        ),
+    ];
+    let mut child = command
+        .args(["--base-url", "http://127.0.0.1:1", "mcp"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for (id, (name, args, _, _)) in calls.iter().enumerate() {
+        let mut args = args.clone();
+        args["dry_run"] = true.into();
+        writeln!(stdin, "{}", json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":name,"arguments":args}})).unwrap();
+    }
+    writeln!(stdin, "{}", json!({"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"edit_channel","arguments":{"id":channel,"body":{"slowmode":21601},"dry_run":true}}})).unwrap();
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let responses: Vec<serde_json::Value> = String::from_utf8(out.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(responses.len(), 7);
+    for (id, (_, args, method, path)) in calls.iter().enumerate() {
+        let response = responses.iter().find(|r| r["id"] == id).unwrap();
+        let envelope: serde_json::Value =
+            serde_json::from_str(response["result"]["content"][0]["text"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(envelope["ok"], true, "{envelope}");
+        assert_eq!(envelope["data"]["method"], *method);
+        assert_eq!(envelope["data"]["path"], *path);
+        assert_eq!(
+            envelope["data"]["body"],
+            args.get("body").cloned().unwrap_or_default()
+        );
+    }
+    let invalid = responses.iter().find(|r| r["id"] == 99).unwrap();
+    assert_eq!(invalid["result"]["isError"], true);
+    std::fs::remove_file(config).unwrap();
+}
+
+#[test]
 fn mcp_rejects_tool_selected_files_and_never_overwrites_them() {
     use std::io::Write;
     use std::process::Stdio;

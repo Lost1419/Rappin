@@ -4,7 +4,6 @@ use crate::{
     Result, YappinError,
 };
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
@@ -19,6 +18,10 @@ use tokio::{
     process::{Child, ChildStdin, ChildStdout, Command as Process},
     sync::{Mutex, RwLock},
 };
+
+#[path = "watch.rs"]
+mod watch;
+use watch::fingerprint;
 
 /// A separately compiled Rust binary (or example) containing WorkerCog::run().
 #[derive(Clone, Debug)]
@@ -66,7 +69,8 @@ impl WorkerProject {
         self.offline = offline;
         self
     }
-    /// Additional shared source/config roots outside the manifest's directory.
+    /// Additional required source/config roots, including roots outside the
+    /// manifest directory or inside normally skipped directories.
     pub fn watch_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.watch_paths.push(path.into());
         self
@@ -884,7 +888,7 @@ impl HotReload {
         let source = self.inner.source.clone();
         let mut previous = fingerprint(source.clone()).await?;
         let controller = self.clone();
-        let (error_tx, error) = tokio::sync::watch::channel(None);
+        let (status_tx, status) = tokio::sync::watch::channel(WatchStatus::default());
         let task = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(interval).await;
@@ -895,89 +899,62 @@ impl HotReload {
                     break;
                 }
                 drop(bot);
+                let mut next_status = status_tx.borrow().clone();
                 match fingerprint(source.clone()).await {
-                    Ok(next) if next != previous => {
-                        previous = next;
-                        let error = controller.reload().await.err().map(|e| e.to_string());
-                        if let Some(error) = &error {
-                            tracing::warn!("Hot reload failed; active cog kept: {error}");
+                    Ok(next) => {
+                        next_status.scan_error = None;
+                        if next != previous {
+                            previous = next;
+                            next_status.reload_error =
+                                controller.reload().await.err().map(|e| e.to_string());
+                            if let Some(error) = &next_status.reload_error {
+                                tracing::warn!("Hot reload failed; active cog kept: {error}");
+                            }
                         }
-                        let _ = error_tx.send(error);
                     }
-                    Ok(_) => (),
-                    Err(error) => {
-                        let _ = error_tx.send(Some(error.to_string()));
-                    }
+                    Err(error) => next_status.scan_error = Some(error.to_string()),
                 }
+                status_tx.send_if_modified(|status| {
+                    if *status == next_status {
+                        false
+                    } else {
+                        *status = next_status;
+                        true
+                    }
+                });
             }
         });
-        Ok(WatchGuard { task, error })
+        Ok(WatchGuard { task, status })
     }
+}
+/// Independent source scan and candidate reload failures.
+/// A recovered scan clears only `scan_error`; a failed candidate remains visible
+/// until a changed candidate is successfully installed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WatchStatus {
+    pub scan_error: Option<String>,
+    pub reload_error: Option<String>,
 }
 /// Dropping the guard stops watching; the currently installed cog keeps running.
 pub struct WatchGuard {
     task: tokio::task::JoinHandle<()>,
-    error: tokio::sync::watch::Receiver<Option<String>>,
+    status: tokio::sync::watch::Receiver<WatchStatus>,
 }
 impl WatchGuard {
+    pub fn status(&self) -> WatchStatus {
+        self.status.borrow().clone()
+    }
+    /// Most recent scan error, or the last failed candidate if scanning is healthy.
     pub fn last_error(&self) -> Option<String> {
-        self.error.borrow().clone()
+        let status = self.status.borrow();
+        status
+            .scan_error
+            .clone()
+            .or_else(|| status.reload_error.clone())
     }
 }
 impl Drop for WatchGuard {
     fn drop(&mut self) {
         self.task.abort();
     }
-}
-async fn fingerprint(source: Source) -> Result<Vec<u8>> {
-    tokio::task::spawn_blocking(move || {
-        let mut hasher = Sha256::new();
-        match source {
-            Source::Executable(path) => {
-                hasher.update(std::fs::read(path)?);
-            }
-            Source::Project(project) => {
-                let manifest = std::fs::canonicalize(project.manifest)?;
-                let mut roots = vec![manifest.parent().unwrap_or(Path::new(".")).to_path_buf()];
-                roots.extend(project.watch_paths);
-                let mut files = vec![];
-                for root in roots {
-                    collect(&root, &mut files)?;
-                }
-                files.sort();
-                files.dedup();
-                for path in files {
-                    hasher.update(path.to_string_lossy().as_bytes());
-                    hasher.update(std::fs::read(path)?);
-                }
-            }
-        }
-        Ok(hasher.finalize().to_vec())
-    })
-    .await
-    .map_err(|_| YappinError::Config("source watcher failed".into()))?
-}
-fn collect(path: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    if path.is_file() {
-        if matches!(
-            path.extension().and_then(|s| s.to_str()),
-            Some("rs" | "toml")
-        ) || path.file_name().is_some_and(|n| n == "Cargo.lock")
-        {
-            files.push(path.to_path_buf());
-        }
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let text = name.to_string_lossy();
-        if text.starts_with('.') || matches!(&*text, "target" | "node_modules") {
-            continue;
-        }
-        if !entry.file_type()?.is_symlink() {
-            collect(&entry.path(), files)?;
-        }
-    }
-    Ok(())
 }

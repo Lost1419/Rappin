@@ -200,9 +200,13 @@ fn metadata(
             (S::OptionalServer("server"), D::Channels)
         }
         "get_channel"
+        | "edit_channel"
+        | "delete_channel"
         | "get_channel_permissions"
         | "set_channel_permissions"
         | "clear_channel_permissions" => (S::Channel("id"), D::Channels),
+        "create_channel" => (S::Server("server"), D::Channels),
+        "create_category" | "edit_category" | "delete_category" => (S::Server("id"), D::Channels),
         "list_members" | "get_member" | "resolve_member" | "search_members" => {
             (S::Server("server"), D::Members)
         }
@@ -228,6 +232,28 @@ fn metadata(
         permissions.bot_channel.push("view_channel");
     }
     match name {
+        "create_channel" | "edit_channel" | "delete_channel" | "create_category"
+        | "edit_category" | "delete_category" => {
+            permissions.requester = P::All(vec!["manage_channels"]);
+            permissions.bot = permissions.requester.clone();
+            if matches!(scope, S::Channel(_)) {
+                permissions.requester_channel.push("manage_channels");
+                permissions.bot_channel.push("manage_channels");
+            }
+            if matches!(
+                name,
+                "create_channel" | "edit_channel" | "edit_category" | "delete_category"
+            ) {
+                permissions
+                    .additional_checks
+                    .push(ExternalCheck::CategoryPermissions);
+            }
+            if name == "edit_channel" {
+                permissions
+                    .additional_checks
+                    .push(ExternalCheck::OverrideAuthority);
+            }
+        }
         "send_message" => {
             permissions.requester_channel.push("send_messages");
             permissions.bot_channel.push("send_messages");

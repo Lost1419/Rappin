@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
-    CreateMessage, CreateRole, CreateServerEvent, EditMessage, EditRole, PermissionOverride,
+    CreateCategoryRequest, CreateChannelRequest, CreateMessage, CreateRole, CreateServerEvent,
+    EditCategoryRequest, EditChannelRequest, EditMessage, EditRole, PermissionOverride,
     Permissions,
 };
 
@@ -69,6 +70,23 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
         "edit_message" => {
             let body: EditMessage = serde_json::from_value(args["body"].clone())?;
             body.validate()?;
+            args["body"] = serde_json::to_value(body)?;
+        }
+        "create_channel" => {
+            let body: CreateChannelRequest = serde_json::from_value(args["body"].clone())?;
+            args["body"] = serde_json::to_value(body)?;
+        }
+        "edit_channel" => {
+            let body: EditChannelRequest = serde_json::from_value(args["body"].clone())?;
+            body.validate()?;
+            args["body"] = serde_json::to_value(body)?;
+        }
+        "create_category" => {
+            let body: CreateCategoryRequest = serde_json::from_value(args["body"].clone())?;
+            args["body"] = serde_json::to_value(body)?;
+        }
+        "edit_category" => {
+            let body: EditCategoryRequest = serde_json::from_value(args["body"].clone())?;
             args["body"] = serde_json::to_value(body)?;
         }
         "create_role" => {
