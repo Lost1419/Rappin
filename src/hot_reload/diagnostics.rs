@@ -11,9 +11,11 @@ const MAX_TEXT: usize = 32 * 1024;
 // source excerpts, suggestions, raw stderr, environment or absolute paths.
 struct Sanitizer {
     environment: Vec<String>,
+    credentials: Vec<String>,
 }
 impl Sanitizer {
     fn new() -> Self {
+        let mut credentials = Vec::new();
         let mut environment: Vec<_> = std::env::vars_os()
             .filter_map(|(key, value)| {
                 let key = key.to_string_lossy().to_ascii_uppercase();
@@ -21,12 +23,20 @@ impl Sanitizer {
                 let sensitive = ["TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH", "KEY"]
                     .iter()
                     .any(|part| key.contains(part));
+                if sensitive && !value.is_empty() {
+                    credentials.push(value.clone());
+                }
                 (!value.is_empty() && (value.len() >= 4 || sensitive)).then_some(value)
             })
             .collect();
         environment.sort_by_key(|value| std::cmp::Reverse(value.len()));
         environment.dedup();
-        Self { environment }
+        credentials.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        credentials.dedup();
+        Self {
+            environment,
+            credentials,
+        }
     }
     fn text(&self, input: &str) -> String {
         let mut text = input.to_owned();
@@ -156,7 +166,9 @@ impl<'a> CompilerReport<'a> {
                         return None;
                     }
                     let mut text = relative.to_string_lossy().into_owned();
-                    for value in &self.sanitizer.environment {
+                    // Relative source locations are metadata, not arbitrary text.
+                    // CI often has a non-secret branch variable equal to `main`.
+                    for value in &self.sanitizer.credentials {
                         text = text.replace(value, "[redacted]");
                     }
                     let text = shorten(
@@ -371,6 +383,25 @@ mod tests {
         assert!(report.failure.diagnostics[0].message.len() <= MAX_MESSAGE);
         assert_eq!(report.failure.diagnostics[0].spans.len(), MAX_SPANS);
         assert!(serde_json::to_vec(&report.failure).unwrap().len() < 64 * 1024);
+    }
+
+    #[test]
+    fn ordinary_environment_words_do_not_corrupt_relative_source_locations() {
+        let mut report = CompilerReport::new(Path::new("/project"));
+        report.sanitizer.environment = vec!["main".into(), "private_token".into()];
+        report.sanitizer.credentials = vec!["private_token".into()];
+        report.push(
+            &json!({"message":"private_token in main","level":"error","spans":[
+                {"file_name":"src/main.rs"}, {"file_name":"src/private_token.rs"}
+            ]}),
+        );
+        let diagnostic = &report.failure.diagnostics[0];
+        assert_eq!(diagnostic.spans[0].file.as_deref(), Some("src/main.rs"));
+        assert_eq!(
+            diagnostic.spans[1].file.as_deref(),
+            Some("src/[redacted].rs")
+        );
+        assert!(!diagnostic.message.contains("private_token"));
     }
 
     #[test]
