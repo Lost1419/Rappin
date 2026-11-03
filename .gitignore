@@ -2,8 +2,6 @@
 /state/
 /.rappin-voice/
 /node_modules/
-/docs/advert.md
-SECURITY.md
-/AGENT.md
+/AGENTS.md
 
 .DS_Store
