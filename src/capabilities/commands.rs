@@ -54,12 +54,12 @@ impl OperationCommandBinding {
                 "expected an object",
             ));
         }
-        let input = capability.input_schema();
-        schema::validate_partial(&input, &self.fixed_arguments)?;
+        let input = schema::operation_input_schema(capability);
+        schema::validate_partial(input, &self.fixed_arguments)?;
         let mut arguments = vec![];
         let mut targets: Vec<&str> = vec![];
         for parameter in &self.parameters {
-            let field = at_schema(&input, &parameter.target)?;
+            let field = at_schema(input, &parameter.target)?;
             if self.fixed_arguments.pointer(&parameter.target).is_some()
                 || targets
                     .iter()
@@ -89,7 +89,7 @@ impl OperationCommandBinding {
         }
         // Check unconditional required fields. Cross-field/typed constraints are
         // checked by prepare() once runtime values are known.
-        for path in required_paths(&input, String::new()) {
+        for path in required_paths(input, String::new()) {
             let supplied = self.fixed_arguments.pointer(&path).is_some()
                 || self.parameters.iter().any(|p| {
                     p.required

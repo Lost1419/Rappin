@@ -7,9 +7,9 @@ test servers.** Rappin exposes them without assuming that a bot has access.
 Permission errors from Yapin remain visible to the caller.
 
 The API reference and bundled upstream OpenAPI 1.2 specification now contain
-these endpoints and their response schemas. `docs/guide-api.json` is retained as
-an empty compatibility record; schema discovery uses the authoritative upstream
-specification directly. Availability restrictions still apply.
+these endpoints and their response schemas. Schema discovery uses this upstream
+specification directly; the old guide-only supplement is no longer needed.
+Availability restrictions still apply.
 
 ## Rust client
 

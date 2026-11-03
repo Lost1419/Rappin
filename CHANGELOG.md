@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.19 — 2026-11-03
+
+- Reuse canonical operation schemas during validation and permanent-command binding. Schemas initialize per operation on demand; exported schema values remain independent and editable.
+- Deserialize built-in collectors and DM events directly from borrowed JSON, avoiding intermediate payload-tree copies while preserving DM normalization and scope rejection.
+- Remove temporary vectors and template strings from rate-limit key/send classification. Route redaction, bucket scope and retry behavior remain unchanged.
+- Remove the unused guide-only schema supplement. Add an opt-in compact local build profile without debug symbols or incremental caches; existing dev/test and application workspace profiles are unchanged.
+
 ## 0.1.18 — 2026-11-03
 
 - Add an opt-in server-message gate before prefix resolution, group help, cog checks and native/worker commands. Continue, Handled and Stop outcomes distinguish fallthrough, completed rejection and incomplete processing.

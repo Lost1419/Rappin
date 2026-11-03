@@ -61,7 +61,7 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.18"
+rappin-rs = "0.1.19"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -216,6 +216,14 @@ Run the examples from a checkout with `YAPPER_BOT_TOKEN` set:
 Keep bot tokens out of source control and logs. Handlers, custom transports, and
 loaded cogs are trusted application code; see the
 [credential security notes](docs/agents.md#credential-hardening-014).
+
+## Local build storage
+
+Use `cargo build --profile compact` or `cargo test --profile compact --all-features`
+for smaller artifacts without debug symbols or incremental caches. This profile
+is opt-in; normal dev/test builds keep their existing settings. Cargo profiles
+are controlled by the root workspace, so applications depending on Rappin keep
+their own build configuration.
 
 ## License
 

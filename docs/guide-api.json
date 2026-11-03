@@ -1,6 +1,0 @@
-{
-  "source": "https://www.yapin.gg/openapi.json",
-  "checked": "2026-11-02",
-  "description": "Retired: all formerly guide-only operations are included in the upstream 1.2.0 specification.",
-  "paths": {}
-}

@@ -30,7 +30,7 @@ impl Event {
     /// decoding rejects malformed or inconsistent server scope explicitly.
     pub fn parse_data(&self) -> Result<EventData, serde_json::Error> {
         match self.kind.as_str() {
-            "dm_message" => serde_json::from_value(self.data.clone()).map(EventData::DmMessage),
+            "dm_message" => DmMessageEvent::deserialize(&self.data).map(EventData::DmMessage),
             "message" => match serde::Deserialize::deserialize(&self.data) {
                 Ok(msg) => Ok(EventData::Message(msg)),
                 Err(e) => {

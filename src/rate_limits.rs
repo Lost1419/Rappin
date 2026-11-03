@@ -66,14 +66,24 @@ const ROUTES: &[&str] = &[
     "/users/:id",
     "/users/:id/dm",
 ];
-pub(crate) fn route_template(path: &str) -> String {
+fn matching_route(path: &str) -> &'static str {
     let path = path.split('?').next().unwrap_or(path);
-    let parts: Vec<_> = path.trim_matches('/').split('/').collect();
+    // The longest supported route has six segments. Longer unknown paths need
+    // only the redacted fallback, not a heap allocation proportional to input.
+    let mut parts = [""; 6];
+    let mut count = 0;
+    for (index, part) in path.trim_matches('/').split('/').enumerate() {
+        let Some(slot) = parts.get_mut(index) else {
+            return "/:unknown";
+        };
+        *slot = part;
+        count = index + 1;
+    }
     ROUTES
         .iter()
         .find(|template| {
             let mut shape = template.trim_matches('/').split('/');
-            for part in &parts {
+            for part in &parts[..count] {
                 match shape.next() {
                     Some(":id") => (),
                     Some(literal) if literal == *part => (),
@@ -83,33 +93,41 @@ pub(crate) fn route_template(path: &str) -> String {
             shape.next().is_none()
         })
         .unwrap_or(&"/:unknown")
-        .to_string()
+}
+pub(crate) fn route_template(path: &str) -> String {
+    matching_route(path).to_owned()
 }
 pub(crate) fn key(method: &Method, path: &str) -> [u8; 32] {
     let clean = path.split('?').next().unwrap_or(path);
-    let parts: Vec<_> = clean.trim_matches('/').split('/').collect();
+    let mut parts = clean.trim_matches('/').split('/');
+    let resource = parts.next();
+    let major = parts.next();
     let mut hash = Sha256::new();
     hash.update(method.as_str().as_bytes());
-    hash.update(route_template(clean).as_bytes());
+    hash.update(matching_route(clean).as_bytes());
     // Major server/channel scope. Interaction paths are hashed in full, never retained in diagnostics.
-    if parts.first() == Some(&"interactions") {
+    if resource == Some("interactions") {
         hash.update(clean.as_bytes());
-    } else if let Some(major) = parts.get(1) {
+    } else if let Some(major) = major {
         hash.update(major.as_bytes());
     }
     hash.finalize().into()
 }
 pub(crate) fn message_send(method: &Method, path: &str) -> bool {
-    let parts: Vec<_> = path
+    if method != Method::POST {
+        return false;
+    }
+    let mut parts = path
         .split('?')
         .next()
         .unwrap_or(path)
         .trim_matches('/')
-        .split('/')
-        .collect();
-    method == Method::POST
-        && ((parts.len() == 3 && parts[0] == "channels" && parts[2] == "messages")
-            || (parts.len() == 2 && parts[0] == "webhooks"))
+        .split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some("channels"), Some(_), Some("messages"), None)
+            | (Some("webhooks"), Some(_), None, None)
+    )
 }
 pub(crate) fn retry_after(value: &str) -> Option<Duration> {
     if let Ok(seconds) = value.parse::<f64>() {
@@ -177,6 +195,44 @@ impl RateLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn route_classification_preserves_bucket_scope_and_redaction() {
+        for template in ROUTES {
+            assert_eq!(route_template(template), *template);
+        }
+        assert_eq!(
+            route_template("/servers/one/roles/everyone"),
+            "/servers/:id/roles/everyone"
+        );
+        assert_eq!(route_template("/a/b/c/d/e/f/g/h?secret=value"), "/:unknown");
+        assert_eq!(
+            key(&Method::GET, "/channels/one/messages/a"),
+            key(&Method::GET, "/channels/one/messages/b?limit=5")
+        );
+        assert_ne!(
+            key(&Method::GET, "/channels/one/messages/a"),
+            key(&Method::GET, "/channels/two/messages/a")
+        );
+        assert_ne!(
+            key(&Method::GET, "/channels/one/messages/a"),
+            key(&Method::POST, "/channels/one/messages/a")
+        );
+        assert_ne!(
+            key(&Method::POST, "/interactions/one/secret-a/callback"),
+            key(&Method::POST, "/interactions/one/secret-b/callback")
+        );
+        for path in ["/channels/one/messages?limit=1", "/webhooks/one"] {
+            assert!(message_send(&Method::POST, path));
+            assert!(!message_send(&Method::GET, path));
+        }
+        for path in [
+            "/webhooks",
+            "/channels/one/messages/two",
+            "/channels/one/webhooks",
+        ] {
+            assert!(!message_send(&Method::POST, path));
+        }
+    }
     #[tokio::test]
     async fn scoped_waits_and_global_message_waits_do_not_block_callbacks() {
         let limits = RateLimits::default();

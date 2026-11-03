@@ -96,7 +96,7 @@ macro_rules! collectible {
     ($ty:ty, $($kind:literal)|+) => {
         impl Collectible for $ty {
             fn from_event(event:&Event)->Option<Self>{
-                if matches!(event.kind.as_str(),$($kind)|+) { serde_json::from_value(event.data.clone()).ok() } else { None }
+                if matches!(event.kind.as_str(),$($kind)|+) { serde::Deserialize::deserialize(&event.data).ok() } else { None }
             }
         }
     };
@@ -104,8 +104,8 @@ macro_rules! collectible {
 impl Collectible for MessageEvent {
     fn from_event(event: &Event) -> Option<Self> {
         match event.kind.as_str() {
-            "message" => serde_json::from_value(event.data.clone()).ok(),
-            "dm_message" => serde_json::from_value::<crate::DmMessageEvent>(event.data.clone())
+            "message" => serde::Deserialize::deserialize(&event.data).ok(),
+            "dm_message" => crate::DmMessageEvent::deserialize(&event.data)
                 .ok()
                 .map(|dm| dm.0),
             _ => None,

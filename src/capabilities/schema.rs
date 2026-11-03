@@ -6,6 +6,25 @@ pub fn bundled_schema() -> &'static Value {
     &SPEC
 }
 
+/// Immutable schemas belong to the canonical catalogue, not caller-owned copies
+/// returned by Capability::input_schema. Initialize only operations that are used.
+pub(super) fn operation_input_schema(capability: &'static Capability) -> &'static Value {
+    use std::{
+        collections::HashMap,
+        sync::{LazyLock, OnceLock},
+    };
+    static SCHEMAS: LazyLock<HashMap<&'static str, OnceLock<Value>>> = LazyLock::new(|| {
+        catalogue()
+            .iter()
+            .map(|entry| (entry.name, OnceLock::new()))
+            .collect()
+    });
+    SCHEMAS
+        .get(capability.name)
+        .expect("canonical operation schema")
+        .get_or_init(|| capability.input_schema())
+}
+
 pub(super) fn body_schema(name: &str) -> Option<Value> {
     let (method, path) = match name {
         "create_channel" => ("post", "/servers/{id}/channels"),

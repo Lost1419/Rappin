@@ -31,7 +31,7 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
             crate::utils::strip_proxy_metadata(body);
         }
     }
-    validate_schema(&entry.input_schema(), &args).map_err(|error| match error {
+    validate_schema(schema::operation_input_schema(entry), &args).map_err(|error| match error {
         YappinError::Validation { field, message } => {
             YappinError::validation(field.strip_prefix("arguments.").unwrap_or(&field), message)
         }
