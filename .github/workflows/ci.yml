@@ -18,7 +18,7 @@ jobs:
       # Compare with the latest published release, including optional Rust APIs.
       - uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
-          feature-group: all
+          feature-group: all-features
 
   test:
     name: Build & Test
