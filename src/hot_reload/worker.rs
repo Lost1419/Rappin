@@ -15,8 +15,11 @@ use tokio::{
     sync::Mutex,
 };
 
-type Handler =
-    Arc<dyn Fn(WorkerContext) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync>;
+type Handler = Arc<
+    dyn Fn(WorkerContext) -> Pin<Box<dyn Future<Output = Result<crate::MessageDisposition>> + Send>>
+        + Send
+        + Sync,
+>;
 struct Connection {
     input: BufReader<Stdin>,
     output: Stdout,
@@ -419,8 +422,13 @@ impl WorkerCog {
         self.manifest
             .commands
             .push(Command::new(&name, description));
-        self.commands
-            .insert(name, Arc::new(move |ctx| Box::pin(handler(ctx))));
+        self.commands.insert(
+            name,
+            Arc::new(move |ctx| {
+                let future = handler(ctx);
+                Box::pin(async move { future.await.map(|()| crate::MessageDisposition::Continue) })
+            }),
+        );
         self
     }
     pub fn button<F, Fut>(mut self, prefix: impl Into<String>, handler: F) -> Self
@@ -430,8 +438,13 @@ impl WorkerCog {
     {
         let prefix = prefix.into();
         self.manifest.buttons.push(prefix.clone());
-        self.buttons
-            .insert(prefix, Arc::new(move |ctx| Box::pin(handler(ctx))));
+        self.buttons.insert(
+            prefix,
+            Arc::new(move |ctx| {
+                let future = handler(ctx);
+                Box::pin(async move { future.await.map(|()| crate::MessageDisposition::Continue) })
+            }),
+        );
         self
     }
     pub fn listen<F, Fut>(mut self, kind: Listener, handler: F) -> Self
@@ -440,8 +453,28 @@ impl WorkerCog {
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         self.manifest.listeners.push(kind);
-        self.listeners
-            .insert(kind, Arc::new(move |ctx| Box::pin(handler(ctx))));
+        self.listeners.insert(
+            kind,
+            Arc::new(move |ctx| {
+                let future = handler(ctx);
+                Box::pin(async move { future.await.map(|()| crate::MessageDisposition::Continue) })
+            }),
+        );
+        self
+    }
+    /// Opt-in fallible server-message listener, after command dispatch. Required
+    /// I/O must finish before returning. Errors use the parent's message policy.
+    /// Do not also register Listener::Message for the same worker.
+    pub fn on_message<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(WorkerContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<crate::MessageDisposition>> + Send + 'static,
+    {
+        self.manifest.listeners.push(Listener::ServerMessage);
+        self.listeners.insert(
+            Listener::ServerMessage,
+            Arc::new(move |ctx| Box::pin(handler(ctx))),
+        );
         self
     }
     pub async fn run(self) -> Result<()> {
@@ -454,7 +487,13 @@ impl WorkerCog {
         protocol::write(
             &mut connection.lock().await.output,
             &Wire::Ready {
-                protocol: protocol::VERSION,
+                // Existing handlers retain protocol v4 compatibility. Opting into
+                // message outcomes requires a parent that understands protocol v5.
+                protocol: if self.manifest.listeners.contains(&Listener::ServerMessage) {
+                    protocol::VERSION
+                } else {
+                    4
+                },
                 manifest: self.manifest,
             },
         )
@@ -468,7 +507,10 @@ impl WorkerCog {
             let handler = match &event {
                 CogEvent::Command { command, .. } => self.commands.get(command),
                 CogEvent::Button { prefix, .. } => self.buttons.get(prefix),
-                CogEvent::Message { .. } => self.listeners.get(&Listener::Message),
+                CogEvent::Message { .. } => self
+                    .listeners
+                    .get(&Listener::ServerMessage)
+                    .or_else(|| self.listeners.get(&Listener::Message)),
                 CogEvent::DmMessage { .. } => self.listeners.get(&Listener::DmMessage),
                 CogEvent::ReactionAdd { .. } => self.listeners.get(&Listener::ReactionAdd),
                 CogEvent::ReactionRemove { .. } => self.listeners.get(&Listener::ReactionRemove),
@@ -500,6 +542,7 @@ impl WorkerCog {
             protocol::write(
                 &mut connection.output,
                 &Wire::Done {
+                    disposition: result.as_ref().ok().copied(),
                     structured_error: result.as_ref().err().map(|e| e.to_remote()),
                     error: result.err().map(|e| e.to_string()),
                 },

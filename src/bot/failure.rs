@@ -100,6 +100,41 @@ impl super::Bot {
             error,
         }
     }
+    pub(super) async fn reply_rejection(
+        &self,
+        ctx: &super::MessageContext,
+        error: &RemoteError,
+        usage: Option<&str>,
+    ) -> Result<()> {
+        let text = format!(
+            "{}{}",
+            error,
+            usage.map(|u| format!("\nUsage: {u}")).unwrap_or_default()
+        );
+        catch(async {
+            let parts = crate::split_message(&text);
+            let split = parts.len() > 1;
+            let mut completed = vec![];
+            for (index, part) in parts.into_iter().enumerate() {
+                match ctx.reply(part).await {
+                    Ok(message) => completed.push(
+                        self.client()
+                            .redact_credentials(serde_json::json!({"message":message})),
+                    ),
+                    Err(error) if split => {
+                        return Err(YappinError::PartialWrite {
+                            completed,
+                            failed_step: index + 1,
+                            source: Box::new(error),
+                        })
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(())
+        })
+        .await
+    }
     pub(super) async fn command_failed(
         &self,
         ctx: super::MessageContext,
@@ -123,34 +158,9 @@ impl super::Bot {
             }
         }
         if info.class == FailureClass::Rejected {
-            let text = format!(
-                "{}{}",
-                info.error,
-                usage.map(|u| format!("\nUsage: {u}")).unwrap_or_default()
-            );
-            let result = catch(async {
-                let parts = crate::split_message(&text);
-                let split = parts.len() > 1;
-                let mut completed = vec![];
-                for (index, part) in parts.into_iter().enumerate() {
-                    match ctx.reply(part).await {
-                        Ok(message) => completed.push(
-                            self.client()
-                                .redact_credentials(serde_json::json!({"message":message})),
-                        ),
-                        Err(error) if split => {
-                            return Err(YappinError::PartialWrite {
-                                completed,
-                                failed_step: index + 1,
-                                source: Box::new(error),
-                            })
-                        }
-                        Err(error) => return Err(error),
-                    }
-                }
-                Ok(())
-            })
-            .await;
+            let result = self
+                .reply_rejection(&ctx, &info.error, usage.as_deref())
+                .await;
             return result.map_err(|handling_error| YappinError::FailureHandling {
                 source: Box::new(error),
                 handling_error: Box::new(handling_error),

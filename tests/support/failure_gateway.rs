@@ -9,6 +9,73 @@ use tokio_tungstenite::{
     },
 };
 
+#[tokio::test]
+async fn server_message_gate_completes_rejections_and_retains_uncertain_gateway_barriers() {
+    for fail in [false, true] {
+        let cursor = Cursor::new().await;
+        let final_event = event(3, if fail { "bad" } else { "next" });
+        let mut events = vec![event(2, "reject"), event(2, "reject"), final_event];
+        if fail {
+            events.push(event(4, "next"));
+        }
+        let (url, ws) = gateway(events, false).await;
+        let (base, _requests, http) = routed_mock(vec![
+            ("GET /me".into(), vec![response(200, profile())]),
+            (
+                format!("POST /channels/{}/messages", uuid::Uuid::nil()),
+                vec![response(201, message())],
+            ),
+        ])
+        .await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let bot = Bot::builder("fixture")
+            .base_url(base)
+            .sync_commands(false)
+            .log(false)
+            .cursor_file(&cursor.0)
+            .handler_concurrency(1)
+            .gateway_only(url)
+            .message_gate(|ctx| async move {
+                match ctx.event.command.as_deref() {
+                    Some("reject") => Err(rejected()),
+                    Some("bad") => Err(uncertain()),
+                    _ => Ok(MessageDisposition::Continue),
+                }
+            })
+            .command("reject", "must not execute", |_| async {
+                panic!("denied command executed")
+            })
+            .command("next", "continue", move |ctx| {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    ctx.bot().unwrap().stop();
+                    Ok(())
+                }
+            })
+            .build();
+        let result = run(bot).await;
+        assert_eq!(cursor.last().await, if fail { 2 } else { 3 });
+        assert_eq!(calls.load(Ordering::SeqCst), usize::from(!fail));
+        if fail {
+            let report = report(result.unwrap_err());
+            assert_eq!(report.failed_events[0].event_id, 3);
+            assert_eq!(
+                report.failed_events[0].error.to_json(),
+                uncertain().to_json()
+            );
+        } else {
+            result.unwrap();
+        }
+        http.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), ws)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
 async fn gateway(events: Vec<Value>, deny: bool) -> (String, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

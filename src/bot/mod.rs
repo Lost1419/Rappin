@@ -2,11 +2,13 @@ pub mod cog;
 pub mod context;
 mod failure;
 pub mod handler;
+mod message;
 mod pipeline;
 pub use failure::{
     EventFailure, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,
     HandlerKind,
 };
+pub use message::{MessageDisposition, MessageFailure, MessageStage};
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -194,6 +196,22 @@ pub type ButtonFailureHandlerFn = Arc<
         + Sync,
 >;
 
+pub type MessageGateFn = Arc<
+    dyn Fn(
+            MessageContext,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<MessageDisposition>> + Send>>
+        + Send
+        + Sync,
+>;
+pub type MessageFailureHandlerFn = Arc<
+    dyn Fn(
+            MessageContext,
+            MessageFailure,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<FailureDisposition>> + Send>>
+        + Send
+        + Sync,
+>;
+
 struct BotState {
     client: Arc<Client>,
     prefixes: Vec<String>,
@@ -209,6 +227,8 @@ struct BotState {
     button_error_handler: Option<ButtonErrorHandlerFn>,
     command_failure_handler: Option<CommandFailureHandlerFn>,
     button_failure_handler: Option<ButtonFailureHandlerFn>,
+    message_gate: Option<MessageGateFn>,
+    message_failure_handler: Option<MessageFailureHandlerFn>,
     ignore_bots: bool,
     sync_commands: bool,
     log: bool,
@@ -619,6 +639,8 @@ pub struct BotBuilder {
     button_error_handler: Option<ButtonErrorHandlerFn>,
     command_failure_handler: Option<CommandFailureHandlerFn>,
     button_failure_handler: Option<ButtonFailureHandlerFn>,
+    message_gate: Option<MessageGateFn>,
+    message_failure_handler: Option<MessageFailureHandlerFn>,
     ignore_bots: bool,
     sync_commands: bool,
     log: bool,
@@ -653,6 +675,8 @@ impl BotBuilder {
             button_error_handler: None,
             command_failure_handler: None,
             button_failure_handler: None,
+            message_gate: None,
+            message_failure_handler: None,
             ignore_bots: true,
             sync_commands: true,
             log: true,
@@ -941,6 +965,33 @@ impl BotBuilder {
         self
     }
 
+    /// Opt-in gate for server-message events, after bot/target filters and before
+    /// prefix resolution, help replies, cog checks, commands and message listeners.
+    /// The context has no resolved command/args yet. This does not filter EventHub.
+    pub fn message_gate<F, Fut>(mut self, gate: F) -> Self
+    where
+        F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<MessageDisposition>> + Send + 'static,
+    {
+        self.message_gate = Some(Arc::new(move |ctx| Box::pin(gate(ctx))));
+        self
+    }
+
+    /// Complete/reconcile a gate or fallible message-listener failure explicitly.
+    /// Default replies to typed rejections; unexpected errors remain incomplete.
+    /// Handled completes a gate rejection without dispatch, or a listener invocation
+    /// before remaining listeners. Callback errors preserve both structured causes.
+    pub fn on_message_failure<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(MessageContext, MessageFailure) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<FailureDisposition>> + Send + 'static,
+    {
+        self.message_failure_handler = Some(Arc::new(move |ctx, failure| {
+            Box::pin(handler(ctx, failure))
+        }));
+        self
+    }
+
     /// Resume after the ordered completed event prefix. A cursor file has one owner.
     pub fn cursor_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.cursor = Some(EventCursor::new(path));
@@ -1031,6 +1082,8 @@ impl BotBuilder {
             button_error_handler: self.button_error_handler,
             command_failure_handler: self.command_failure_handler,
             button_failure_handler: self.button_failure_handler,
+            message_gate: self.message_gate,
+            message_failure_handler: self.message_failure_handler,
             ignore_bots: self.ignore_bots,
             sync_commands: self.sync_commands,
             log: self.log,
@@ -1413,6 +1466,23 @@ impl Bot {
             }
         }
 
+        if let Some(gate) = &self.handle.inner.message_gate {
+            let ctx = MessageContext::new(
+                self.handle.inner.client.clone(),
+                msg.clone(),
+                None,
+                String::new(),
+                Some(self.handle.clone()),
+            );
+            let result = failure::catch(async { gate(ctx.clone()).await }).await;
+            if self
+                .message_result(&ctx, event_id, MessageStage::Gate, "gate", result)
+                .await?
+            {
+                return Ok(());
+            }
+        }
+
         let mut matched_command: Option<String> = None;
         let mut matched_args = String::new();
 
@@ -1513,7 +1583,19 @@ impl Bot {
             }
         }
         if let Some(h) = &self.handle.inner.event_handler {
-            h.on_message(&ctx).await;
+            let result = failure::catch(h.on_message_result(&ctx)).await;
+            if self
+                .message_result(
+                    &ctx,
+                    event_id,
+                    MessageStage::Listener,
+                    "event_handler",
+                    result,
+                )
+                .await?
+            {
+                return Ok(());
+            }
         }
         let cogs: Vec<_> = self
             .handle
@@ -1525,7 +1607,14 @@ impl Bot {
             .cloned()
             .collect();
         for cog in cogs {
-            cog.on_message(&ctx).await;
+            let name = cog.name();
+            let result = failure::catch(cog.on_message_result(&ctx)).await;
+            if self
+                .message_result(&ctx, event_id, MessageStage::Listener, name, result)
+                .await?
+            {
+                return Ok(());
+            }
         }
         Ok(())
     }

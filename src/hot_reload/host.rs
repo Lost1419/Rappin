@@ -433,7 +433,8 @@ impl Generation {
                 Wire::Ready {
                     protocol: version,
                     manifest,
-                } if (1..=protocol::VERSION).contains(&version) => manifest,
+                } if (1..=protocol::VERSION).contains(&version)
+                    && (version >= 5 || !manifest.listeners.contains(&Listener::ServerMessage)) => manifest,
                 _ => return Err(error(Protocol, "candidate ready frame has an unsupported protocol", None, true, false, None)),
             };
             manifest.validate().map_err(|cause| error(Registration, "candidate manifest is invalid", Some(&cause), true, false, None))?;
@@ -457,6 +458,15 @@ impl Generation {
         setup
     }
     async fn invoke(&self, event: CogEvent, client: &Client) -> Result<()> {
+        self.invoke_message(event, client).await.map(|_| ())
+    }
+    async fn invoke_message(
+        &self,
+        event: CogEvent,
+        client: &Client,
+    ) -> Result<crate::MessageDisposition> {
+        let expects_disposition = matches!(&event, CogEvent::Message { .. })
+            && self.manifest.listeners.contains(&Listener::ServerMessage);
         let completed = std::sync::atomic::AtomicBool::new(false);
         let call = async {
             let mut io = self.io.lock().await;
@@ -541,9 +551,17 @@ impl Generation {
                         .await?;
                     }
                     Wire::Done {
+                        disposition,
                         error,
                         structured_error,
                     } => {
+                        if expects_disposition
+                            && error.is_none()
+                            && structured_error.is_none()
+                            && disposition.is_none()
+                        {
+                            return Err(protocol::protocol_error());
+                        }
                         io.poisoned = false;
                         completed.store(true, Ordering::SeqCst);
                         if let Some(error) = structured_error {
@@ -560,7 +578,7 @@ impl Generation {
                                     .unwrap_or("worker failed")
                                     .into(),
                             )),
-                            None => Ok(()),
+                            None => Ok(disposition.unwrap_or(crate::MessageDisposition::Continue)),
                         };
                     }
                     request @ (Wire::Api { .. } | Wire::Public { .. } | Wire::Upload { .. }) => {
@@ -817,6 +835,26 @@ impl Cog for ProcessCog {
             &ctx.client,
         )
         .await
+    }
+    async fn on_message_result(&self, ctx: &MessageContext) -> Result<crate::MessageDisposition> {
+        if self
+            .generation
+            .manifest
+            .listeners
+            .contains(&Listener::ServerMessage)
+        {
+            self.generation
+                .invoke_message(
+                    CogEvent::Message {
+                        message: ctx.event.clone(),
+                    },
+                    &ctx.client,
+                )
+                .await
+        } else {
+            self.on_message(ctx).await;
+            Ok(crate::MessageDisposition::Continue)
+        }
     }
     async fn on_message(&self, ctx: &MessageContext) {
         self.listen(

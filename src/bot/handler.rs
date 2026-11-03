@@ -18,6 +18,16 @@ pub trait EventHandler: Send + Sync + 'static {
 
     /// Fired on any incoming message that wasn't skipped (e.g. by bot filters).
     async fn on_message(&self, _ctx: &MessageContext) {}
+    /// Fallible server-message listener, after command dispatch. The default calls
+    /// the legacy on_message observer once. Handled skips remaining listeners;
+    /// errors use BotBuilder::on_message_failure and retain checkpoint barriers.
+    async fn on_message_result(
+        &self,
+        ctx: &MessageContext,
+    ) -> crate::Result<super::MessageDisposition> {
+        self.on_message(ctx).await;
+        Ok(super::MessageDisposition::Continue)
+    }
     /// Incoming DM; separate from server message/command dispatch.
     async fn on_dm(&self, _ctx: &MessageContext) -> crate::Result<()> {
         Ok(())

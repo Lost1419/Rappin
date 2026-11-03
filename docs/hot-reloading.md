@@ -38,7 +38,7 @@ edition = "2021"
 default-run = "my-bot"
 
 [dependencies]
-rappin = { package = "rappin-rs", version = "0.1.17", features = ["hot-reload"] }
+rappin = { package = "rappin-rs", version = "0.1.18", features = ["hot-reload"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -265,3 +265,7 @@ and reaction listeners. Total upload data stays bounded to 12 MiB; ordinary fram
 remain 1 MiB. New parents accept v1–v3 workers; rebuild both binaries when upgrading
 workers. DM and native cog reaction hooks return Result and leave failed processing
 uncommitted. See [API 1.2 workflows](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.2.md).
+
+For fallible natural-language handlers, use `WorkerCog::on_message` and the parent
+[message-failure policy](message-policy.md). This opt-in uses protocol v5; existing
+handlers retain protocol v4, and new parents continue accepting older workers.

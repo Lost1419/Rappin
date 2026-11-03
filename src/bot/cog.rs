@@ -131,6 +131,12 @@ pub trait Cog: Send + Sync + 'static {
 
     /// Optional message listener hook.
     async fn on_message(&self, _ctx: &MessageContext) {}
+    /// Fallible server-message listener. The default calls the legacy observer.
+    /// Override this for required I/O; errors enter the bot's message failure policy.
+    async fn on_message_result(&self, ctx: &MessageContext) -> Result<super::MessageDisposition> {
+        self.on_message(ctx).await;
+        Ok(super::MessageDisposition::Continue)
+    }
     async fn on_reaction_add(
         &self,
         _client: &Client,

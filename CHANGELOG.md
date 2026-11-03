@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.18 — 2026-11-03
+
+- Add an opt-in server-message gate before prefix resolution, group help, cog checks and native/worker commands. Continue, Handled and Stop outcomes distinguish fallthrough, completed rejection and incomplete processing.
+- Add fallible EventHandler/Cog message listeners and a separate message-failure callback. Preserve typed rejection replies, original causes, partial receipts and retry hints; failed replies retain both errors. Legacy message hooks and command/button failure APIs remain supported.
+- Add WorkerCog::on_message with explicit protocol v5 outcomes. Existing worker handlers retain protocol v4. Missing completion outcomes leave an uncertain cursor barrier instead of becoming implicit success.
+- Check public Rust API compatibility against the latest published crate in CI, including optional features.
+
 ## 0.1.17 — 2026-11-02
 
 - Add multipart message uploads over Client/ApiExt, native contexts and worker proxies. Validate four-file/10 MiB-per-file/12 MiB-total limits; retain every confirmed message and turn partial 201 responses or missing per-file confirmations into PartialWrite receipts. Files cross workers in bounded 64 KiB chunks.

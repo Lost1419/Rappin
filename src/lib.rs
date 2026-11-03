@@ -117,7 +117,7 @@ pub mod permissions;
 pub use api::{Api, ApiExt};
 pub use bot::{
     EventFailure, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,
-    HandlerKind,
+    HandlerKind, MessageDisposition, MessageFailure, MessageStage,
 };
 pub use permissions::{PermissionEvaluation, PermissionSnapshot};
 
@@ -154,7 +154,8 @@ pub mod prelude {
     pub use crate::bot::{
         Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventFailure,
         EventHandler, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,
-        HandlerKind, InteractionContext, MessageContext, RegistrationPlan,
+        HandlerKind, InteractionContext, MessageContext, MessageDisposition, MessageFailure,
+        MessageStage, RegistrationPlan,
     };
     pub use crate::client::{Client, ClientBuilder};
     pub use crate::cooldown::{Cooldown, CooldownType};
@@ -208,3 +209,7 @@ pub mod handler_failures_guide {}
 
 #[doc = include_str!("../docs/api-1.2.md")]
 pub mod api_1_2_guide {}
+
+/// Shared server-message gates, fallible listeners and explicit completion.
+#[doc = include_str!("../docs/message-policy.md")]
+pub mod message_policy_guide {}

@@ -32,6 +32,8 @@ When upgrading from 0.1.16 or earlier:
   `max_retry_wait` explicitly if your application needs a different limit.
 
 Application-owned storage, cache backends and custom prefixes remain supported.
+Use [message gates and fallible listeners](docs/message-policy.md) for shared access
+policy and natural-language handlers that perform required I/O.
 See [API 1.2 workflows](docs/api-1.2.md) for the new interfaces and limits.
 
 ## What you can build
@@ -59,7 +61,7 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.17"
+rappin-rs = "0.1.18"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

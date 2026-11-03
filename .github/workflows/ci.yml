@@ -10,6 +10,16 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  compatibility:
+    name: Public API compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Compare with the latest published release, including optional Rust APIs.
+      - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          feature-group: all
+
   test:
     name: Build & Test
     runs-on: ubuntu-latest

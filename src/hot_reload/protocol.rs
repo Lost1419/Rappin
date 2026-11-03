@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub(super) const VERSION: u32 = 4;
+pub(super) const VERSION: u32 = 5;
 const MAX_FRAME: u64 = 1024 * 1024;
 
 /// Optional listeners implemented by a worker in addition to commands and buttons.
@@ -14,6 +14,8 @@ const MAX_FRAME: u64 = 1024 * 1024;
 #[non_exhaustive]
 pub enum Listener {
     Message,
+    /// Opt-in fallible server-message listener with explicit completion.
+    ServerMessage,
     DmMessage,
     ReactionAdd,
     ReactionRemove,
@@ -167,6 +169,14 @@ impl Manifest {
                 "requires unique nonempty prefixes, up to 100",
             ));
         }
+        if self.listeners.contains(&Listener::Message)
+            && self.listeners.contains(&Listener::ServerMessage)
+        {
+            return Err(YappinError::validation(
+                "cog.listeners",
+                "choose legacy Message or fallible ServerMessage, not both",
+            ));
+        }
         let mut seen = std::collections::HashSet::new();
         if self.listeners.iter().any(|kind| !seen.insert(kind)) {
             return Err(YappinError::validation(
@@ -235,6 +245,8 @@ pub(super) enum Wire {
         structured_error: Option<crate::RemoteError>,
     },
     Done {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        disposition: Option<crate::MessageDisposition>,
         error: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         structured_error: Option<crate::RemoteError>,
