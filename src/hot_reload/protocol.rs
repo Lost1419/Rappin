@@ -14,8 +14,6 @@ const MAX_FRAME: u64 = 1024 * 1024;
 #[non_exhaustive]
 pub enum Listener {
     Message,
-    /// Opt-in fallible server-message listener with explicit completion.
-    ServerMessage,
     DmMessage,
     ReactionAdd,
     ReactionRemove,
@@ -24,6 +22,9 @@ pub enum Listener {
     MemberLeave,
     InviteCreate,
     InviteDelete,
+    /// Opt-in fallible server-message listener with explicit completion.
+    /// Appended to preserve the discriminants of existing public variants.
+    ServerMessage,
 }
 
 /// Serializable handler input. The bot credential is never part of this message.
