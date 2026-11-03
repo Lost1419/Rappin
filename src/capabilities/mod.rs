@@ -7,6 +7,8 @@ mod authorization;
 mod catalog;
 mod commands;
 mod execution;
+mod platform;
+pub use platform::OperationRequest;
 pub mod output;
 mod schema;
 mod validation;
@@ -18,6 +20,7 @@ pub use schema::{bundled_schema, endpoint_schema, validate_schema};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum CapabilityDomain {
     Servers,
     Channels,
@@ -27,17 +30,21 @@ pub enum CapabilityDomain {
     Permissions,
     Events,
     Diagnostics,
+    Emojis,
+    Webhooks,
     Schema,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "argument", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum OperationScope {
     Server(&'static str),
     Channel(&'static str),
     OptionalServer(&'static str),
     ServerList,
     Offline,
+    Public,
     CliRuntime,
     GlobalEvents,
 }
@@ -220,6 +227,16 @@ fn metadata(
         | "add_reaction" | "remove_reaction" | "pin_message" | "unpin_message" => {
             (S::Channel("channel"), D::Messages)
         }
+        "list_emojis" | "create_emoji" | "edit_emoji" | "delete_emoji" => {
+            (S::Server("id"), D::Emojis)
+        }
+        "list_bot_webhooks" => (S::ServerList, D::Webhooks),
+        "list_channel_webhooks"
+        | "create_bot_webhook"
+        | "delete_bot_webhook"
+        | "post_bot_webhook" => (S::Channel("channel"), D::Webhooks),
+        "send_files" => (S::Channel("channel"), D::Messages),
+        "get_api_version" | "get_api_changelog" => (S::Public, D::Diagnostics),
         "poll_events" => (S::GlobalEvents, D::Events),
         "ack_events" => (S::CliRuntime, D::Events),
         "doctor" => (S::CliRuntime, D::Diagnostics),
@@ -253,6 +270,43 @@ fn metadata(
                     .additional_checks
                     .push(ExternalCheck::OverrideAuthority);
             }
+        }
+        "create_emoji" | "edit_emoji" | "delete_emoji" => {
+            permissions.requester = P::All(vec!["manage_emojis"]);
+            permissions.bot = permissions.requester.clone();
+        }
+        "list_channel_webhooks"
+        | "list_bot_webhooks"
+        | "create_bot_webhook"
+        | "delete_bot_webhook"
+        | "post_bot_webhook" => {
+            permissions.requester = P::All(vec!["manage_webhooks"]);
+            permissions.bot = permissions.requester.clone();
+            if matches!(scope, S::Channel(_)) {
+                permissions.requester_channel.push("manage_webhooks");
+                permissions.bot_channel.push("manage_webhooks");
+            }
+            if name == "list_bot_webhooks" {
+                permissions
+                    .additional_checks
+                    .push(ExternalCheck::ChannelPermissions);
+            }
+            if name == "post_bot_webhook" {
+                permissions
+                    .additional_checks
+                    .push(ExternalCheck::MessageContentRules);
+            }
+        }
+        "send_files" => {
+            permissions
+                .requester_channel
+                .extend(["send_messages", "attach_files"]);
+            permissions
+                .bot_channel
+                .extend(["send_messages", "attach_files"]);
+            permissions
+                .additional_checks
+                .push(ExternalCheck::MessageContentRules);
         }
         "send_message" => {
             permissions.requester_channel.push("send_messages");
@@ -325,7 +379,17 @@ fn metadata(
     }
     let test_servers_only = matches!(
         name,
-        "get_member_counts"
+        "send_files"
+            | "list_emojis"
+            | "create_emoji"
+            | "edit_emoji"
+            | "delete_emoji"
+            | "list_bot_webhooks"
+            | "list_channel_webhooks"
+            | "create_bot_webhook"
+            | "delete_bot_webhook"
+            | "post_bot_webhook"
+            | "get_member_counts"
             | "list_invites"
             | "create_role"
             | "edit_role"
@@ -345,7 +409,7 @@ fn metadata(
         S::GlobalEvents => LibrarySupport::GlobalEventConsumer,
         _ => LibrarySupport::ScopedApi,
     };
-    if matches!(scope, S::Offline) {
+    if matches!(scope, S::Offline | S::Public) {
         permissions.requester = P::NotRequired;
         permissions.bot = P::NotRequired;
     }

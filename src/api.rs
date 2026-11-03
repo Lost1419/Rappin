@@ -16,6 +16,23 @@ pub trait Api: Send + Sync {
     }
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value>;
 
+    /// Public metadata reads. Client omits Authorization; adapters can override.
+    async fn public_request(&self, path: &str) -> Result<Value> {
+        self.request(Method::GET, path, None).await
+    }
+    /// Bounded multipart transfer. Unsupported custom adapters fail explicitly.
+    async fn upload(
+        &self,
+        _path: &str,
+        _body: Value,
+        _files: &[crate::UploadFile],
+    ) -> Result<Value> {
+        Err(crate::YappinError::validation(
+            "upload",
+            "transport does not support multipart uploads",
+        ))
+    }
+
     /// Server-level permission snapshot for any actor. The default fetches fresh
     /// data; Client overrides this to honor its application-owned lookup cache.
     async fn permission_snapshot(
@@ -65,6 +82,154 @@ pub trait Api: Send + Sync {
 /// Generic decoding and permission evaluation on every Api implementation.
 #[async_trait]
 pub trait ApiExt: Api {
+    async fn get_api_version(&self) -> Result<crate::VersionInfo> {
+        Ok(serde_json::from_value(
+            self.public_request("/version").await?,
+        )?)
+    }
+    async fn get_api_changelog(&self, limit: u32) -> Result<crate::ApiChangelog> {
+        if !(1..=50).contains(&limit) {
+            return Err(crate::YappinError::validation(
+                "limit",
+                "requires 1 through 50 entries",
+            ));
+        }
+        Ok(serde_json::from_value(
+            self.public_request(&format!("/changelog?limit={limit}"))
+                .await?,
+        )?)
+    }
+    async fn get_emojis(&self, server: Uuid) -> Result<crate::EmojisResponse> {
+        self.api_json::<_, ()>(Method::GET, &format!("/servers/{server}/emojis"), None)
+            .await
+    }
+    async fn create_emoji(
+        &self,
+        server: Uuid,
+        body: &crate::CreateEmoji,
+    ) -> Result<crate::EmojiCreateResult> {
+        body.validate()?;
+        self.api_json(
+            Method::POST,
+            &format!("/servers/{server}/emojis"),
+            Some(body),
+        )
+        .await
+    }
+    async fn upload_emoji(
+        &self,
+        server: Uuid,
+        name: &str,
+        file: &crate::UploadFile,
+    ) -> Result<crate::EmojiCreateResult> {
+        crate::validate_emoji_name(name)?;
+        file.validate()?;
+        if file.data.len() > 1_048_576
+            || !matches!(file.mime()?, "image/png" | "image/gif" | "image/webp")
+        {
+            return Err(crate::YappinError::validation(
+                "file",
+                "emoji requires PNG/GIF/WebP up to 1 MiB",
+            ));
+        }
+        Ok(serde_json::from_value(
+            self.upload(
+                &format!("/servers/{server}/emojis"),
+                serde_json::json!({"name":name}),
+                std::slice::from_ref(file),
+            )
+            .await?,
+        )?)
+    }
+    async fn edit_emoji(
+        &self,
+        server: Uuid,
+        emoji: Uuid,
+        name: &str,
+    ) -> Result<crate::EmojiCreateResult> {
+        crate::validate_emoji_name(name)?;
+        self.api_json(
+            Method::PATCH,
+            &format!("/servers/{server}/emojis/{emoji}"),
+            Some(&serde_json::json!({"name":name})),
+        )
+        .await
+    }
+    async fn delete_emoji(&self, server: Uuid, emoji: Uuid) -> Result<()> {
+        self.request(
+            Method::DELETE,
+            &format!("/servers/{server}/emojis/{emoji}"),
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+    async fn get_channel_webhooks(&self, channel: Uuid) -> Result<crate::BotWebhooksResponse> {
+        self.api_json::<_, ()>(Method::GET, &format!("/channels/{channel}/webhooks"), None)
+            .await
+    }
+    async fn get_bot_webhooks(&self) -> Result<crate::BotWebhooksResponse> {
+        self.api_json::<_, ()>(Method::GET, "/webhooks", None).await
+    }
+    async fn create_bot_webhook(
+        &self,
+        channel: Uuid,
+        body: &crate::CreateBotWebhook,
+    ) -> Result<crate::BotWebhook> {
+        body.validate()?;
+        #[derive(serde::Deserialize)]
+        struct Response {
+            webhook: crate::BotWebhook,
+        }
+        let response: Response = self
+            .api_json(
+                Method::POST,
+                &format!("/channels/{channel}/webhooks"),
+                Some(body),
+            )
+            .await?;
+        Ok(response.webhook)
+    }
+    async fn delete_bot_webhook(&self, webhook: Uuid) -> Result<()> {
+        self.request(Method::DELETE, &format!("/webhooks/{webhook}"), None)
+            .await?;
+        Ok(())
+    }
+    async fn post_bot_webhook(
+        &self,
+        webhook: Uuid,
+        body: &crate::webhook::WebhookMessage,
+    ) -> Result<crate::Message> {
+        let mut value = serde_json::to_value(body)?;
+        crate::utils::strip_proxy_metadata(&mut value);
+        crate::validation::validate_webhook(&value)?;
+        #[derive(serde::Deserialize)]
+        struct Response {
+            message: crate::Message,
+        }
+        let response: Response = self
+            .api_json(Method::POST, &format!("/webhooks/{webhook}"), Some(&value))
+            .await?;
+        Ok(response.message)
+    }
+    /// Send files once. A partial HTTP-success response becomes PartialWrite with receipts.
+    async fn send_files(
+        &self,
+        channel: Uuid,
+        body: &crate::CreateMessage,
+        files: &[crate::UploadFile],
+    ) -> Result<Vec<crate::Message>> {
+        crate::validate_uploads(files)?;
+        let clean = body.for_request();
+        let body = clean.as_ref();
+        let body = serde_json::to_value(body)?;
+        crate::validation::validate_message(&body, false)?;
+        let value = self
+            .upload(&format!("/channels/{channel}/messages"), body, files)
+            .await?;
+        serde_json::from_value::<crate::UploadedMessages>(value)?.into_result_for(files.len())
+    }
+
     /// Evaluate the authenticated bot using the same rules as any other member.
     async fn evaluate_bot_permissions(
         &self,
@@ -113,6 +278,13 @@ impl Api for crate::Client {
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
         self.request_json(method, path, body.as_ref()).await
     }
+    async fn public_request(&self, path: &str) -> Result<Value> {
+        self.public_json(path).await
+    }
+    async fn upload(&self, path: &str, body: Value, files: &[crate::UploadFile]) -> Result<Value> {
+        self.request_upload(path, body, files).await
+    }
+
     async fn permission_snapshot(
         &self,
         server: Uuid,
@@ -152,6 +324,12 @@ impl<T: Api + ?Sized> Api for std::sync::Arc<T> {
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
         (**self).request(method, path, body).await
     }
+    async fn public_request(&self, path: &str) -> Result<Value> {
+        (**self).public_request(path).await
+    }
+    async fn upload(&self, path: &str, body: Value, files: &[crate::UploadFile]) -> Result<Value> {
+        (**self).upload(path, body, files).await
+    }
     async fn permission_snapshot(
         &self,
         server: Uuid,
@@ -177,6 +355,17 @@ macro_rules! native_context {
             ) -> Result<Value> {
                 Api::request(self.client.as_ref(), method, path, body).await
             }
+            async fn public_request(&self, path: &str) -> Result<Value> {
+                self.client.public_request(path).await
+            }
+            async fn upload(
+                &self,
+                path: &str,
+                body: Value,
+                files: &[crate::UploadFile],
+            ) -> Result<Value> {
+                self.client.upload(path, body, files).await
+            }
             async fn permission_snapshot(
                 &self,
                 server: Uuid,
@@ -194,6 +383,13 @@ native_context!(crate::InteractionContext);
 #[cfg(feature = "hot-reload")]
 #[async_trait]
 impl Api for crate::WorkerContext {
+    async fn public_request(&self, path: &str) -> Result<Value> {
+        crate::WorkerContext::public_request(self, path).await
+    }
+    async fn upload(&self, path: &str, body: Value, files: &[crate::UploadFile]) -> Result<Value> {
+        crate::WorkerContext::upload(self, path, body, files).await
+    }
+
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
         self.api(method.as_str(), path, body).await
     }

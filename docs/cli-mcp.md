@@ -44,7 +44,8 @@ Inline arguments are limited to 128 KiB.
 | Messages | `read_messages`, `get_message`, `send_message`, `edit_message`, `delete_message` |
 | Message state | `add_reaction`, `remove_reaction`, `pin_message`, `unpin_message` |
 | Event delivery | `poll_events`, `ack_events` |
-| Diagnostics | `doctor`, `get_capabilities`, `get_schema` |
+| Diagnostics | `doctor`, `get_capabilities`, `get_schema`, `get_api_version`, `get_api_changelog` |
+| API 1.2 | File uploads, emoji management and bot-owned webhooks; see [API 1.2 workflows](api-1.2.md) |
 | Server management | Role/permission writes, invites, counts and scheduled events; see [server management](server-management.md) for the full catalog and test-server restrictions |
 
 Writes support `dry_run`. Destructive annotations identify edits, deletion,
@@ -160,3 +161,9 @@ Doctor additionally reports `active_base_url` and its own `last_request` timing,
 retry count and advised waits. It does not inspect the telemetry of another
 running bot, and REST response-header timing is not gateway heartbeat RTT or
 end-to-end UI latency.
+
+The `platform` CLI accepts these API 1.2 catalogue operations directly with JSON
+arguments. Operator-only `upload` and `emoji-upload` accept local paths; these
+commands are never exposed as MCP file-selection tools. The inline-argument limit
+remains 128 KiB. Use CLI `--max-retry-wait SECONDS` or TOML `max_retry_wait` to
+configure the total wait budget (default 30 seconds).

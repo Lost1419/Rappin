@@ -58,7 +58,7 @@ impl EventFilter {
             && self.server_id.is_none_or(|id| is_id("server_id", id))
             && self.author_id.is_none_or(|id| {
                 is_id(
-                    if event.kind == "message" {
+                    if matches!(event.kind.as_str(), "message" | "dm_message") {
                         "author_id"
                     } else {
                         "user_id"
@@ -68,7 +68,7 @@ impl EventFilter {
             })
             && self.message_id.is_none_or(|id| {
                 is_id(
-                    if event.kind == "message" {
+                    if matches!(event.kind.as_str(), "message" | "dm_message") {
                         "id"
                     } else {
                         "message_id"
@@ -101,7 +101,18 @@ macro_rules! collectible {
         }
     };
 }
-collectible!(MessageEvent, "message");
+impl Collectible for MessageEvent {
+    fn from_event(event: &Event) -> Option<Self> {
+        match event.kind.as_str() {
+            "message" => serde_json::from_value(event.data.clone()).ok(),
+            "dm_message" => serde_json::from_value::<crate::DmMessageEvent>(event.data.clone())
+                .ok()
+                .map(|dm| dm.0),
+            _ => None,
+        }
+    }
+}
+collectible!(crate::DmMessageEvent, "dm_message");
 collectible!(InteractionEvent, "interaction");
 collectible!(MemberJoinEvent, "member_join");
 collectible!(MemberLeaveEvent, "member_leave");

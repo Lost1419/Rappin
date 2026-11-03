@@ -88,7 +88,7 @@ impl RequestGuard<'_> {
             totals.retries += 1;
         }
     }
-    pub(crate) fn observe(&self, observation: RequestObservation, attempt_duration: Duration) {
+    pub(crate) fn observe(&self, observation: &RequestObservation, attempt_duration: Duration) {
         let mut totals = self.telemetry.lock();
         totals.observed_attempts += 1;
         totals.last_sequence += 1;
@@ -99,12 +99,14 @@ impl RequestGuard<'_> {
             _ => (),
         }
         // Send under the same lock so sequence order matches delivery order.
-        let _ = self.telemetry.events.send(RequestEvent {
-            sequence: totals.last_sequence,
-            request_id: self.id,
-            attempt_duration,
-            observation,
-        });
+        if self.telemetry.events.receiver_count() > 0 {
+            let _ = self.telemetry.events.send(RequestEvent {
+                sequence: totals.last_sequence,
+                request_id: self.id,
+                attempt_duration,
+                observation: observation.clone(),
+            });
+        }
     }
     pub(crate) fn finish(mut self, success: bool) {
         let mut totals = self.telemetry.lock();
@@ -184,7 +186,8 @@ pub struct TransportStatus {
 }
 
 /// REST execution through response headers, including retries and advised waits; not UI latency.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct RequestObservation {
     pub method: String,
     pub route: String,
@@ -192,6 +195,8 @@ pub struct RequestObservation {
     pub duration: Duration,
     pub rate_limit_wait: Duration,
     pub attempts: u32,
+    pub api_version: Option<String>,
+    pub api_build: Option<String>,
 }
 
 #[derive(Clone)]

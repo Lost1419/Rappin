@@ -258,3 +258,11 @@ logging disabled and do not log serialized OAuth, interaction, or voice tickets.
 The SHA-256/HMAC dependencies have been updated to the maintained RustCrypto chain.
 These protections and regression tests reduce known exposure paths; they do not
 prove absence of every vulnerability or protect against malicious trusted code.
+
+## API 1.2 workflows
+
+Use `rappin platform get_api_version` for public metadata without credentials.
+The shared catalogue includes file uploads, custom emojis and bot-owned webhooks;
+see [API 1.2 workflows](api-1.2.md) for arguments, partial-write receipts, DM routing,
+worker v4, image proxy metadata and the 128 KiB inline-data boundary. Larger files
+use the Rust SDK or explicit operator CLI upload commands, never MCP file paths.

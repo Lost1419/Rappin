@@ -15,6 +15,21 @@ struct State {
 }
 // Only literal API templates enter diagnostics. Even IDs equal to route keywords stay hidden.
 const ROUTES: &[&str] = &[
+    "/version",
+    "/changelog",
+    "/webhooks",
+    "/webhooks/:id",
+    "/channels/:id/webhooks",
+    "/servers/:id/emojis",
+    "/servers/:id/emojis/:id",
+    "/servers/:id/counts",
+    "/servers/:id/invites",
+    "/servers/:id/events",
+    "/servers/:id/roles/everyone",
+    "/servers/:id/roles/:id",
+    "/channels/:id/permissions",
+    "/channels/:id/permissions/:id",
+    "/servers/:id/categories/:id/permissions/:id",
     "/me",
     "/me/avatar",
     "/me/banner",
@@ -57,12 +72,15 @@ pub(crate) fn route_template(path: &str) -> String {
     ROUTES
         .iter()
         .find(|template| {
-            let shape: Vec<_> = template.trim_matches('/').split('/').collect();
-            shape.len() == parts.len()
-                && shape
-                    .iter()
-                    .zip(&parts)
-                    .all(|(shape, part)| *shape == ":id" || shape == part)
+            let mut shape = template.trim_matches('/').split('/');
+            for part in &parts {
+                match shape.next() {
+                    Some(":id") => (),
+                    Some(literal) if literal == *part => (),
+                    _ => return false,
+                }
+            }
+            shape.next().is_none()
         })
         .unwrap_or(&"/:unknown")
         .to_string()
@@ -89,7 +107,9 @@ pub(crate) fn message_send(method: &Method, path: &str) -> bool {
         .trim_matches('/')
         .split('/')
         .collect();
-    method == Method::POST && parts.len() == 3 && parts[0] == "channels" && parts[2] == "messages"
+    method == Method::POST
+        && ((parts.len() == 3 && parts[0] == "channels" && parts[2] == "messages")
+            || (parts.len() == 2 && parts[0] == "webhooks"))
 }
 pub(crate) fn retry_after(value: &str) -> Option<Duration> {
     if let Ok(seconds) = value.parse::<f64>() {
@@ -125,6 +145,19 @@ impl RateLimits {
                 None => return started.elapsed(),
             }
         }
+    }
+    pub(crate) async fn remaining(&self, key: [u8; 32], message: bool) -> Duration {
+        let state = self.state.lock().await;
+        let now = Instant::now();
+        state
+            .routes
+            .get(&key)
+            .copied()
+            .into_iter()
+            .chain(if message { state.global } else { None })
+            .max()
+            .map(|t| t.saturating_duration_since(now))
+            .unwrap_or_default()
     }
     pub(crate) async fn delay(&self, key: [u8; 32], duration: Duration, global: bool) {
         let now = Instant::now();

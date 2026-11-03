@@ -4,7 +4,6 @@ use std::time::Duration;
 use reqwest::{header, Method, Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use tokio::time::sleep;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
@@ -13,6 +12,7 @@ use crate::error::{Result, YappinError};
 use crate::models::*;
 use crate::utils::DEFAULT_API_BASE;
 
+mod platform;
 mod server_features;
 
 /// Builder for constructing a custom [`Client`].
@@ -20,6 +20,7 @@ pub struct ClientBuilder {
     token: String,
     base_url: String,
     max_retries: u32,
+    max_retry_wait: Duration,
     http_client: Option<reqwest::Client>,
     cache: Option<Arc<Cache>>,
     lookup_backend: Option<Arc<dyn crate::cache::LookupCache>>,
@@ -32,6 +33,7 @@ impl ClientBuilder {
             token: token.into(),
             base_url: DEFAULT_API_BASE.to_string(),
             max_retries: 3,
+            max_retry_wait: Duration::from_secs(30),
             http_client: None,
             cache: None,
             lookup_backend: None,
@@ -46,6 +48,13 @@ impl ClientBuilder {
 
     pub fn max_retries(mut self, retries: u32) -> Self {
         self.max_retries = retries;
+        self
+    }
+
+    /// Total server-advised/shared rate-limit waiting per request, default 30 s.
+    /// This is separate from HTTP latency and the retry-attempt limit.
+    pub fn max_retry_wait(mut self, budget: Duration) -> Self {
+        self.max_retry_wait = budget;
         self
     }
 
@@ -98,6 +107,7 @@ impl ClientBuilder {
                 failover: crate::failover::Failover::new(&self.base_url, self.api_fallback),
                 base_url: self.base_url,
                 max_retries: self.max_retries,
+                max_retry_wait: self.max_retry_wait,
                 cache,
                 lookup_backend: self.lookup_backend,
                 events: crate::collectors::EventHub::default(),
@@ -124,6 +134,7 @@ struct ClientInner {
     token: String,
     base_url: String,
     max_retries: u32,
+    max_retry_wait: Duration,
     cache: Arc<Cache>,
     lookup_backend: Option<Arc<dyn crate::cache::LookupCache>>,
     failover: crate::failover::Failover,
@@ -341,13 +352,39 @@ impl Client {
         let route = crate::rate_limits::route_template(path);
         let mut wait = Duration::ZERO;
         let mut attempts = 0;
+        let mut last_advice: Option<YappinError> = None;
         // Pin each call to its initial origin. Only an explicit safe-read
         // failover below may move it; concurrent failures must not move writes.
         let mut base = self.active_base_url();
 
         loop {
             let waiting_metric = telemetry.waiting();
-            let waited = self.inner.rate_limits.wait(key, is_message).await;
+            let remaining = self.inner.max_retry_wait.saturating_sub(wait);
+            let waited =
+                match tokio::time::timeout(remaining, self.inner.rate_limits.wait(key, is_message))
+                    .await
+                {
+                    Ok(waited) => waited,
+                    Err(_) => {
+                        wait += remaining;
+                        let source = match last_advice.take() {
+                            Some(error) => error,
+                            None => YappinError::RateLimited {
+                                retry_after: self
+                                    .inner
+                                    .rate_limits
+                                    .remaining(key, is_message)
+                                    .await
+                                    .as_secs_f64(),
+                            },
+                        };
+                        return Err(YappinError::RetryWaitExceeded {
+                            waited: wait,
+                            budget: self.inner.max_retry_wait,
+                            source: Box::new(source),
+                        });
+                    }
+                };
             waiting_metric.finish(waited);
             wait += waited;
             let url = crate::security::api_url(&base, path)?;
@@ -371,8 +408,22 @@ impl Client {
                 duration: started.elapsed(),
                 rate_limit_wait: wait,
                 attempts,
+                api_version: res
+                    .as_ref()
+                    .ok()
+                    .and_then(|r| r.headers().get("X-Yapin-API-Version"))
+                    .and_then(|h| h.to_str().ok())
+                    .filter(|s| s.len() <= 128)
+                    .map(|s| crate::security::scrub(s, &[self.inner.token.as_str()])),
+                api_build: res
+                    .as_ref()
+                    .ok()
+                    .and_then(|r| r.headers().get("X-Yapin-Build"))
+                    .and_then(|h| h.to_str().ok())
+                    .filter(|s| s.len() <= 128)
+                    .map(|s| crate::security::scrub(s, &[self.inner.token.as_str()])),
             };
-            telemetry.observe(observation.clone(), attempt_started.elapsed());
+            telemetry.observe(&observation, attempt_started.elapsed());
             self.inner.requests.send_replace(Some(observation));
             tracing::debug!(method=label,route=%route,status,elapsed_ms=started.elapsed().as_millis() as u64,attempts,"REST response headers");
             let unavailable = match &res {
@@ -406,10 +457,14 @@ impl Client {
                 .get("Retry-After")
                 .and_then(|h| h.to_str().ok())
                 .and_then(crate::rate_limits::retry_after);
+            let cloudflare = res.headers().contains_key("cf-ray");
             let body_bytes = res.bytes().await.unwrap_or_default();
             let err_json: serde_json::Value =
                 serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null);
 
+            if cloudflare && status == StatusCode::TOO_MANY_REQUESTS && !err_json.is_object() {
+                warn!("Cloudflare returned a rate limit before the Yapin API");
+            }
             let msg = err_json
                 .get("error")
                 .and_then(|e| e.as_str())
@@ -430,17 +485,24 @@ impl Client {
                         self.inner.rate_limits.delay(key, delay, global).await;
                     }
                     if retries > 0 && delay <= Duration::from_secs(60) {
+                        let source = YappinError::Api {
+                            status: status.as_u16(),
+                            message: crate::security::scrub(&msg, &[self.inner.token.as_str()]),
+                            retry_after: Some(delay.as_secs_f64()),
+                        };
+                        if delay > self.inner.max_retry_wait.saturating_sub(wait) {
+                            return Err(YappinError::RetryWaitExceeded {
+                                waited: wait,
+                                budget: self.inner.max_retry_wait,
+                                source: Box::new(source),
+                            });
+                        }
                         warn!(
                             status = status.as_u16(),
                             delay_ms = delay.as_millis() as u64,
                             "API asked us to retry"
                         );
-                        let waiting = tokio::time::Instant::now();
-                        let waiting_metric = telemetry.waiting();
-                        sleep(delay).await;
-                        let waited = waiting.elapsed();
-                        wait += waited;
-                        waiting_metric.finish(waited);
+                        last_advice = Some(source);
                         retries -= 1;
                         continue;
                     }
@@ -1394,6 +1456,8 @@ impl Client {
     /// }
     /// ```
     pub async fn send_message(&self, channel_id: Uuid, message: &CreateMessage) -> Result<Message> {
+        let clean = message.for_request();
+        let message = clean.as_ref();
         message.validate()?;
         #[derive(Deserialize)]
         struct Resp {
@@ -1448,6 +1512,8 @@ impl Client {
         struct Resp {
             message: Message,
         }
+        let clean = edit.for_request();
+        let edit = clean.as_ref();
         edit.validate()?;
         let resp: Resp = self
             .request_json(

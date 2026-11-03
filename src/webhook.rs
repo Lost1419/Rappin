@@ -112,6 +112,7 @@ impl WebhookClient {
     async fn post<T: Serialize>(&self, message: &T, wait: bool) -> Result<Option<Message>> {
         let url = self.request_url(Some(wait))?;
         let mut value = serde_json::to_value(message)?;
+        crate::utils::strip_proxy_metadata(&mut value);
         crate::validation::validate_webhook(&value)?;
         // Channel webhooks use Discord's numeric link-button representation.
         if let Some(rows) = value["components"].as_array_mut() {

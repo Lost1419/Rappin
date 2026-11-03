@@ -52,7 +52,15 @@ impl serde::Serialize for RemoteError {
 
 /// The error type for operations in the `yappin` crate.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum YappinError {
+    #[error("retry wait budget exhausted after {waited:?} (budget {budget:?}): {source}")]
+    RetryWaitExceeded {
+        waited: std::time::Duration,
+        budget: std::time::Duration,
+        #[source]
+        source: Box<YappinError>,
+    },
     #[error("{failure}")]
     HotReload {
         #[source]
@@ -142,6 +150,7 @@ impl YappinError {
     /// Returns the HTTP status code associated with this error, if available.
     pub fn status_code(&self) -> Option<u16> {
         match self {
+            Self::RetryWaitExceeded { source, .. } => source.status_code(),
             Self::HotReload { failure } => failure.source.as_ref().and_then(|e| e.status),
             Self::EventProcessing { report } => report.primary().and_then(|e| e.status),
             Self::FailureHandling {
@@ -188,6 +197,7 @@ impl YappinError {
     /// Returns the suggested retry wait duration if this error was caused by a rate limit.
     pub fn retry_after(&self) -> Option<std::time::Duration> {
         match self {
+            Self::RetryWaitExceeded { source, .. } => return source.retry_after(),
             Self::HotReload { failure } => {
                 return failure
                     .source
@@ -236,6 +246,15 @@ impl YappinError {
     /// Stable JSON representation for agents. Transport URLs are intentionally omitted.
     pub fn to_json(&self) -> serde_json::Value {
         match self {
+            Self::RetryWaitExceeded {
+                waited,
+                budget,
+                source,
+            } => {
+                let cause = source.to_json();
+                return serde_json::json!({"kind":"retry_wait_exceeded","message":self.to_string(),"status":self.status_code(),"retry_after":self.retry_after().map(|d|d.as_secs_f64()),"waited_seconds":waited.as_secs_f64(),"budget_seconds":budget.as_secs_f64(),"source":cause,"outcome":cause["outcome"],"retry_safety":"do_not_replay_workflow"});
+            }
+
             Self::HotReload { failure } => {
                 return serde_json::json!({"kind":"hot_reload","message":self.to_string(),"status":self.status_code(),"retry_after":self.retry_after().map(|d|d.as_secs_f64()),"hot_reload":failure,"outcome":"incomplete","retry_safety":"do_not_replay_workflow"})
             }

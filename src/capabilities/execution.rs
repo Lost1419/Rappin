@@ -36,9 +36,18 @@ impl ValidatedOperation {
             .expect("validated UUID")
     }
     pub fn preview(&self) -> OperationResult {
+        let mut arguments = self.args.clone();
+        if self.name() == "create_emoji" {
+            arguments["body"]["image"] = "[image omitted]".into();
+        }
+        if let Some(files) = arguments["files"].as_array_mut() {
+            for file in files {
+                file["data"] = "[file data omitted]".into();
+            }
+        }
         OperationResult {
             operation: self.name().into(),
-            data: json!({"arguments":self.args,"write_steps":if self.entry.write {self.writes.len().max(1)}else{0}}),
+            data: json!({"arguments":arguments,"write_steps":if self.entry.write {self.writes.len().max(1)}else{0}}),
             dry_run: true,
             authorization: None,
         }
@@ -89,6 +98,27 @@ impl ValidatedOperation {
     fn verify_result_scope(&self, data: &Value, context: &OperationContext) -> Result<()> {
         let uuid = |value: &Value| value.as_str().and_then(|s| s.parse::<Uuid>().ok());
         let valid = match self.name() {
+            "list_emojis" => data["emojis"].as_array().is_some_and(|rows| {
+                rows.iter()
+                    .all(|row| uuid(&row["server_id"]) == Some(context.server_id()))
+            }),
+            "list_channel_webhooks" => data["webhooks"].as_array().is_some_and(|rows| {
+                rows.iter().all(|row| {
+                    uuid(&row["server_id"]) == Some(context.server_id())
+                        && uuid(&row["channel_id"]) == Some(self.uuid("channel"))
+                })
+            }),
+            "create_bot_webhook" => {
+                uuid(&data["webhook"]["channel_id"]) == Some(self.uuid("channel"))
+                    && uuid(&data["webhook"]["server_id"]) == Some(context.server_id())
+            }
+            "post_bot_webhook" => {
+                uuid(&data["message"]["channel_id"]) == Some(self.uuid("channel"))
+            }
+            "send_files" => data["messages"].as_array().is_some_and(|rows| {
+                rows.iter()
+                    .all(|row| uuid(&row["channel_id"]) == Some(self.uuid("channel")))
+            }),
             "get_member" => uuid(&data["member"]["id"]) == Some(self.uuid("user")),
             "get_server" => uuid(&data["server"]["id"]) == Some(context.server_id()),
             "get_channel" => {
@@ -108,6 +138,8 @@ impl ValidatedOperation {
         };
         if valid {
             Ok(())
+        } else if self.entry.write {
+            Err(YappinError::Remote(crate::RemoteError{kind:"operation_result_scope".into(),message:"API write result identity did not match the bound resource scope; reconcile before retrying".into(),status:None,retry_after:None,details:[("outcome".into(),"unknown".into()),("retry_safety".into(),"do_not_replay_workflow".into())].into()}))
         } else {
             Err(YappinError::validation(
                 "scope",
@@ -131,6 +163,31 @@ impl ValidatedOperation {
                 self.uuid("message")
             )
         };
+        if platform::is_platform_operation(self.name()) {
+            let request = self.api_request()?;
+            let mut data = request.dispatch(api).await?;
+            if self.name() == "send_files" {
+                let messages = serde_json::from_value::<crate::UploadedMessages>(data)?
+                    .into_result_for(request.files.len())?;
+                return Ok(json!({"messages":messages}));
+            }
+            if self.name() == "list_bot_webhooks" {
+                if let Some(webhooks) = data["webhooks"].as_array_mut() {
+                    webhooks.retain(|row| {
+                        row["server_id"]
+                            .as_str()
+                            .and_then(|s| s.parse::<Uuid>().ok())
+                            == Some(server)
+                    });
+                } else {
+                    return Err(YappinError::validation(
+                        "webhooks",
+                        "API did not return a webhook list",
+                    ));
+                }
+            }
+            return Ok(data);
+        }
         match self.name() {
             "get_capabilities" => Ok(
                 json!({"version":env!("CARGO_PKG_VERSION"),"tools":tools(),"library":true,"features":{"cli":cfg!(feature="cli"),"gateway":cfg!(feature="gateway"),"voice":cfg!(feature="voice"),"hot_reload":cfg!(feature="hot-reload")}}),

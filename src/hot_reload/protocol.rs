@@ -5,14 +5,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub(super) const VERSION: u32 = 3;
+pub(super) const VERSION: u32 = 4;
 const MAX_FRAME: u64 = 1024 * 1024;
 
 /// Optional listeners implemented by a worker in addition to commands and buttons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Listener {
     Message,
+    DmMessage,
+    ReactionAdd,
+    ReactionRemove,
     Interaction,
     MemberJoin,
     MemberLeave,
@@ -23,7 +27,17 @@ pub enum Listener {
 /// Serializable handler input. The bot credential is never part of this message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum CogEvent {
+    DmMessage {
+        message: MessageEvent,
+    },
+    ReactionAdd {
+        event: crate::ReactionEvent,
+    },
+    ReactionRemove {
+        event: crate::ReactionEvent,
+    },
     Command {
         command: String,
         args: String,
@@ -56,7 +70,9 @@ pub enum CogEvent {
 impl CogEvent {
     pub fn message(&self) -> Option<&MessageEvent> {
         match self {
-            Self::Command { message, .. } | Self::Message { message } => Some(message),
+            Self::Command { message, .. }
+            | Self::Message { message }
+            | Self::DmMessage { message } => Some(message),
             _ => None,
         }
     }
@@ -81,11 +97,17 @@ impl CogEvent {
         }
     }
     pub fn author_id(&self) -> Option<uuid::Uuid> {
+        if let Self::ReactionAdd { event } | Self::ReactionRemove { event } = self {
+            return Some(event.user_id);
+        }
         self.message()
             .map(|m| m.author_id)
             .or_else(|| self.interaction().and_then(|i| i.user_id))
     }
     pub fn channel_id(&self) -> Option<uuid::Uuid> {
+        if let Self::ReactionAdd { event } | Self::ReactionRemove { event } = self {
+            return Some(event.channel_id);
+        }
         self.message()
             .map(|m| m.channel_id)
             .or_else(|| self.interaction().and_then(|i| i.channel_id))
@@ -156,8 +178,26 @@ impl Manifest {
     }
 }
 #[derive(Serialize, Deserialize)]
+pub(super) struct UploadDescriptor {
+    pub name: String,
+    pub size: usize,
+}
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(super) enum Wire {
+    Public {
+        path: String,
+    },
+    Upload {
+        path: String,
+        body: Value,
+        files: Vec<UploadDescriptor>,
+    },
+    UploadChunk {
+        file: usize,
+        data: String,
+    },
+    UploadFinish,
     Wait {
         filter: crate::collectors::EventFilter,
         timeout_ms: u64,
@@ -230,4 +270,122 @@ pub(super) async fn write<W: AsyncWrite + Unpin>(writer: &mut W, message: &Wire)
     writer.write_all(b"\n").await?;
     writer.flush().await?;
     Ok(())
+}
+
+/// Receive a bounded upload before executing any HTTP mutation.
+pub(super) async fn read_upload<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+    descriptors: Vec<UploadDescriptor>,
+) -> Result<Vec<crate::UploadFile>> {
+    use base64::Engine;
+    if descriptors.is_empty()
+        || descriptors.len() > 4
+        || descriptors
+            .iter()
+            .any(|f| f.size == 0 || f.size > 10 * 1024 * 1024 || f.name.len() > 255)
+        || descriptors.iter().map(|f| f.size).sum::<usize>() > 12 * 1024 * 1024
+    {
+        return Err(YappinError::validation(
+            "upload",
+            "invalid bounded worker upload metadata",
+        ));
+    }
+    let mut buffers: Vec<Vec<u8>> = descriptors
+        .iter()
+        .map(|f| Vec::with_capacity(f.size))
+        .collect();
+    loop {
+        match read(reader).await? {
+            Wire::UploadChunk { file, data } => {
+                if file >= buffers.len() || data.len() > 87384 {
+                    return Err(protocol_error());
+                }
+                let chunk = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|_| protocol_error())?;
+                if chunk.is_empty()
+                    || chunk.len() != (descriptors[file].size - buffers[file].len()).min(65536)
+                {
+                    return Err(protocol_error());
+                }
+                buffers[file].extend_from_slice(&chunk);
+            }
+            Wire::UploadFinish => break,
+            _ => return Err(protocol_error()),
+        }
+    }
+    if buffers
+        .iter()
+        .zip(&descriptors)
+        .any(|(b, d)| b.len() != d.size)
+    {
+        return Err(protocol_error());
+    }
+    let files: Vec<_> = descriptors
+        .into_iter()
+        .zip(buffers)
+        .map(|(d, b)| crate::UploadFile::new(d.name, b))
+        .collect();
+    crate::validate_uploads(&files)?;
+    Ok(files)
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+    use base64::Engine;
+    fn descriptor(size: usize) -> Vec<UploadDescriptor> {
+        vec![UploadDescriptor {
+            name: "a.txt".into(),
+            size,
+        }]
+    }
+    fn stream(frames: Vec<Wire>) -> Vec<u8> {
+        frames
+            .into_iter()
+            .flat_map(|frame| {
+                let mut data = serde_json::to_vec(&frame).unwrap();
+                data.push(b'\n');
+                data
+            })
+            .collect()
+    }
+    #[tokio::test]
+    async fn upload_frames_are_bounded_and_incomplete_transfers_never_complete() {
+        let bytes = stream(vec![
+            Wire::UploadChunk {
+                file: 0,
+                data: base64::engine::general_purpose::STANDARD.encode(b"abc"),
+            },
+            Wire::UploadFinish,
+        ]);
+        let files = read_upload(&mut bytes.as_slice(), descriptor(3))
+            .await
+            .unwrap();
+        assert_eq!(files[0].data.as_ref(), b"abc");
+        assert!(
+            read_upload(&mut (&b""[..]), descriptor(12 * 1024 * 1024 + 1))
+                .await
+                .is_err()
+        );
+        for frames in [
+            vec![Wire::UploadFinish],
+            vec![
+                Wire::UploadChunk {
+                    file: 1,
+                    data: "YQ==".into(),
+                },
+                Wire::UploadFinish,
+            ],
+            vec![Wire::UploadChunk {
+                file: 0,
+                data: "YQ==".into(),
+            }],
+        ] {
+            let bytes = stream(frames);
+            assert!(read_upload(&mut bytes.as_slice(), descriptor(3))
+                .await
+                .is_err());
+        }
+    }
 }

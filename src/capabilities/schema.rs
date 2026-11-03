@@ -1,16 +1,7 @@
 use super::*;
 pub fn bundled_schema() -> &'static Value {
     static SPEC: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
-        let mut spec: Value = serde_json::from_str(include_str!("../../docs/openapi.json"))
-            .expect("bundled OpenAPI JSON");
-        let guide: Value = serde_json::from_str(include_str!("../../docs/guide-api.json"))
-            .expect("bundled guide JSON");
-        for (path, item) in guide["paths"].as_object().expect("guide paths") {
-            for (method, operation) in item.as_object().expect("guide operation") {
-                spec["paths"][path][method] = operation.clone();
-            }
-        }
-        spec
+        serde_json::from_str(include_str!("../../docs/openapi.json")).expect("bundled OpenAPI JSON")
     });
     &SPEC
 }
@@ -21,6 +12,11 @@ pub(super) fn body_schema(name: &str) -> Option<Value> {
         "edit_channel" => ("patch", "/channels/{id}"),
         "create_category" => ("post", "/servers/{id}/categories"),
         "edit_category" => ("patch", "/servers/{id}/categories/{cid}"),
+        "create_emoji" => ("post", "/servers/{id}/emojis"),
+        "edit_emoji" => ("patch", "/servers/{id}/emojis/{eid}"),
+        "create_bot_webhook" => ("post", "/channels/{id}/webhooks"),
+        "post_bot_webhook" => ("post", "/webhooks/{id}"),
+        "send_files" => ("post", "/channels/{id}/messages"),
         "send_message" => ("post", "/channels/{id}/messages"),
         "edit_message" => ("patch", "/channels/{id}/messages/{mid}"),
         "create_role" => ("post", "/servers/{id}/roles"),

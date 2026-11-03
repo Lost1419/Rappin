@@ -42,6 +42,8 @@ struct MockApi {
     category_ids: Vec<Uuid>,
     reply_channel: Option<Uuid>,
     mutation_error: Option<u16>,
+    resource_server: Option<Uuid>,
+    webhook_owner: Option<Option<Uuid>>,
     fail_step: usize,
     mutations: AtomicUsize,
 }
@@ -90,6 +92,21 @@ impl Api for MockApi {
         if path.contains("/members/") {
             return Ok(
                 json!({"member":{"id":path.rsplit('/').next().unwrap(),"username":"member","invite_code":"private","inviter_id":Uuid::from_u128(99)}}),
+            );
+        }
+        if path.ends_with("/emojis") {
+            return Ok(
+                json!({"emojis":[{"id":role(),"server_id":self.resource_server.unwrap_or(server())}],"limit":50}),
+            );
+        }
+        if path.ends_with("/webhooks") && path.starts_with("/channels/") {
+            return Ok(
+                json!({"webhooks":[{"id":role(),"server_id":self.resource_server.unwrap_or(server()),"channel_id":channel(),"bot_id":self.webhook_owner.unwrap_or(Some(bot_id()))}]}),
+            );
+        }
+        if path == "/webhooks" {
+            return Ok(
+                json!({"webhooks":[{"id":role(),"server_id":server()},{"id":Uuid::from_u128(987),"server_id":Uuid::from_u128(999)}]}),
             );
         }
         if path.starts_with("/channels/") {
@@ -174,12 +191,12 @@ impl OperationPolicy for HostEvidence {
 
 #[test]
 fn catalogue_is_offline_filtered_complete_and_has_one_schema_source() {
-    assert_eq!(catalogue().len(), 44);
+    assert_eq!(catalogue().len(), 56);
     let names = catalogue()
         .iter()
         .map(|c| c.name)
         .collect::<std::collections::HashSet<_>>();
-    assert_eq!(names.len(), 44);
+    assert_eq!(names.len(), 56);
     for descriptor in catalogue() {
         let tool = descriptor.tool_definition();
         assert_eq!(tool["inputSchema"], descriptor.input_schema());
@@ -312,7 +329,7 @@ async fn preview_and_local_metadata_need_no_api_access() {
     assert!(api.requests.lock().unwrap().is_empty());
     let call = operation("get_capabilities", json!({}));
     let result = call.execute(&api, &context()).await.unwrap();
-    assert_eq!(result.data["tools"].as_array().unwrap().len(), 44);
+    assert_eq!(result.data["tools"].as_array().unwrap().len(), 56);
     assert!(api.requests.lock().unwrap().is_empty());
     for name in ["ack_events", "poll_events", "doctor"] {
         let args = if name == "ack_events" {
@@ -455,6 +472,23 @@ async fn model_arguments_cannot_escape_server_channel_role_category_or_reply_sco
         .await
         .unwrap_err()
         .is_forbidden());
+    assert_eq!(api.mutations.load(Ordering::SeqCst), 0);
+    let call = operation(
+        "send_files",
+        json!({"channel":channel(),"body":{"reply_to":foreign},"files":[{"name":"a.txt","data":"eA=="}]}),
+    );
+    let report = call
+        .assess_with_policy(
+            &api,
+            &context().test_server_access(true),
+            &HostEvidence::allow(),
+        )
+        .await
+        .unwrap();
+    assert!(report
+        .checks
+        .iter()
+        .any(|check| check.check == "reply_scope" && check.decision == AccessDecision::Denied));
     assert_eq!(api.mutations.load(Ordering::SeqCst), 0);
 }
 
@@ -1271,4 +1305,136 @@ async fn category_access_and_privacy_authority_are_independent_host_facts() {
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn api12_bindings_keep_principals_scope_and_webhook_ownership_separate() {
+    let cases = [
+        (
+            "delete_emoji",
+            json!({"id":server(),"emoji":role()}),
+            "manage_emojis",
+        ),
+        (
+            "delete_bot_webhook",
+            json!({"channel":channel(),"webhook":role()}),
+            "manage_webhooks",
+        ),
+    ];
+    for (name, args, permission) in cases {
+        for (requester_allowed, bot_allowed) in [(true, false), (false, true), (true, true)] {
+            let mut api = MockApi::standard();
+            if requester_allowed {
+                api.request_grants = vec![permission];
+            }
+            if bot_allowed {
+                api.bot_grants = vec![permission];
+            }
+            let call = operation(name, args.clone());
+            let result = call
+                .execute_with_policy(
+                    &api,
+                    &context().test_server_access(true),
+                    &HostEvidence::allow(),
+                )
+                .await;
+            assert_eq!(result.is_ok(), requester_allowed && bot_allowed, "{name}");
+            assert_eq!(
+                api.mutations.load(Ordering::SeqCst),
+                usize::from(requester_allowed && bot_allowed)
+            );
+        }
+        let mut api = MockApi::standard();
+        api.request_grants = vec![permission];
+        api.bot_grants = vec![permission];
+        api.resource_server = Some(Uuid::from_u128(999));
+        let error = operation(name, args.clone())
+            .execute_with_policy(
+                &api,
+                &context().test_server_access(true),
+                &HostEvidence::allow(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_json()["decision"], "denied");
+        assert_eq!(api.mutations.load(Ordering::SeqCst), 0);
+    }
+    for (owner, decision) in [(Some(Uuid::from_u128(999)), "denied"), (None, "unknown")] {
+        let mut api = MockApi::standard();
+        api.request_grants = vec!["manage_webhooks"];
+        api.bot_grants = vec!["manage_webhooks"];
+        api.webhook_owner = Some(owner);
+        let error = operation(
+            "delete_bot_webhook",
+            json!({"channel":channel(),"webhook":role()}),
+        )
+        .execute_with_policy(
+            &api,
+            &context().test_server_access(true),
+            &HostEvidence::allow(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_json()["decision"], decision);
+        assert_eq!(api.mutations.load(Ordering::SeqCst), 0);
+    }
+    let mut api = MockApi::standard();
+    api.request_grants = vec!["manage_webhooks"];
+    api.bot_grants = vec!["manage_webhooks"];
+    let call = operation(
+        "delete_bot_webhook",
+        json!({"channel":channel(),"webhook":role()}),
+    );
+    assert_eq!(
+        call.assess(&api, &context().test_server_access(true))
+            .await
+            .unwrap()
+            .decision(),
+        AccessDecision::Unknown
+    );
+    assert_eq!(api.mutations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn api12_bot_webhook_lists_are_scoped_and_command_schemas_use_current_metadata() {
+    let mut api = MockApi::standard();
+    api.request_grants = vec!["manage_webhooks"];
+    api.bot_grants = vec!["manage_webhooks"];
+    let result = operation("list_bot_webhooks", json!({}))
+        .execute_with_policy(
+            &api,
+            &context().test_server_access(true),
+            &HostEvidence::allow(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.data["webhooks"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        result.data["webhooks"][0]["server_id"],
+        server().to_string()
+    );
+    let binding:OperationCommandBinding=serde_json::from_value(json!({"operation":"create_emoji","name":"emoji add","description":"Create a server emoji","fixed_arguments":{"id":server(),"body":{"image":"YQ=="}},"parameters":[{"name":"name","target":"/body/name"}]})).unwrap();
+    let schema = binding.command_schema().unwrap();
+    let values = schema.parse("party_name").unwrap();
+    assert_eq!(
+        binding.prepare(&values).unwrap().arguments()["body"]["name"],
+        "party_name"
+    );
+    assert!(binding.prepare(&schema.parse("bad-name").unwrap()).is_err());
+    let bot = Bot::builder("fixture")
+        .sync_commands(false)
+        .log(false)
+        .build();
+    let command = binding.bind(|_, _| async { Ok(()) }).unwrap();
+    let cog = CogBuilder::new("emoji_commands")
+        .registered_command(command)
+        .build();
+    bot.handle().preflight_cog(&cog).await.unwrap();
+    bot.handle().add_cog(cog).await.unwrap();
+    assert!(bot
+        .handle()
+        .command_info()
+        .await
+        .iter()
+        .any(|c| c.name == "emoji add"));
 }

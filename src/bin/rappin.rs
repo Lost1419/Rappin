@@ -26,6 +26,9 @@ struct Args {
     /// Preview writes without authentication or network access.
     #[arg(long, global = true)]
     dry_run: bool,
+    /// Maximum server-advised/shared rate-limit waiting per request, in seconds.
+    #[arg(long, global = true)]
+    max_retry_wait: Option<f64>,
     /// Override YAPPER_API_BASE / config base_url.
     #[arg(long, global = true)]
     base_url: Option<String>,
@@ -48,6 +51,26 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Execute a catalogue API 1.2 operation with JSON arguments (also used by MCP).
+    Platform {
+        operation: String,
+        #[arg(long)]
+        arguments_file: Option<PathBuf>,
+    },
+    /// Send 1..4 local files; paths are an operator CLI feature, never MCP arguments.
+    Upload {
+        channel: Uuid,
+        #[arg(required=true,num_args=1..=4)]
+        files: Vec<PathBuf>,
+        #[arg(long)]
+        body_file: Option<PathBuf>,
+    },
+    /// Upload an emoji image from a local path (operator CLI only).
+    EmojiUpload {
+        server: Uuid,
+        name: String,
+        file: PathBuf,
+    },
     /// Serve agent tools over MCP stdio (newline-delimited JSON-RPC).
     Mcp {
         /// Operator-selected event state file; tool calls cannot choose filesystem paths.
@@ -377,6 +400,7 @@ enum Dm {
 }
 #[derive(Default, serde::Deserialize)]
 struct Config {
+    max_retry_wait: Option<f64>,
     token: Option<String>,
     base_url: Option<String>,
 }
@@ -389,6 +413,7 @@ struct Context {
     config_path: Option<PathBuf>,
     token: Option<String>,
     inline_body: Option<Value>,
+    max_retry_wait: std::time::Duration,
     events: std::sync::Arc<tokio::sync::Mutex<()>>,
 }
 impl Context {
@@ -397,6 +422,14 @@ impl Context {
             .clone()
             .map(Ok)
             .unwrap_or_else(|| input(path))
+    }
+    fn public_client(&self) -> Client {
+        self.client.clone().unwrap_or_else(|| {
+            Client::builder("")
+                .base_url(&self.base)
+                .max_retry_wait(self.max_retry_wait)
+                .build()
+        })
     }
     fn client(&self) -> Result<&Client> {
         self.client
@@ -417,6 +450,24 @@ impl Context {
             .request_json(method, path, body.as_ref())
             .await
     }
+}
+fn local_upload(path: &std::path::Path, maximum: usize) -> Result<rappin::UploadFile> {
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(maximum as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > maximum {
+        return Err(YappinError::validation(
+            "file",
+            "upload exceeds maximum bytes",
+        ));
+    }
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| YappinError::validation("file", "filename must be UTF-8"))?;
+    let file = rappin::UploadFile::new(name, bytes);
+    file.validate()?;
+    Ok(file)
 }
 fn input(path: &PathBuf) -> Result<Value> {
     let bytes = if path.as_os_str() == "-" {
@@ -478,9 +529,18 @@ fn config(args: &Args) -> Result<Context> {
             "base URL must be HTTP(S), without credentials, query, or fragment".into(),
         ));
     }
-    let client = token
-        .as_ref()
-        .map(|t| Client::builder(t).base_url(&base).build());
+    let max_retry_wait = std::time::Duration::try_from_secs_f64(
+        args.max_retry_wait
+            .or(config.max_retry_wait)
+            .unwrap_or(30.0),
+    )
+    .map_err(|_| YappinError::Config("max_retry_wait must be finite and nonnegative".into()))?;
+    let client = token.as_ref().map(|t| {
+        Client::builder(t)
+            .base_url(&base)
+            .max_retry_wait(max_retry_wait)
+            .build()
+    });
     Ok(Context {
         client,
         dry: args.dry_run,
@@ -489,6 +549,7 @@ fn config(args: &Args) -> Result<Context> {
         config_path: path,
         token,
         inline_body: None,
+        max_retry_wait,
         events: Default::default(),
     })
 }
@@ -509,6 +570,87 @@ async fn run(args: Args, ctx: &Context) -> Result<Value> {
 }
 async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
     match args.command {
+        Command::Platform {
+            operation,
+            arguments_file,
+        } => {
+            let args = match &ctx.inline_body {
+                Some(body) => body.clone(),
+                None => arguments_file
+                    .as_ref()
+                    .map(input)
+                    .transpose()?
+                    .unwrap_or_else(|| json!({})),
+            };
+            let descriptor = rappin::capabilities::capability(&operation)
+                .filter(|c| c.cli.first() == Some(&"platform"))
+                .ok_or_else(|| {
+                    YappinError::validation("operation", "unknown platform operation")
+                })?;
+            let binding = descriptor.validate(&args)?;
+            if ctx.dry && descriptor.write {
+                return Ok(binding.preview().data);
+            }
+            let request = binding.api_request()?;
+            let value = if request.public {
+                let public = ctx.public_client();
+                rappin::Api::public_request(&public, &request.path).await?
+            } else if !request.files.is_empty() {
+                ctx.client()?
+                    .request_upload(
+                        &request.path,
+                        request.body.unwrap_or_else(|| json!({})),
+                        &request.files,
+                    )
+                    .await?
+            } else {
+                ctx.request(request.method, &request.path, request.body)
+                    .await?
+            };
+            if operation == "send_files" {
+                return Ok(
+                    json!({"messages":serde_json::from_value::<rappin::UploadedMessages>(value)?.into_result_for(request.files.len())?}),
+                );
+            }
+            Ok(value)
+        }
+        Command::Upload {
+            channel,
+            files,
+            body_file,
+        } => {
+            let files = files
+                .iter()
+                .map(|path| local_upload(path, 10 * 1024 * 1024))
+                .collect::<Result<Vec<_>>>()?;
+            rappin::validate_uploads(&files)?;
+            let body: CreateMessage = body_file
+                .as_ref()
+                .map(|path| ctx.body(path))
+                .transpose()?
+                .map(serde_json::from_value)
+                .transpose()?
+                .unwrap_or_default();
+            rappin::validation::validate_message(&serde_json::to_value(&body)?, false)?;
+            if ctx.dry {
+                return Ok(
+                    json!({"dry_run":true,"channel":channel,"files":files.iter().map(|f|json!({"name":f.name,"size":f.data.len()})).collect::<Vec<_>>(),"body":body}),
+                );
+            }
+            Ok(json!({"messages":ctx.client()?.send_files(channel,&body,&files).await?}))
+        }
+        Command::EmojiUpload { server, name, file } => {
+            let file = local_upload(&file, 1_048_576)?;
+            rappin::validate_emoji_name(&name)?;
+            if ctx.dry {
+                return Ok(
+                    json!({"dry_run":true,"server":server,"name":name,"size":file.data.len()}),
+                );
+            }
+            Ok(serde_json::to_value(
+                ctx.client()?.upload_emoji(server, &name, &file).await?,
+            )?)
+        }
         Command::Mcp { .. } => Err(YappinError::Config("start MCP with rappin mcp".into())),
         Command::Doctor { offline } => {
             let mut v = json!({"version":env!("CARGO_PKG_VERSION"),"base_url":ctx.base,"auth_source":ctx.source,"token_available":ctx.token.is_some(),"config_path":ctx.config_path,"offline":offline,"reachable":null,"authenticated":null,"setup":if ctx.token.is_none(){Some("set YAPPER_BOT_TOKEN")}else{None}});
@@ -528,7 +670,14 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
             }
             if let Some(client) = &ctx.client {
                 v["active_base_url"] = client.active_base_url().into();
-                v["last_request"]=client.last_request().map(|r|json!({"method":r.method,"route":r.route,"status":r.status,"duration_ms":r.duration.as_secs_f64()*1000.0,"rate_limit_wait_ms":r.rate_limit_wait.as_secs_f64()*1000.0,"attempts":r.attempts})).unwrap_or(Value::Null);
+                v["last_request"]=client.last_request().map(|r|json!({"method":r.method,"route":r.route,"status":r.status,"duration_ms":r.duration.as_secs_f64()*1000.0,"rate_limit_wait_ms":r.rate_limit_wait.as_secs_f64()*1000.0,"attempts":r.attempts,"api_version":r.api_version,"api_build":r.api_build})).unwrap_or(Value::Null);
+            }
+            if !offline {
+                let public = ctx.public_client();
+                match public.get_api_version().await {
+                    Ok(version) => v["api_version_info"] = serde_json::to_value(version)?,
+                    Err(error) => v["api_version_error"] = error.to_json(),
+                }
             }
             Ok(v)
         }
@@ -550,16 +699,16 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
             }
         },
         Command::Schema { name, path, method } => {
-            let spec = rappin::capabilities::bundled_schema().clone();
+            let spec = rappin::capabilities::bundled_schema();
             if let (Some(path), Some(method)) = (path, method) {
-                return agent_catalog::endpoint_schema(&spec, &path, &method);
+                return agent_catalog::endpoint_schema(spec, &path, &method);
             }
             match name {
                 Some(n) => spec["components"]["schemas"]
                     .get(&n)
                     .cloned()
                     .ok_or_else(|| YappinError::validation("schema", "unknown component schema")),
-                None => Ok(spec),
+                None => Ok(spec.clone()),
             }
         }
         Command::Servers { action } => match action {
@@ -992,6 +1141,7 @@ fn read_only(command: &Command) -> bool {
         | Command::Events {
             action: Events::Poll { .. },
         } => true,
+        Command::Platform { operation, .. } => !agent_catalog::is_write(operation),
         Command::Request { method, .. } => {
             method.eq_ignore_ascii_case("GET") || method.eq_ignore_ascii_case("HEAD")
         }

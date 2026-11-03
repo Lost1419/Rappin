@@ -153,7 +153,7 @@ impl AuthorizationReport {
     pub fn allowed(&self) -> bool {
         self.decision() == AccessDecision::Allowed
     }
-    fn record(
+    pub(super) fn record(
         &mut self,
         check: &str,
         principal: Principal,
@@ -168,7 +168,7 @@ impl AuthorizationReport {
             error,
         });
     }
-    fn failure(&mut self, check: &str, principal: Principal, error: YappinError) {
+    pub(super) fn failure(&mut self, check: &str, principal: Principal, error: YappinError) {
         self.record(
             check,
             principal,
@@ -250,6 +250,9 @@ impl ValidatedOperation {
     ) -> Result<AuthorizationReport> {
         let mut report = self.local_scope(context);
         if report.decision() == AccessDecision::Denied {
+            return Ok(report);
+        }
+        if matches!(self.name(), "get_api_version" | "get_api_changelog") {
             return Ok(report);
         }
         match self.entry.availability.library {
@@ -358,7 +361,10 @@ impl ValidatedOperation {
                 }
             }
         }
-        let me = api.request("GET".parse().unwrap(), "/me", None).await;
+        let me = match report.bot_id {
+            Some(bot) => Ok(json!({"id":bot})),
+            None => api.request("GET".parse().unwrap(), "/me", None).await,
+        };
         let bot = match me {
             Ok(value) => match value["id"].as_str().and_then(|s| s.parse::<Uuid>().ok()) {
                 Some(id) => id,
@@ -524,6 +530,9 @@ impl ValidatedOperation {
         report: &mut AuthorizationReport,
     ) -> bool {
         let server = context.server_id;
+        if !self.platform_scopes(api, context, channel, report).await {
+            return false;
+        }
         let mut roles: Vec<&str> = self.args["role"]
             .as_str()
             .or_else(|| self.args["target"].as_str().filter(|s| *s != "everyone"))
@@ -695,7 +704,7 @@ impl ValidatedOperation {
             }
             report.record("event_destination_scope",Principal::Context,CheckResolution::allowed("event channel references are within the host scope; external locations have no channel reference"),None);
         }
-        if self.name() == "send_message" {
+        if matches!(self.name(), "send_message" | "send_files") {
             if let Some(reply) = self.writes.first().and_then(|v| v["reply_to"].as_str()) {
                 let reply: Uuid = reply.parse().expect("typed reply ID");
                 let channel = channel.expect("verified message channel");

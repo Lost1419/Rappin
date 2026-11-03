@@ -97,7 +97,14 @@ impl WorkerContext {
             .channel_id()
             .ok_or_else(|| YappinError::Config("event has no channel".into()))?;
         let filter = crate::collectors::EventFilter {
-            kind: Some("message".into()),
+            kind: Some(
+                if matches!(self.event, CogEvent::DmMessage { .. }) {
+                    "dm_message"
+                } else {
+                    "message"
+                }
+                .into(),
+            ),
             channel_id: Some(channel),
             author_id: Some(
                 self.author_id()
@@ -149,16 +156,55 @@ impl WorkerContext {
             .await?;
         Ok(serde_json::from_value(value)?)
     }
-    async fn proxy(&self, request: Wire) -> Result<Value> {
+    pub(crate) async fn public_request(&self, path: &str) -> Result<Value> {
+        self.proxy(Wire::Public { path: path.into() }).await
+    }
+    pub(crate) async fn upload(
+        &self,
+        path: &str,
+        body: Value,
+        files: &[crate::UploadFile],
+    ) -> Result<Value> {
+        use base64::Engine;
+        crate::validate_uploads(files)?;
         self.ensure_active()?;
         let mut connection = self.connection.lock().await;
         self.ensure_active()?;
         if connection.poisoned {
             return Err(protocol::protocol_error());
         }
-        // Cancellation during an exchange must not let a later call consume its response.
         connection.poisoned = true;
-        protocol::write(&mut connection.output, &request).await?;
+        protocol::write(
+            &mut connection.output,
+            &Wire::Upload {
+                path: path.into(),
+                body,
+                files: files
+                    .iter()
+                    .map(|f| protocol::UploadDescriptor {
+                        name: f.name.clone(),
+                        size: f.data.len(),
+                    })
+                    .collect(),
+            },
+        )
+        .await?;
+        for (index, file) in files.iter().enumerate() {
+            for chunk in file.data.chunks(65536) {
+                protocol::write(
+                    &mut connection.output,
+                    &Wire::UploadChunk {
+                        file: index,
+                        data: base64::engine::general_purpose::STANDARD.encode(chunk),
+                    },
+                )
+                .await?;
+            }
+        }
+        protocol::write(&mut connection.output, &Wire::UploadFinish).await?;
+        Self::api_result(&mut connection).await
+    }
+    async fn api_result(connection: &mut Connection) -> Result<Value> {
         match protocol::read(&mut connection.input).await? {
             Wire::ApiResult {
                 value,
@@ -177,6 +223,19 @@ impl WorkerContext {
             _ => Err(protocol::protocol_error()),
         }
     }
+    async fn proxy(&self, request: Wire) -> Result<Value> {
+        self.ensure_active()?;
+        let mut connection = self.connection.lock().await;
+        self.ensure_active()?;
+        if connection.poisoned {
+            return Err(protocol::protocol_error());
+        }
+        // Cancellation during an exchange must not let a later call consume its response.
+        connection.poisoned = true;
+        protocol::write(&mut connection.output, &request).await?;
+        Self::api_result(&mut connection).await
+    }
+
     fn ensure_active(&self) -> Result<()> {
         if self.active.load(Ordering::SeqCst) {
             Ok(())
@@ -187,6 +246,8 @@ impl WorkerContext {
         }
     }
     pub async fn send(&self, channel: uuid::Uuid, message: CreateMessage) -> Result<Message> {
+        let clean = message.for_request();
+        let message = clean.as_ref();
         message.validate()?;
         let response = self
             .api(
@@ -408,6 +469,9 @@ impl WorkerCog {
                 CogEvent::Command { command, .. } => self.commands.get(command),
                 CogEvent::Button { prefix, .. } => self.buttons.get(prefix),
                 CogEvent::Message { .. } => self.listeners.get(&Listener::Message),
+                CogEvent::DmMessage { .. } => self.listeners.get(&Listener::DmMessage),
+                CogEvent::ReactionAdd { .. } => self.listeners.get(&Listener::ReactionAdd),
+                CogEvent::ReactionRemove { .. } => self.listeners.get(&Listener::ReactionRemove),
                 CogEvent::Interaction { .. } => self.listeners.get(&Listener::Interaction),
                 CogEvent::MemberJoin { .. } => self.listeners.get(&Listener::MemberJoin),
                 CogEvent::MemberLeave { .. } => self.listeners.get(&Listener::MemberLeave),

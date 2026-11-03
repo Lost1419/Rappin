@@ -9,6 +9,31 @@ An async Rust SDK and bot framework for [Yapin’](https://www.yapin.gg).
 Build a bot with commands and interactive messages, use the REST client on its
 own, or automate Yapin through the JSON CLI and MCP tools.
 
+## Compatibility
+
+**0.1.17 is the one-time compatibility transition.** From this release onward,
+0.1.x patch updates will preserve documented public APIs and existing defaults;
+new behavior will be opt-in. Any later breaking change must use a new Cargo
+compatibility line (for example 0.2), with an explicit migration guide. Cargo's
+normal `"0.1.17"` requirement will not automatically select that breaking release.
+
+When upgrading from 0.1.16 or earlier:
+
+- Rebuild hot-reload parents and workers together for protocol v4.
+- Add a wildcard arm when matching extensible event/error/capability enums.
+- Use constructors/builders, deserialization, or `Message::default()` /
+  `RequestObservation::default()` for extensible response types. New attachment,
+  DM and proxy fields require updates to old manual struct literals. Construct
+  embed assets with `EmbedAuthor::new`, `EmbedFooter::new` and `EmbedMedia::new`.
+- Move raw `dm_message` handling to `EventHandler::on_dm`; it returns `Result` and
+  does not dispatch server commands. Typed MessageEvent collectors now include DMs;
+  use server/channel filters or DmMessageEvent collectors to select the source.
+- Rate-limit waits now have a configurable 30-second total budget. Set
+  `max_retry_wait` explicitly if your application needs a different limit.
+
+Application-owned storage, cache backends and custom prefixes remain supported.
+See [API 1.2 workflows](docs/api-1.2.md) for the new interfaces and limits.
+
 ## What you can build
 
 - **Command bots:** slash and prefix commands, typed arguments, aliases,
@@ -34,7 +59,7 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.16"
+rappin-rs = "0.1.17"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

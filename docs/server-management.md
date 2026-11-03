@@ -6,11 +6,10 @@ invites and scheduled events. **These endpoints are currently available only on
 test servers.** Rappin exposes them without assuming that a bot has access.
 Permission errors from Yapin remain visible to the caller.
 
-The separate API reference and upstream OpenAPI file do not yet contain these
-endpoints. `docs/openapi.json` remains the upstream specification;
-`docs/guide-api.json` supplements CLI/MCP schema discovery with guide-derived
-operations marked `x-rappin-source` and `x-yapin-test-servers-only`. Their response
-schemas deliberately remain open objects until upstream publishes full schemas.
+The API reference and bundled upstream OpenAPI 1.2 specification now contain
+these endpoints and their response schemas. `docs/guide-api.json` is retained as
+an empty compatibility record; schema discovery uses the authoritative upstream
+specification directly. Availability restrictions still apply.
 
 ## Rust client
 

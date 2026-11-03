@@ -26,9 +26,11 @@ impl Event {
     /// Attempts to parse the inner `data` JSON into a strongly typed `EventData`.
     ///
     /// If an event kind is unknown or its data schema cannot be deserialized,
-    /// this gracefully falls back to [`EventData::Unknown`] rather than dropping the event loop.
+    /// most legacy event types fall back to [`EventData::Unknown`]. Typed DM
+    /// decoding rejects malformed or inconsistent server scope explicitly.
     pub fn parse_data(&self) -> Result<EventData, serde_json::Error> {
         match self.kind.as_str() {
+            "dm_message" => serde_json::from_value(self.data.clone()).map(EventData::DmMessage),
             "message" => match serde::Deserialize::deserialize(&self.data) {
                 Ok(msg) => Ok(EventData::Message(msg)),
                 Err(e) => {
@@ -164,8 +166,10 @@ pub struct EventsResponse {
 /// Strongly typed event data variants.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
+#[non_exhaustive]
 pub enum EventData {
     Message(MessageEvent),
+    DmMessage(DmMessageEvent),
     Interaction(InteractionEvent),
     MemberJoin(MemberJoinEvent),
     MemberLeave(MemberLeaveEvent),
@@ -182,9 +186,64 @@ pub enum EventData {
     },
 }
 
+/// Typed DM delivery, with no server command interpretation.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(transparent)]
+#[non_exhaustive]
+pub struct DmMessageEvent(pub MessageEvent);
+impl<'de> Deserialize<'de> for DmMessageEvent {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let mut m = MessageEvent::deserialize(d)?;
+        if m.server_id.is_some() {
+            return Err(serde::de::Error::custom(
+                "DM event cannot have server scope",
+            ));
+        }
+        m.dm = true;
+        m.is_dm = true;
+        m.dm_channel_id = Some(m.channel_id);
+        m.command = None;
+        m.args = None;
+        m.command_for = None;
+        Ok(Self(m))
+    }
+}
+impl std::ops::Deref for DmMessageEvent {
+    type Target = MessageEvent;
+    fn deref(&self) -> &MessageEvent {
+        &self.0
+    }
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct MessageAttachment {
+    pub path: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+    #[serde(default)]
+    pub voice_secs: Option<u32>,
+}
+
 /// Data payload for `message` events.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MessageEvent {
+    #[serde(default)]
+    pub author_name: Option<String>,
+    #[serde(default)]
+    pub attachments: Vec<MessageAttachment>,
+    #[serde(default)]
+    pub dm: bool,
+    #[serde(default)]
+    pub is_dm: bool,
+    #[serde(default)]
+    pub dm_channel_id: Option<Uuid>,
     pub id: Uuid,
     pub channel_id: Uuid,
     #[serde(default)]
@@ -294,7 +353,14 @@ pub struct MemberLeaveEvent {
 
 /// Data payload for `reaction_add` and `reaction_remove` events.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ReactionEvent {
+    #[serde(default)]
+    pub dm: bool,
+    #[serde(default)]
+    pub is_dm: bool,
+    #[serde(default)]
+    pub dm_channel_id: Option<Uuid>,
     pub channel_id: Uuid,
     pub message_id: Uuid,
     pub user_id: Uuid,

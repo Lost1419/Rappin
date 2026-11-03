@@ -563,23 +563,37 @@ impl Generation {
                             None => Ok(()),
                         };
                     }
-                    Wire::Api { method, path, body } => {
+                    request @ (Wire::Api { .. } | Wire::Public { .. } | Wire::Upload { .. }) => {
                         calls += 1;
                         if calls > 128 {
                             return Err(YappinError::Config(
                                 "worker exceeded 128 API requests per event".into(),
                             ));
                         }
-                        let response = match reqwest::Method::from_bytes(method.as_bytes()) {
-                            Ok(method) => {
-                                client
-                                    .request_json::<Value, Value>(method, &path, body.as_ref())
-                                    .await
+                        let response = match request {
+                            Wire::Api { method, path, body } => {
+                                match reqwest::Method::from_bytes(method.as_bytes()) {
+                                    Ok(method) => {
+                                        client
+                                            .request_json::<Value, Value>(
+                                                method,
+                                                &path,
+                                                body.as_ref(),
+                                            )
+                                            .await
+                                    }
+                                    Err(_) => Err(YappinError::validation(
+                                        "method",
+                                        "invalid worker API method",
+                                    )),
+                                }
                             }
-                            Err(_) => Err(YappinError::validation(
-                                "method",
-                                "invalid worker API method",
-                            )),
+                            Wire::Public { path } => client.public_json(&path).await,
+                            Wire::Upload { path, body, files } => {
+                                let files = protocol::read_upload(&mut io.output, files).await?;
+                                client.request_upload(&path, body, &files).await
+                            }
+                            _ => unreachable!(),
                         };
                         let message = match response {
                             Ok(value) => Wire::ApiResult {
@@ -770,6 +784,40 @@ impl Cog for ProcessCog {
             })
             .collect()
     }
+    async fn on_reaction_add(&self, client: &Client, event: &crate::ReactionEvent) -> Result<()> {
+        self.listen_result(
+            Listener::ReactionAdd,
+            CogEvent::ReactionAdd {
+                event: event.clone(),
+            },
+            client,
+        )
+        .await
+    }
+    async fn on_reaction_remove(
+        &self,
+        client: &Client,
+        event: &crate::ReactionEvent,
+    ) -> Result<()> {
+        self.listen_result(
+            Listener::ReactionRemove,
+            CogEvent::ReactionRemove {
+                event: event.clone(),
+            },
+            client,
+        )
+        .await
+    }
+    async fn on_dm(&self, ctx: &MessageContext) -> Result<()> {
+        self.listen_result(
+            Listener::DmMessage,
+            CogEvent::DmMessage {
+                message: ctx.event.clone(),
+            },
+            &ctx.client,
+        )
+        .await
+    }
     async fn on_message(&self, ctx: &MessageContext) {
         self.listen(
             Listener::Message,
@@ -859,6 +907,13 @@ impl ProcessCog {
                 })
             })
             .collect()
+    }
+    async fn listen_result(&self, kind: Listener, event: CogEvent, client: &Client) -> Result<()> {
+        if self.generation.manifest.listeners.contains(&kind) {
+            self.generation.invoke(event, client).await
+        } else {
+            Ok(())
+        }
     }
     async fn listen(&self, kind: Listener, event: CogEvent, client: &Client) {
         if self.generation.manifest.listeners.contains(&kind) {

@@ -22,13 +22,21 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
             "maximum inline arguments are 128 KiB",
         ));
     }
-    validate_schema(&entry.input_schema(), args).map_err(|error| match error {
+    let mut args = args.clone();
+    if matches!(
+        entry.name,
+        "send_message" | "edit_message" | "send_files" | "post_bot_webhook"
+    ) {
+        if let Some(body) = args.get_mut("body") {
+            crate::utils::strip_proxy_metadata(body);
+        }
+    }
+    validate_schema(&entry.input_schema(), &args).map_err(|error| match error {
         YappinError::Validation { field, message } => {
             YappinError::validation(field.strip_prefix("arguments.").unwrap_or(&field), message)
         }
         other => other,
     })?;
-    let mut args = args.clone();
     let mut writes = vec![];
     match entry.name {
         "send_message" => {
@@ -110,6 +118,33 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
             body.validate()?;
             args["body"] = serde_json::to_value(body)?;
         }
+        "send_files" => {
+            platform::files(&args["files"])?;
+            let body: CreateMessage =
+                serde_json::from_value(args.get("body").cloned().unwrap_or_else(|| json!({})))?;
+            crate::validation::validate_message(&serde_json::to_value(&body)?, false)?;
+            args["body"] = serde_json::to_value(body)?;
+            writes.push(args["body"].clone());
+        }
+        "create_emoji" => {
+            let body: crate::CreateEmoji = serde_json::from_value(args["body"].clone())?;
+            body.validate()?;
+            args["body"] = serde_json::to_value(body)?;
+        }
+        "edit_emoji" => {
+            crate::validate_emoji_name(args["body"]["name"].as_str().unwrap_or_default())?;
+        }
+        "create_bot_webhook" => {
+            let body: crate::CreateBotWebhook = serde_json::from_value(args["body"].clone())?;
+            body.validate()?;
+            args["body"] = serde_json::to_value(body)?;
+        }
+        "post_bot_webhook" => {
+            let body: crate::webhook::WebhookMessage =
+                serde_json::from_value(args["body"].clone())?;
+            crate::validation::validate_webhook(&serde_json::to_value(&body)?)?;
+            args["body"] = serde_json::to_value(body)?;
+        }
         "get_schema" => {
             if args.get("name").is_some()
                 && (args.get("path").is_some() || args.get("method").is_some())
@@ -167,6 +202,8 @@ pub(super) fn collection_key(name: &str) -> Option<&'static str> {
         "list_members" => Some("members"),
         "read_messages" => Some("messages"),
         "search_channels" | "search_members" => Some("matches"),
+        "list_emojis" => Some("emojis"),
+        "list_channel_webhooks" | "list_bot_webhooks" => Some("webhooks"),
         "list_roles" => Some("roles"),
         "list_invites" => Some("invites"),
         "list_server_events" => Some("events"),

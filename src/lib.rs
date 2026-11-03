@@ -205,3 +205,6 @@ pub mod capability_bindings_guide {}
 
 #[doc = include_str!("../docs/handler-failures.md")]
 pub mod handler_failures_guide {}
+
+#[doc = include_str!("../docs/api-1.2.md")]
+pub mod api_1_2_guide {}

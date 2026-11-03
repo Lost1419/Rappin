@@ -19,7 +19,7 @@ already implement it; `WorkerContext` requires the existing `hot-reload` feature
 
 | API | Contract |
 |---|---|
-| `catalogue() -> &'static [Capability]` | Shared 44-operation inventory used by CLI/MCP |
+| `catalogue() -> &'static [Capability]` | Shared 56-operation inventory used by CLI/MCP |
 | `capability(name) -> Option<&'static Capability>` | Exact operation lookup |
 | `filtered_catalogue(&CapabilityFilter)` | Select by names, domains, write/read, library support and test-server restriction |
 | `CapabilityFilter::validate(name, &Value)` | Enforce the selected inventory and validate a call |
@@ -79,7 +79,7 @@ async fn run_plan(api: &(impl Api + ?Sized), server: Uuid, requester: Uuid) -> R
 See [`examples/planner_bindings.rs`](https://github.com/Lost1419/Rappin/blob/main/examples/planner_bindings.rs) for an
 offline executable and a permanent-command installation helper. Run
 `cargo run --example planner_bindings` to print capabilities without credentials.
-The library can be used as `rappin-rs = { version = "0.1.16", default-features = false }`.
+The library can be used as `rappin-rs = { version = "0.1.17", default-features = false }`.
 
 ## Channel and category management
 

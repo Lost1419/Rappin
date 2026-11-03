@@ -53,12 +53,15 @@ impl EmbedField {
 
 /// Author details in an embed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct EmbedAuthor {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_icon_url: Option<String>,
 }
 
 impl EmbedAuthor {
@@ -67,6 +70,7 @@ impl EmbedAuthor {
             name: name.into(),
             url: None,
             icon_url: None,
+            proxy_icon_url: None,
         }
     }
 
@@ -83,10 +87,13 @@ impl EmbedAuthor {
 
 /// Footer details in an embed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct EmbedFooter {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_icon_url: Option<String>,
 }
 
 impl EmbedFooter {
@@ -94,6 +101,7 @@ impl EmbedFooter {
         Self {
             text: text.into(),
             icon_url: None,
+            proxy_icon_url: None,
         }
     }
 
@@ -105,13 +113,19 @@ impl EmbedFooter {
 
 /// Image or thumbnail asset in an embed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct EmbedMedia {
     pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_url: Option<String>,
 }
 
 impl EmbedMedia {
     pub fn new(url: impl Into<String>) -> Self {
-        Self { url: url.into() }
+        Self {
+            url: url.into(),
+            proxy_url: None,
+        }
     }
 }
 
@@ -211,5 +225,37 @@ impl<'de> Deserialize<'de> for EmbedColor {
             .map(|v| Self::Int(v as u32))
             .or_else(|| value.as_str().and_then(Self::from_hex));
         color.ok_or_else(|| serde::de::Error::custom("expected a 24-bit number or hex color"))
+    }
+}
+
+impl Embed {
+    pub(crate) fn has_proxy_metadata(&self) -> bool {
+        self.image.as_ref().is_some_and(|m| m.proxy_url.is_some())
+            || self
+                .thumbnail
+                .as_ref()
+                .is_some_and(|m| m.proxy_url.is_some())
+            || self
+                .author
+                .as_ref()
+                .is_some_and(|m| m.proxy_icon_url.is_some())
+            || self
+                .footer
+                .as_ref()
+                .is_some_and(|m| m.proxy_icon_url.is_some())
+    }
+    pub fn clear_proxy_metadata(&mut self) {
+        if let Some(m) = &mut self.image {
+            m.proxy_url = None;
+        }
+        if let Some(m) = &mut self.thumbnail {
+            m.proxy_url = None;
+        }
+        if let Some(a) = &mut self.author {
+            a.proxy_icon_url = None;
+        }
+        if let Some(f) = &mut self.footer {
+            f.proxy_icon_url = None;
+        }
     }
 }

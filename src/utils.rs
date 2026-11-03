@@ -54,6 +54,25 @@ where
     <Option<T> as serde::Deserialize>::deserialize(deserializer).map(Some)
 }
 
+/// Remove server-generated image proxy hints only from outbound typed payloads.
+pub(crate) fn strip_proxy_metadata(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            fields.remove("proxy_url");
+            fields.remove("proxy_icon_url");
+            for value in fields.values_mut() {
+                strip_proxy_metadata(value);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                strip_proxy_metadata(item);
+            }
+        }
+        _ => (),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

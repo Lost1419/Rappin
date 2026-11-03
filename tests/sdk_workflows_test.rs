@@ -337,7 +337,10 @@ async fn metrics_count_retries_failures_and_cancellation_during_advised_waits() 
         (503, vec![("Retry-After", "30")], "{}".into()),
     ])
     .await;
-    let client = Client::builder("fixture-secret").base_url(base).build();
+    let client = Client::builder("fixture-secret")
+        .base_url(base)
+        .max_retry_wait(Duration::from_secs(60))
+        .build();
     shared_call(&client).await.unwrap();
     assert!(shared_call(&client).await.unwrap_err().is_forbidden());
     let before = client.request_metrics();

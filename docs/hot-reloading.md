@@ -38,7 +38,7 @@ edition = "2021"
 default-run = "my-bot"
 
 [dependencies]
-rappin = { package = "rappin-rs", version = "0.1.16", features = ["hot-reload"] }
+rappin = { package = "rappin-rs", version = "0.1.17", features = ["hot-reload"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -257,3 +257,11 @@ metadata, `prompt_for_reply`, and `wait_for_event`. The parent registers prompt
 waiters before posting and owns the authenticated transport. See the
 [Rust workflow guide](rust-bots.md#hot-workers) for bounds, cancellation, and
 protocol compatibility. The worker example includes `roll` and `question`.
+
+### API 1.2 worker transport
+
+Protocol v4 adds public metadata reads, fixed 64 KiB upload chunks, DM listeners
+and reaction listeners. Total upload data stays bounded to 12 MiB; ordinary frames
+remain 1 MiB. New parents accept v1–v3 workers; rebuild both binaries when upgrading
+workers. DM and native cog reaction hooks return Result and leave failed processing
+uncommitted. See [API 1.2 workflows](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.2.md).

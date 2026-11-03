@@ -151,14 +151,12 @@ async fn developer_update_tools_preview_typed_payloads_and_reject_path_targets()
     )
     .await;
     let schema = mcp.recv().await;
-    assert_eq!(
-        data(&schema)["operation"]["x-yapin-test-servers-only"],
-        true
-    );
-    assert_eq!(
-        data(&schema)["operation"]["x-rappin-source"],
-        "https://www.yapin.gg/developers"
-    );
+    assert!(data(&schema)["operation"]["description"]
+        .as_str()
+        .unwrap()
+        .contains("In testing"));
+    assert!(data(&schema)["components"]["schemas"]["ServerEvent"].is_object());
+    assert!(data(&schema)["operation"]["x-rappin-source"].is_null());
     mcp.close().await;
 }
 
@@ -957,4 +955,85 @@ async fn cursor_locks_prevent_cross_process_mutation_and_release_on_close() {
     assert_eq!(std::fs::read_to_string(&cursor).unwrap(), "5");
     cleanup(&cursor);
     std::fs::remove_file(cfg).unwrap();
+}
+
+#[tokio::test]
+async fn api12_mcp_previews_inline_data_without_filesystem_access() {
+    let mut mcp = Mcp::new(None, None);
+    for (id, name, args) in [
+        (
+            1,
+            "create_emoji",
+            json!({"id":Uuid::nil(),"body":{"name":"party","image":"YQ=="},"dry_run":true}),
+        ),
+        (
+            2,
+            "send_files",
+            json!({"channel":Uuid::nil(),"files":[{"name":"a.txt","data":"YQ=="}],"dry_run":true}),
+        ),
+        (
+            3,
+            "create_bot_webhook",
+            json!({"channel":Uuid::nil(),"body":{"name":"Proxy"},"dry_run":true}),
+        ),
+        (
+            4,
+            "delete_bot_webhook",
+            json!({"channel":Uuid::nil(),"webhook":Uuid::from_u128(1),"dry_run":true}),
+        ),
+    ] {
+        mcp.call(id, name, args).await;
+        let result = mcp.recv().await;
+        assert_ne!(result["result"]["isError"], true, "{result}");
+        assert!(data(&result)["arguments"].is_object());
+        assert!(!data(&result).to_string().contains("YQ=="));
+    }
+    mcp.call(5,"send_files",json!({"channel":Uuid::nil(),"files":[{"path":"/private/config.toml","name":"a.txt","data":"YQ=="}],"dry_run":true})).await;
+    assert_eq!(mcp.recv().await["result"]["isError"], true);
+    mcp.call(6, "upload", json!({"file":"/private/config.toml"}))
+        .await;
+    assert_eq!(mcp.recv().await["result"]["isError"], true);
+    mcp.close().await;
+}
+
+#[tokio::test]
+async fn api12_cli_public_metadata_and_local_upload_preview_are_composable() {
+    let path = config();
+    let (base,mut requests,http)=mock(vec![response(200,json!({"api":"1.2.0","build":"fixture","sdk":{"js":"1.5.0","python":"1.5.0"},"packages":{"npm":"yapin","pypi":"yapin"}}))]).await;
+    let (ok, out) = cli(&path, Some(&base), &["platform", "get_api_version"]).await;
+    assert!(ok, "{out}");
+    assert_eq!(out["data"]["api"], "1.2.0");
+    assert!(!requests
+        .recv()
+        .await
+        .unwrap()
+        .to_lowercase()
+        .contains("authorization:"));
+    http.await.unwrap();
+    let file = temp("txt");
+    std::fs::write(&file, "operator file contents").unwrap();
+    let (ok, out) = cli(
+        &path,
+        None,
+        &[
+            "--dry-run",
+            "upload",
+            &Uuid::nil().to_string(),
+            file.to_str().unwrap(),
+        ],
+    )
+    .await;
+    assert!(ok, "{out}");
+    assert_eq!(out["data"]["files"][0]["size"], 22);
+    assert!(!out.to_string().contains("operator file contents"));
+    let (ok, out) = cli(
+        &path,
+        None,
+        &["--max-retry-wait", "-1", "doctor", "--offline"],
+    )
+    .await;
+    assert!(!ok);
+    assert!(out["error"].is_object());
+    cleanup(&file);
+    cleanup(&path);
 }

@@ -8,7 +8,8 @@ use crate::models::user::User;
 use crate::utils::{attachment_url, IS_COMPONENTS_V2};
 
 /// A channel message.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Message {
     /// Message ID.
     pub id: Uuid,
@@ -33,6 +34,10 @@ pub struct Message {
     /// Path to uploaded file/attachment on CDN.
     #[serde(default)]
     pub attachment_path: Option<String>,
+    #[serde(default)]
+    pub attachment_name: Option<String>,
+    #[serde(default)]
+    pub attachment_size: Option<u64>,
     /// Referenced message ID if this is a reply.
     #[serde(default)]
     pub reply_to_id: Option<Uuid>,
@@ -239,4 +244,42 @@ pub struct MessageDetailResponse {
     pub message: Message,
     #[serde(default)]
     pub author: Option<User>,
+}
+
+impl CreateMessage {
+    pub(crate) fn for_request(&self) -> std::borrow::Cow<'_, Self> {
+        if self
+            .embeds
+            .as_ref()
+            .is_some_and(|e| e.iter().any(Embed::has_proxy_metadata))
+        {
+            let mut copy = self.clone();
+            for e in copy.embeds.iter_mut().flatten() {
+                e.clear_proxy_metadata();
+            }
+            std::borrow::Cow::Owned(copy)
+        } else {
+            std::borrow::Cow::Borrowed(self)
+        }
+    }
+}
+impl EditMessage {
+    pub(crate) fn for_request(&self) -> std::borrow::Cow<'_, Self> {
+        if self
+            .embeds
+            .as_ref()
+            .and_then(Option::as_ref)
+            .is_some_and(|e| e.iter().any(Embed::has_proxy_metadata))
+        {
+            let mut copy = self.clone();
+            if let Some(Some(embeds)) = &mut copy.embeds {
+                for e in embeds {
+                    e.clear_proxy_metadata();
+                }
+            }
+            std::borrow::Cow::Owned(copy)
+        } else {
+            std::borrow::Cow::Borrowed(self)
+        }
+    }
 }

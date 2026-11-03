@@ -15,6 +15,21 @@ pub fn prepare(
         .find(|e| e.name == name)
         .ok_or_else(|| YappinError::validation("tool", "unknown tool"))?;
     entry.validate(args)?;
+    if entry.cli.first() == Some(&"platform") {
+        let mut parsed = Args::try_parse_from(["rappin", "platform", name])
+            .map_err(|_| YappinError::validation("arguments", "invalid platform operation"))?;
+        parsed.fields = args["fields"]
+            .as_str()
+            .map(|s| s.split(',').map(str::to_owned).collect())
+            .unwrap_or_default();
+        parsed.max_items = args["max_items"].as_u64().map(|n| n as u32);
+        parsed.max_bytes = args["max_bytes"].as_u64().map(|n| n as u32);
+        parsed.offset = args["offset"].as_u64().map(|n| n as u32);
+        let mut context = ctx.clone();
+        context.dry |= args["dry_run"] == true;
+        context.inline_body = Some(args.clone());
+        return Ok((parsed, context));
+    }
     let mut argv = vec!["rappin".to_owned()];
     argv.extend(entry.cli.iter().map(|s| (*s).to_owned()));
     for f in &entry.arguments {

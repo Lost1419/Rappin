@@ -131,6 +131,24 @@ pub trait Cog: Send + Sync + 'static {
 
     /// Optional message listener hook.
     async fn on_message(&self, _ctx: &MessageContext) {}
+    async fn on_reaction_add(
+        &self,
+        _client: &Client,
+        _event: &crate::ReactionEvent,
+    ) -> crate::Result<()> {
+        Ok(())
+    }
+    async fn on_reaction_remove(
+        &self,
+        _client: &Client,
+        _event: &crate::ReactionEvent,
+    ) -> crate::Result<()> {
+        Ok(())
+    }
+    /// Incoming DM; separate from server message/command dispatch.
+    async fn on_dm(&self, _ctx: &MessageContext) -> crate::Result<()> {
+        Ok(())
+    }
 
     /// Optional interaction listener hook.
     async fn on_interaction(&self, _ctx: &InteractionContext) {}

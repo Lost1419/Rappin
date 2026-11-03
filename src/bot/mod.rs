@@ -631,6 +631,7 @@ pub struct BotBuilder {
     lookup_policy: crate::cache::CachePolicy,
     lookup_backend: Option<Arc<dyn crate::cache::LookupCache>>,
     api_fallback: bool,
+    max_retry_wait: Duration,
     #[cfg(feature = "gateway")]
     gateway_url: Option<String>,
 }
@@ -664,6 +665,7 @@ impl BotBuilder {
             lookup_policy: crate::cache::CachePolicy::default(),
             lookup_backend: None,
             api_fallback: true,
+            max_retry_wait: Duration::from_secs(30),
             #[cfg(feature = "gateway")]
             gateway_url: None,
         }
@@ -995,13 +997,20 @@ impl BotBuilder {
             .transport_mode(crate::diagnostics::TransportMode::GatewayOnly)
     }
 
+    /// Total server-advised rate-limit waiting per API request, default 30 seconds.
+    pub fn max_retry_wait(mut self, budget: Duration) -> Self {
+        self.max_retry_wait = budget;
+        self
+    }
+
     /// Builds the configured [`Bot`].
     pub fn build(mut self) -> Bot {
         prepare_prefixes(&mut self.prefixes);
         let mut client = Client::builder(self.token)
             .base_url(self.base_url)
             .lookup_cache(self.lookup_policy)
-            .api_fallback(self.api_fallback);
+            .api_fallback(self.api_fallback)
+            .max_retry_wait(self.max_retry_wait);
         if let Some(backend) = self.lookup_backend {
             client = client.lookup_cache_backend(backend);
         }
@@ -1239,6 +1248,34 @@ impl Bot {
 
         match parsed {
             EventData::Message(msg) => self.handle_message(msg, me, event.id).await?,
+            EventData::DmMessage(message) => {
+                let message = message.0;
+                if self.handle.inner.ignore_bots && message.author_bot == Some(true) {
+                    return Ok(());
+                }
+                let ctx = MessageContext::new(
+                    self.handle.inner.client.clone(),
+                    message,
+                    None,
+                    String::new(),
+                    Some(self.handle.clone()),
+                );
+                if let Some(handler) = &self.handle.inner.event_handler {
+                    handler.on_dm(&ctx).await?;
+                }
+                let cogs: Vec<_> = self
+                    .handle
+                    .inner
+                    .cogs
+                    .read()
+                    .await
+                    .values()
+                    .cloned()
+                    .collect();
+                for cog in cogs {
+                    cog.on_dm(&ctx).await?;
+                }
+            }
             EventData::Interaction(inter) => self.handle_interaction(inter, event.id).await?,
             EventData::MemberJoin(ev) => {
                 if let Some(ref h) = self.handle.inner.event_handler {
@@ -1278,10 +1315,34 @@ impl Bot {
                 if let Some(ref h) = self.handle.inner.event_handler {
                     h.on_reaction_add(self.handle.client(), &ev).await;
                 }
+                let cogs: Vec<_> = self
+                    .handle
+                    .inner
+                    .cogs
+                    .read()
+                    .await
+                    .values()
+                    .cloned()
+                    .collect();
+                for cog in cogs {
+                    cog.on_reaction_add(self.handle.client(), &ev).await?;
+                }
             }
             EventData::ReactionRemove(ev) => {
                 if let Some(ref h) = self.handle.inner.event_handler {
                     h.on_reaction_remove(self.handle.client(), &ev).await;
+                }
+                let cogs: Vec<_> = self
+                    .handle
+                    .inner
+                    .cogs
+                    .read()
+                    .await
+                    .values()
+                    .cloned()
+                    .collect();
+                for cog in cogs {
+                    cog.on_reaction_remove(self.handle.client(), &ev).await?;
                 }
             }
             EventData::VoiceJoin(ev) => {

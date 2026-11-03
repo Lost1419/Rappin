@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.17 — 2026-11-02
+
+- Add multipart message uploads over Client/ApiExt, native contexts and worker proxies. Validate four-file/10 MiB-per-file/12 MiB-total limits; retain every confirmed message and turn partial 201 responses or missing per-file confirmations into PartialWrite receipts. Files cross workers in bounded 64 KiB chunks.
+- Add custom emoji CRUD with moderation-pending results, bot-authenticated webhook management/posting, public version/changelog reads and API/build response-header observations. Refresh the upstream OpenAPI to 1.2.0 and replace the guide-only schema supplement with the upstream definitions.
+- Dispatch typed DMs separately from server commands; retain attachment and DM reaction metadata. Fallible DM and cog reaction hooks propagate failures to ordered checkpoints. Worker protocol v4 carries the new events, public reads and upload transfers.
+- Add 12 shared Rust/CLI/MCP operations (56 total), scoped emoji/webhook references, independent requester/bot checks, operator-only filesystem uploads and bounded inline MCP data. Public discovery needs no token.
+- Bound total advised/shared rate-limit waits to a configurable 30 seconds; retain status and Retry-After when the budget cannot fit. Bot-webhook sends participate in global message waits. Preserve image proxy metadata in responses while stripping it from typed outbound payloads.
+- Avoid whole-spec copies for focused schema discovery, per-template route allocations, unused request-notification clones and upload-buffer copies on retries.
+
+This is the one-time compatibility transition described in README. Changed response types and event/error/capability enums are extensible; update old struct literals/exhaustive matches and rebuild parents/workers together. Future compatible updates preserve the public API and defaults; later breaking changes require a new Cargo compatibility line.
+
 ## 0.1.16 — 2026-11-01
 
 - Return `HotReloadFailure` for failed worker candidates, with compilation/startup/protocol/registration/publication phases, bounded compiler codes/messages/spans, observed exit status, timeout and candidate/publication state. Preserve reports in remote errors, failure callbacks and watcher status.

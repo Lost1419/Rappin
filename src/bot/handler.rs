@@ -18,6 +18,10 @@ pub trait EventHandler: Send + Sync + 'static {
 
     /// Fired on any incoming message that wasn't skipped (e.g. by bot filters).
     async fn on_message(&self, _ctx: &MessageContext) {}
+    /// Incoming DM; separate from server message/command dispatch.
+    async fn on_dm(&self, _ctx: &MessageContext) -> crate::Result<()> {
+        Ok(())
+    }
 
     /// Fired when an interaction (such as a button click) occurs.
     async fn on_interaction(&self, _ctx: &InteractionContext) {}

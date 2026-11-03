@@ -274,6 +274,20 @@ fn build_catalog() -> Vec<Capability> {
             collection: false,
         },
     ]);
+    entries.extend([
+        Entry{name:"get_api_version",description:"Read public API build and SDK versions",cli:&["platform","get_api_version"],fields:vec![],write:false,destructive:false,collection:false},
+        Entry{name:"get_api_changelog",description:"Read public API changelog",cli:&["platform","get_api_changelog"],fields:vec![number("limit","--limit",1,50)],write:false,destructive:false,collection:false},
+        Entry{name:"list_emojis",description:"List server custom emojis and capacity",cli:&["platform","list_emojis"],fields:vec![id("id",None,true)],write:false,destructive:false,collection:true},
+        Entry{name:"create_emoji",description:"Create a checked emoji; pending moderation is not a failure",cli:&["platform","create_emoji"],fields:vec![id("id",None,true),body()],write:true,destructive:false,collection:false},
+        Entry{name:"edit_emoji",description:"Rename a server emoji",cli:&["platform","edit_emoji"],fields:vec![id("id",None,true),id("emoji",None,true),body()],write:true,destructive:true,collection:false},
+        Entry{name:"delete_emoji",description:"Delete a server emoji",cli:&["platform","delete_emoji"],fields:vec![id("id",None,true),id("emoji",None,true)],write:true,destructive:true,collection:false},
+        Entry{name:"list_channel_webhooks",description:"List channel webhooks without tokens",cli:&["platform","list_channel_webhooks"],fields:vec![id("channel",None,true)],write:false,destructive:false,collection:true},
+        Entry{name:"list_bot_webhooks",description:"List bot-owned webhooks; library bindings filter to their server",cli:&["platform","list_bot_webhooks"],fields:vec![],write:false,destructive:false,collection:true},
+        Entry{name:"create_bot_webhook",description:"Create a bot-owned webhook in a channel",cli:&["platform","create_bot_webhook"],fields:vec![id("channel",None,true),body()],write:true,destructive:false,collection:false},
+        Entry{name:"delete_bot_webhook",description:"Delete a bot-owned webhook in its verified channel",cli:&["platform","delete_bot_webhook"],fields:vec![id("channel",None,true),id("webhook",None,true)],write:true,destructive:true,collection:false},
+        Entry{name:"post_bot_webhook",description:"Post with bot-owned webhook identity and allowed mentions",cli:&["platform","post_bot_webhook"],fields:vec![id("channel",None,true),id("webhook",None,true),body()],write:true,destructive:false,collection:false},
+        Entry{name:"send_files",description:"Send inline base64 attachments; preserves partial-write receipts; max 128 KiB inline arguments",cli:&["platform","send_files"],fields:vec![id("channel",None,true),field("body",None,json!({"type":"object"}),false),field("files",None,json!({"type":"array","minItems":1,"maxItems":4,"items":{"type":"object","required":["name","data"],"additionalProperties":false,"properties":{"name":{"type":"string","maxLength":255},"data":{"type":"string","contentEncoding":"base64","maxLength":13981016}}}}),true)],write:true,destructive:false,collection:false},
+    ]);
     for entry in &mut entries {
         if entry.name == "send_message" {
             entry.fields.push(field("split",Some("--split"),json!({"type":"boolean","description":"Split plain text into separate messages; errors report completed steps"}),false));
