@@ -32,6 +32,9 @@ impl RemoteError {
             None
         }
     }
+    pub fn availability_failure(&self) -> Option<crate::AvailabilityFailure> {
+        serde_json::from_value(self.details.get("availability")?.clone()).ok()
+    }
     pub fn to_json(&self) -> serde_json::Value {
         let mut value = serde_json::Value::Object(self.details.clone().into_iter().collect());
         value["kind"] = self.kind.clone().into();
@@ -147,6 +150,16 @@ pub enum YappinError {
 }
 
 impl YappinError {
+    pub fn availability_failure(&self) -> Option<crate::AvailabilityFailure> {
+        match self {
+            Self::Remote(error) => error.availability_failure(),
+            Self::EventProcessing { report } => report.primary()?.availability_failure(),
+            Self::FailureHandling { source, .. } | Self::PartialWrite { source, .. } => {
+                source.availability_failure()
+            }
+            _ => None,
+        }
+    }
     /// Returns the HTTP status code associated with this error, if available.
     pub fn status_code(&self) -> Option<u16> {
         match self {

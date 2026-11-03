@@ -12,6 +12,42 @@ use crate::error::{Result, YappinError};
 use crate::models::*;
 use crate::utils::DEFAULT_API_BASE;
 
+tokio::task_local! { static SINGLE_ATTEMPT: (); static SINGLE_ATTEMPT_STATUS: std::cell::Cell<Option<u16>>; }
+tokio::task_local! { static READ_WAIT_BUDGET: ReadWaitBudget; }
+/// Shared only by the attempts of one availability read, never by handlers.
+#[derive(Clone)]
+pub(crate) struct ReadWaitBudget {
+    limit: Duration,
+    remaining: Arc<std::sync::Mutex<Duration>>,
+}
+impl ReadWaitBudget {
+    pub(crate) fn remaining(&self) -> Duration {
+        *self.remaining.lock().expect("read wait budget")
+    }
+    pub(crate) fn exceeded(&self, source: YappinError) -> YappinError {
+        YappinError::RetryWaitExceeded {
+            waited: self.limit.saturating_sub(self.remaining()),
+            budget: self.limit,
+            source: Box::new(source),
+        }
+    }
+    pub(crate) fn charge(&self, delay: Duration) {
+        let mut remaining = self.remaining.lock().expect("read wait budget");
+        *remaining = remaining.saturating_sub(delay);
+    }
+    pub(crate) async fn read<F: std::future::Future>(&self, future: F) -> F::Output {
+        READ_WAIT_BUDGET
+            .scope(self.clone(), single_attempt(future))
+            .await
+    }
+}
+pub(crate) async fn single_attempt<F: std::future::Future>(future: F) -> F::Output {
+    SINGLE_ATTEMPT.scope((), future).await
+}
+pub(crate) fn single_attempt_active() -> bool {
+    SINGLE_ATTEMPT.try_with(|()| ()).is_ok()
+}
+
 mod platform;
 mod server_features;
 
@@ -147,6 +183,45 @@ pub struct Client {
 }
 
 impl Client {
+    pub(crate) fn read_wait_budget(&self) -> ReadWaitBudget {
+        ReadWaitBudget {
+            limit: self.inner.max_retry_wait,
+            remaining: Arc::new(std::sync::Mutex::new(self.inner.max_retry_wait)),
+        }
+    }
+    pub(crate) async fn request_json_once(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let mutation = !matches!(method, Method::GET | Method::HEAD);
+        SINGLE_ATTEMPT_STATUS
+            .scope(std::cell::Cell::new(None), async {
+                let result = single_attempt(self.request_json(method, path, body.as_ref())).await;
+                let status = SINGLE_ATTEMPT_STATUS.with(std::cell::Cell::get);
+                result.map_err(|error| {
+                    if mutation
+                        && status.is_some()
+                        && matches!(error, YappinError::Json(_) | YappinError::Http(_))
+                    {
+                        let source = self.redact_credentials(error.to_json());
+                        let mut cause: crate::RemoteError =
+                            serde_json::from_value(source.clone()).expect("structured cause");
+                        cause.status = status;
+                        cause.details.insert("source".into(), source);
+                        cause.details.insert("outcome".into(), "unknown".into());
+                        cause
+                            .details
+                            .insert("retry_safety".into(), "do_not_replay_workflow".into());
+                        cause.into()
+                    } else {
+                        error
+                    }
+                })
+            })
+            .await
+    }
     /// Creates a new `Client` with default settings and the given bot token.
     ///
     /// # Example
@@ -345,7 +420,11 @@ impl Client {
         F: FnMut(url::Url) -> Fut,
         Fut: std::future::Future<Output = std::result::Result<Response, reqwest::Error>>,
     {
-        let mut retries = self.inner.max_retries;
+        let mut retries = if single_attempt_active() {
+            0
+        } else {
+            self.inner.max_retries
+        };
         let started = tokio::time::Instant::now();
         let key = crate::rate_limits::key(method, path);
         let is_message = crate::rate_limits::message_send(method, path);
@@ -360,6 +439,9 @@ impl Client {
         loop {
             let waiting_metric = telemetry.waiting();
             let remaining = self.inner.max_retry_wait.saturating_sub(wait);
+            let remaining = READ_WAIT_BUDGET
+                .try_with(|budget| budget.remaining().min(remaining))
+                .unwrap_or(remaining);
             let waited =
                 match tokio::time::timeout(remaining, self.inner.rate_limits.wait(key, is_message))
                     .await
@@ -367,6 +449,7 @@ impl Client {
                     Ok(waited) => waited,
                     Err(_) => {
                         wait += remaining;
+                        let _ = READ_WAIT_BUDGET.try_with(|budget| budget.charge(remaining));
                         let source = match last_advice.take() {
                             Some(error) => error,
                             None => YappinError::RateLimited {
@@ -378,21 +461,25 @@ impl Client {
                                     .as_secs_f64(),
                             },
                         };
-                        return Err(YappinError::RetryWaitExceeded {
+                        let error = READ_WAIT_BUDGET
+                            .try_with(|budget| budget.exceeded(source.to_remote().into()));
+                        return Err(error.unwrap_or_else(|_| YappinError::RetryWaitExceeded {
                             waited: wait,
                             budget: self.inner.max_retry_wait,
                             source: Box::new(source),
-                        });
+                        }));
                     }
                 };
             waiting_metric.finish(waited);
             wait += waited;
+            let _ = READ_WAIT_BUDGET.try_with(|budget| budget.charge(waited));
             let url = crate::security::api_url(&base, path)?;
             telemetry.attempt(attempts > 0);
             attempts += 1;
             let attempt_started = tokio::time::Instant::now();
             let res = operation(url).await;
             let status = res.as_ref().ok().map(|res| res.status().as_u16());
+            let _ = SINGLE_ATTEMPT_STATUS.try_with(|observed| observed.set(status));
             let label = if matches!(
                 method.as_str(),
                 "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"

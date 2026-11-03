@@ -581,7 +581,10 @@ impl Generation {
                             None => Ok(disposition.unwrap_or(crate::MessageDisposition::Continue)),
                         };
                     }
-                    request @ (Wire::Api { .. } | Wire::Public { .. } | Wire::Upload { .. }) => {
+                    request @ (Wire::Api { .. }
+                    | Wire::ApiOnce { .. }
+                    | Wire::Public { .. }
+                    | Wire::Upload { .. }) => {
                         calls += 1;
                         if calls > 128 {
                             return Err(YappinError::Config(
@@ -599,6 +602,17 @@ impl Generation {
                                                 body.as_ref(),
                                             )
                                             .await
+                                    }
+                                    Err(_) => Err(YappinError::validation(
+                                        "method",
+                                        "invalid worker API method",
+                                    )),
+                                }
+                            }
+                            Wire::ApiOnce { method, path, body } => {
+                                match reqwest::Method::from_bytes(method.as_bytes()) {
+                                    Ok(method) => {
+                                        crate::Api::request_once(client, method, &path, body).await
                                     }
                                     Err(_) => Err(YappinError::validation(
                                         "method",

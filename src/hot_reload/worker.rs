@@ -24,6 +24,7 @@ struct Connection {
     input: BufReader<Stdin>,
     output: Stdout,
     poisoned: bool,
+    allow_single_attempt: bool,
 }
 
 /// Rust handler context inside a worker. Authenticated JSON API requests go through the parent.
@@ -136,6 +137,21 @@ impl WorkerContext {
         self.event.channel_id()
     }
     /// JSON-only API access; paths are checked by the parent Client. No bot token is exposed.
+    pub async fn api_once(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
+        self.ensure_active()?;
+        if !self.connection.lock().await.allow_single_attempt {
+            return Err(YappinError::validation(
+                "request_once",
+                "worker requires WorkerCog::single_attempt_api() and a protocol v6 parent",
+            ));
+        }
+        self.proxy(Wire::ApiOnce {
+            method: method.into(),
+            path: path.into(),
+            body,
+        })
+        .await
+    }
     pub async fn api(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
         self.proxy(Wire::Api {
             method: method.into(),
@@ -331,6 +347,7 @@ pub struct WorkerCog {
     commands: HashMap<String, Handler>,
     buttons: HashMap<String, Handler>,
     listeners: HashMap<Listener, Handler>,
+    single_attempt_api: bool,
 }
 impl WorkerCog {
     pub fn command_typed<A, F, Fut>(
@@ -373,6 +390,7 @@ impl WorkerCog {
             commands: HashMap::new(),
             buttons: HashMap::new(),
             listeners: HashMap::new(),
+            single_attempt_api: false,
         }
     }
     /// Runtime argument schemas on workers use the same parser as native commands.
@@ -477,20 +495,28 @@ impl WorkerCog {
         );
         self
     }
+    /// Require parent protocol v6 before starting handlers that use request_once.
+    pub fn single_attempt_api(mut self) -> Self {
+        self.single_attempt_api = true;
+        self
+    }
     pub async fn run(self) -> Result<()> {
         self.manifest.validate()?;
         let connection = Arc::new(Mutex::new(Connection {
             input: BufReader::new(tokio::io::stdin()),
             output: tokio::io::stdout(),
             poisoned: false,
+            allow_single_attempt: self.single_attempt_api,
         }));
         protocol::write(
             &mut connection.lock().await.output,
             &Wire::Ready {
                 // Existing handlers retain protocol v4 compatibility. Opting into
                 // message outcomes requires a parent that understands protocol v5.
-                protocol: if self.manifest.listeners.contains(&Listener::ServerMessage) {
+                protocol: if self.single_attempt_api {
                     protocol::VERSION
+                } else if self.manifest.listeners.contains(&Listener::ServerMessage) {
+                    5
                 } else {
                     4
                 },

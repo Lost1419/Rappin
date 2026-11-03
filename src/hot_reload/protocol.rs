@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub(super) const VERSION: u32 = 5;
+pub(super) const VERSION: u32 = 6;
 const MAX_FRAME: u64 = 1024 * 1024;
 
 /// Optional listeners implemented by a worker in addition to commands and buttons.
@@ -196,6 +196,11 @@ pub(super) struct UploadDescriptor {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(super) enum Wire {
+    ApiOnce {
+        method: String,
+        path: String,
+        body: Option<Value>,
+    },
     Public {
         path: String,
     },

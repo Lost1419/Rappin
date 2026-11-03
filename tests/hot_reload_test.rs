@@ -1048,3 +1048,156 @@ async fn structured_candidate_failure_crosses_worker_and_callback_without_implic
     assert_eq!(*observed.lock().unwrap(), Some(failure));
     reload.unload().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn worker_role_policy_preserves_independent_checks_and_single_attempt_outcomes() {
+    let project = Project::new().await;
+    let manifest = format!("[package]\nname=\"role-policy-worker\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[workspace]\n[dependencies]\nrappin-rs={{path={:?},features=[\"hot-reload\"]}}\ntokio={{version=\"1\",features=[\"macros\",\"rt-multi-thread\"]}}\nserde_json=\"1\"\nuuid=\"1\"\n", env!("CARGO_MANIFEST_DIR"));
+    tokio::fs::write(project.0.join("Cargo.toml"), manifest)
+        .await
+        .unwrap();
+    #[cfg(unix)]
+    {
+        tokio::fs::create_dir_all(project.0.join("target"))
+            .await
+            .unwrap();
+        let cache = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/rappin-hot");
+        tokio::fs::create_dir_all(&cache).await.unwrap();
+        std::os::unix::fs::symlink(cache, project.0.join("target/rappin-hot")).unwrap();
+    }
+    let source = r#"
+use rappin::{*,capabilities::*};
+use serde_json::json;
+use uuid::Uuid;
+#[tokio::main]
+async fn main()->Result<()> {
+    WorkerCog::new("role-fixture").single_attempt_api()
+        .command("delete", "Delete", |ctx| async move {
+            let target=match ctx.args() { "protected"=>11,"missing"=>12,_=>10 };
+            let operation=capability("delete_role").unwrap().validate(&json!({"id":Uuid::nil(),"role":Uuid::from_u128(target)}))?;
+            let context=OperationContext::server(Uuid::nil(),Uuid::nil()).test_server_access(true);
+            let policy=RoleHierarchyPolicy::new(&ctx).owner_admin_strict();
+            let error=policy.execute_deletion(&operation,&context).await.unwrap_err();
+            if target==10 {assert_eq!(error.to_json()["retry_safety"],"do_not_replay_workflow");}
+            else {assert_eq!(error.to_json()["kind"],"operation_authorization");}
+            Err(error)
+        }).run().await
+}
+"#;
+    tokio::fs::write(project.0.join("src/main.rs"), source)
+        .await
+        .unwrap();
+    let requester = uuid::Uuid::nil();
+    let bot_id = me().id;
+    let roles = json!({"roles":[
+        {"id":uuid::Uuid::from_u128(10),"name":"target","position":1,"auto":null,"perms":{}},
+        {"id":uuid::Uuid::from_u128(11),"name":"protected","position":1,"auto":"everyone","perms":{}},
+        {"id":uuid::Uuid::from_u128(12),"name":"missing","position":1,"perms":{}},
+        {"id":uuid::Uuid::from_u128(20),"name":"requester","position":2,"auto":null,"perms":{"manage_roles":true}},
+        {"id":uuid::Uuid::from_u128(30),"name":"bot","position":3,"auto":null,"perms":{"manage_roles":true}}
+    ]});
+    // One worker binary covers successful authorization followed by uncertain and
+    // server-advised failures. No retry may occur in either process.
+    let (base, mut requests, http) = support::routed_mock(vec![
+        ("GET /me".into(), vec![support::response(200, support::profile()); 20]),
+        (format!("GET /servers/{requester}"), vec![support::response(200,json!({"server":{"id":requester,"name":"test","owner_id":uuid::Uuid::from_u128(99)}})); 20]),
+        (format!("GET /servers/{requester}/roles"), vec![support::response(200, roles); 30]),
+        (format!("GET /servers/{requester}/members/{requester}"),vec![support::response(200,json!({"member":{"id":requester,"username":"requester","roles":[uuid::Uuid::from_u128(20)]}})); 20]),
+        (format!("GET /servers/{requester}/members/{bot_id}"),vec![support::response(200,json!({"member":{"id":bot_id,"username":"bot","roles":[uuid::Uuid::from_u128(30)]}})); 20]),
+        (format!("DELETE /servers/{requester}/roles/{}",uuid::Uuid::from_u128(10)),vec![
+            support::response(502,json!({"error":"uncertain"})),
+            (503,vec![("Retry-After","0.001")],json!({"error":"busy"}).to_string()),
+        ]),
+    ]).await;
+    let callback = Arc::new(AtomicUsize::new(0));
+    let c = callback.clone();
+    let bot = Bot::builder("fixture")
+        .base_url(base)
+        .sync_commands(false)
+        .log(false)
+        .on_command_failure(move |_, failure| {
+            let c = c.clone();
+            async move {
+                let index = c.fetch_add(1, Ordering::SeqCst);
+                if index >= 2 {
+                    let value = failure.error.to_json();
+                    assert_eq!(value["kind"], "operation_authorization");
+                    assert_eq!(
+                        value["decision"],
+                        if index == 2 { "denied" } else { "unknown" }
+                    );
+                    assert_eq!(value["outcome"], "not_applied");
+                    return Ok(rappin::FailureDisposition::Handled);
+                }
+                assert_eq!(
+                    failure.error.status,
+                    Some(if index == 0 { 502 } else { 503 })
+                );
+                if index == 0 {
+                    assert_eq!(failure.error.to_json()["outcome"], "unknown");
+                } else {
+                    assert_eq!(failure.error.retry_after, Some(0.001));
+                }
+                assert_eq!(
+                    failure.error.to_json()["retry_safety"],
+                    "do_not_replay_workflow"
+                );
+                // Test application explicitly records the failure as completed. No
+                // mutation replay is implied by this callback disposition.
+                Ok(rappin::FailureDisposition::Handled)
+            }
+        })
+        .build();
+    bot.cache().set_me(me()).await;
+    let _reload = HotReload::load(
+        bot.handle(),
+        WorkerProject::new(project.0.join("Cargo.toml"), "role-policy-worker").offline(true),
+    )
+    .await
+    .unwrap();
+    for args in ["", "", "protected", "missing"] {
+        let mut invocation = event("delete");
+        invocation.data["server_id"] = json!(requester);
+        invocation.data["args"] = json!(args);
+        bot.process_event(invocation).await.unwrap();
+    }
+    assert_eq!(callback.load(Ordering::SeqCst), 4);
+    let seen: Vec<_> = std::iter::from_fn(|| requests.try_recv().ok()).collect();
+    assert_eq!(seen.iter().filter(|r| r.starts_with("DELETE ")).count(), 2);
+    assert!(seen
+        .iter()
+        .any(|r| r.starts_with(&format!("GET /servers/{requester}/members/{requester} "))));
+    assert!(seen
+        .iter()
+        .any(|r| r.starts_with(&format!("GET /servers/{requester}/members/{bot_id} "))));
+    http.abort();
+
+    // Omitting the protocol opt-in fails before any DELETE is sent.
+    // The opt-in check itself needs no network or token.
+    let legacy = r#"
+use rappin::*;
+#[tokio::main]
+async fn main()->Result<()> {
+    WorkerCog::new("role-fixture").command("no-once","Check opt-in",|ctx|async move {
+        let error=ctx.request_once("DELETE".parse().unwrap(),"/roles",None).await.unwrap_err();
+        assert!(error.to_string().contains("single_attempt_api"));Ok(())
+    }).run().await
+}
+"#;
+    tokio::fs::write(project.0.join("src/main.rs"), legacy)
+        .await
+        .unwrap();
+    let bot = Bot::builder("fixture")
+        .base_url("http://127.0.0.1:1")
+        .sync_commands(false)
+        .log(false)
+        .build();
+    bot.cache().set_me(me()).await;
+    let _reload = HotReload::load(
+        bot.handle(),
+        WorkerProject::new(project.0.join("Cargo.toml"), "role-policy-worker").offline(true),
+    )
+    .await
+    .unwrap();
+    bot.process_event(event("no-once")).await.unwrap();
+}

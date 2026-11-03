@@ -79,6 +79,8 @@ impl Bot {
         let max_age = self.handle.inner.max_age;
         let capacity = self.handle.inner.pending_batches;
         let auto_ack = self.handle.inner.auto_ack_after;
+        let availability = self.handle.inner.availability_policy.clone();
+        let availability_handle = self.handle.clone();
         let (sender, mut receiver) =
             mpsc::channel::<std::result::Result<PreparedBatch, IntakeFailure>>(capacity);
         #[cfg(feature = "gateway")]
@@ -122,20 +124,47 @@ impl Bot {
                     let Ok(permit) = sender.reserve().await else {
                         break;
                     };
-                    let response = async {
-                        #[cfg(feature = "gateway")]
-                        if let Some(gateway) = &mut gateway {
-                            return gateway.poll(received).await;
+                    let mut episode = availability.as_ref().map(|policy| {
+                        crate::availability::Episode::new(
+                            availability_handle.clone(),
+                            policy.clone(),
+                            crate::AvailabilityPhase::Intake,
+                        )
+                    });
+                    // Keep the read's reserved slot through recovery. Queue admission
+                    // waits are backpressure, not time spent in an availability outage.
+                    let response = loop {
+                        let read = async {
+                            #[cfg(feature = "gateway")]
+                            if let Some(gateway) = &mut gateway {
+                                return gateway.poll(received).await;
+                            }
+                            telemetry.update(|s| {
+                                s.active = Some(EventTransport::Polling);
+                                s.heartbeat_rtt = None;
+                            });
+                            client.get_events(Some(received), Some(25), max_age).await
+                        };
+                        let result = match &mut episode {
+                            Some(episode) => episode.attempt(read).await,
+                            None => read.await,
+                        };
+                        match result {
+                            Err(error) => match &mut episode {
+                                Some(episode) => match episode.retry(error).await {
+                                    Ok(()) => continue,
+                                    Err(error) => break Err(error),
+                                },
+                                None => break Err(error),
+                            },
+                            value => break value,
                         }
-                        telemetry.update(|s| {
-                            s.active = Some(EventTransport::Polling);
-                            s.heartbeat_rtt = None;
-                        });
-                        client.get_events(Some(received), Some(25), max_age).await
-                    }
-                    .await;
+                    };
                     match response {
                         Ok(mut batch) => {
+                            if let Some(mut episode) = episode.take() {
+                                episode.success();
+                            }
                             failures = 0;
                             batch.events.retain(|event| event.id > received);
                             batch.events.sort_by_key(|event| event.id);
@@ -183,6 +212,16 @@ impl Bot {
                             }));
                         }
                         Err(error) => {
+                            if availability.is_some() {
+                                if !availability_handle.inner.running.load(Ordering::SeqCst) {
+                                    break;
+                                }
+                                permit.send(Err(IntakeFailure {
+                                    error,
+                                    unprocessed: vec![],
+                                }));
+                                break;
+                            }
                             if error.is_unauthorized()
                                 || mode == TransportMode::GatewayOnly
                                 || !retryable_read(&error)
@@ -251,6 +290,7 @@ impl Bot {
                             gate.halt();stopping=true;
                         }
                         None=>{
+                            if !self.handle.inner.running.load(Ordering::SeqCst) { stopping=true; continue; }
                             let error=YappinError::Config("event intake exited unexpectedly".into());
                             report.intake_error=Some(self.failure_cause(&error));
                             gate.halt();stopping=true;

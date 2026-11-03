@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.20 — 2026-11-03
+
+- Add opt-in `AvailabilityPolicy` for startup identity/cursor reads and event intake. Bound attempts, elapsed time and jittered backoff; recover transient 520/521/522 outages while keeping authentication, configuration, decode and exhausted client wait budgets terminal. Cancel reads/backoff through `BotHandle::stop`, with structured exhaustion causes and separate cumulative telemetry.
+- Give availability recovery one retry budget by suppressing nested client replays inside its reads. Keep normal API retry settings, ordered checkpoints, handler completion and `max_retry_wait` behavior unchanged. Preserve gateway handshake statuses and retry hints under the policy.
+- Add fresh `RoleHierarchyPolicy` assessments for requester and bot independently. Default to Unknown for undocumented hierarchy facts; an explicit owner/admin policy denies administrator peers and requires other targets to be strictly below the actor. Reject protected roles and conflicting scopes; leave rollout eligibility to trusted host evidence.
+- Add `Api::request_once` and validated role-deletion composition with fresh checks and no automatic DELETE replay. Workers opt into protocol v6 with `single_attempt_api`; existing worker defaults remain supported. Keep structured authorization errors, retry hints and uncertain response outcomes across callbacks and workers. Include native/worker examples and policy documentation.
+
 ## 0.1.19 — 2026-11-03
 
 - Reuse canonical operation schemas during validation and permanent-command binding. Schemas initialize per operation on demand; exported schema values remain independent and editable.

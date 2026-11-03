@@ -109,17 +109,26 @@ pub mod validation;
 pub mod voice;
 pub mod webhook;
 
+pub mod availability;
+pub use availability::{
+    AvailabilityEnd, AvailabilityFailure, AvailabilityPhase, AvailabilityPolicy, AvailabilityState,
+    AvailabilityStatus,
+};
 pub mod api;
 pub mod capabilities;
 pub mod lookup;
 pub use lookup::{LookupResult, LookupStatus, SearchStop};
 pub mod permissions;
+pub mod role_hierarchy;
 pub use api::{Api, ApiExt};
 pub use bot::{
     EventFailure, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,
     HandlerKind, MessageDisposition, MessageFailure, MessageStage,
 };
 pub use permissions::{PermissionEvaluation, PermissionSnapshot};
+pub use role_hierarchy::{
+    execute_role_deletion, RoleHierarchyAssessment, RoleHierarchyPolicy, RoleHierarchyRules,
+};
 
 pub use bot::{
     Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventHandler,
@@ -197,6 +206,9 @@ pub mod transport_and_cache_guide {}
 
 #[doc = include_str!("../docs/server-management.md")]
 pub mod server_management_guide {}
+
+#[doc = include_str!("../docs/availability-and-hierarchy.md")]
+pub mod availability_and_hierarchy_guide {}
 
 #[doc = include_str!("../docs/sdk-workflows.md")]
 pub mod sdk_workflows_guide {}

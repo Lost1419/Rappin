@@ -212,7 +212,7 @@ pub type MessageFailureHandlerFn = Arc<
         + Sync,
 >;
 
-struct BotState {
+pub(crate) struct BotState {
     client: Arc<Client>,
     prefixes: Vec<String>,
     prefix_resolver: Option<PrefixResolver>,
@@ -234,21 +234,23 @@ struct BotState {
     log: bool,
     cursor: Option<EventCursor>,
     max_age: Option<u32>,
+    availability_policy: Option<crate::AvailabilityPolicy>,
     handler_concurrency: usize,
     pending_batches: usize,
     auto_ack_after: Option<Duration>,
     telemetry: crate::diagnostics::Telemetry,
+    pub(crate) availability_telemetry: crate::availability::Telemetry,
     #[cfg(feature = "gateway")]
     gateway_url: Option<String>,
     registry_update: tokio::sync::Mutex<()>,
-    running: AtomicBool,
-    stopped: tokio::sync::Notify,
+    pub(crate) running: AtomicBool,
+    pub(crate) stopped: tokio::sync::Notify,
 }
 
 /// A cloneable handle to control the bot and dynamically manage cogs while running.
 #[derive(Clone)]
 pub struct BotHandle {
-    inner: Arc<BotState>,
+    pub(crate) inner: Arc<BotState>,
 }
 
 #[cfg(feature = "hot-reload")]
@@ -300,6 +302,14 @@ impl BotHandle {
             .map(|info| info.help())
             .collect::<Vec<_>>()
             .join("\n\n")
+    }
+    pub fn availability_status(&self) -> crate::AvailabilityStatus {
+        self.inner.availability_telemetry.status()
+    }
+    pub fn subscribe_availability(
+        &self,
+    ) -> tokio::sync::watch::Receiver<crate::AvailabilityStatus> {
+        self.inner.availability_telemetry.subscribe()
     }
     pub fn transport_status(&self) -> crate::diagnostics::TransportStatus {
         self.inner.telemetry.status()
@@ -619,6 +629,7 @@ impl BotHandle {
     /// Stops the bot's event loop.
     pub fn stop(&self) {
         self.inner.running.store(false, Ordering::SeqCst);
+        self.inner.stopped.notify_waiters();
         self.inner.stopped.notify_one();
     }
 }
@@ -646,6 +657,7 @@ pub struct BotBuilder {
     log: bool,
     cursor: Option<EventCursor>,
     max_age: Option<u32>,
+    availability_policy: Option<crate::AvailabilityPolicy>,
     handler_concurrency: usize,
     pending_batches: usize,
     auto_ack_after: Option<Duration>,
@@ -682,6 +694,7 @@ impl BotBuilder {
             log: true,
             cursor: None,
             max_age: None,
+            availability_policy: None,
             handler_concurrency: 8,
             pending_batches: 4,
             auto_ack_after: None,
@@ -997,6 +1010,12 @@ impl BotBuilder {
         self.cursor = Some(EventCursor::new(path));
         self
     }
+    /// Opt in to bounded, cancellable startup/intake read recovery. This policy
+    /// owns retry attempts; client retries are suppressed only inside these reads.
+    pub fn availability_policy(mut self, policy: crate::AvailabilityPolicy) -> Self {
+        self.availability_policy = Some(policy);
+        self
+    }
     pub fn max_event_age(mut self, seconds: u32) -> Self {
         self.max_age = Some(seconds);
         self
@@ -1089,10 +1108,12 @@ impl BotBuilder {
             log: self.log,
             cursor: self.cursor,
             max_age: self.max_age,
+            availability_policy: self.availability_policy,
             handler_concurrency: self.handler_concurrency,
             pending_batches: self.pending_batches,
             auto_ack_after: self.auto_ack_after,
             telemetry: crate::diagnostics::Telemetry::new(self.transport_mode),
+            availability_telemetry: Default::default(),
             #[cfg(feature = "gateway")]
             gateway_url: self.gateway_url,
             registry_update: tokio::sync::Mutex::new(()),
@@ -1114,6 +1135,39 @@ pub struct Bot {
 }
 
 impl Bot {
+    pub fn availability_status(&self) -> crate::AvailabilityStatus {
+        self.handle.availability_status()
+    }
+    pub fn subscribe_availability(
+        &self,
+    ) -> tokio::sync::watch::Receiver<crate::AvailabilityStatus> {
+        self.handle.subscribe_availability()
+    }
+    async fn available_read<T, F, Fut>(
+        &self,
+        phase: crate::AvailabilityPhase,
+        mut read: F,
+    ) -> Result<T>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T>>,
+    {
+        let Some(policy) = &self.handle.inner.availability_policy else {
+            return read().await;
+        };
+        let mut episode =
+            crate::availability::Episode::new(self.handle.clone(), policy.clone(), phase);
+        loop {
+            match episode.attempt(read()).await {
+                Ok(value) => {
+                    episode.success();
+                    return Ok(value);
+                }
+                Err(error) => episode.retry(error).await?,
+            }
+        }
+    }
+
     pub fn transport_status(&self) -> crate::diagnostics::TransportStatus {
         self.handle.transport_status()
     }
@@ -1206,7 +1260,12 @@ impl Bot {
         self.handle.inner.running.store(true, Ordering::SeqCst);
 
         // 1. Fetch bot user details to verify token
-        let me: BotProfile = match self.handle.client().get_me().await {
+        let me: BotProfile = match self
+            .available_read(crate::AvailabilityPhase::StartupIdentity, || {
+                self.client().get_me()
+            })
+            .await
+        {
             Ok(profile) => profile,
             Err(e) => {
                 if let YappinError::Unauthorized = e {
@@ -1239,7 +1298,13 @@ impl Bot {
             {
                 0
             }
-            None => self.client().get_events(Some(0), Some(0), None).await?.last,
+            None => {
+                self.available_read(crate::AvailabilityPhase::StartupCursor, || {
+                    self.client().get_events(Some(0), Some(0), None)
+                })
+                .await?
+                .last
+            }
         };
         if saved != Some(last) {
             if let Some(c) = &self.handle.inner.cursor {

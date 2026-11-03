@@ -15,6 +15,19 @@ pub trait Api: Send + Sync {
         crate::security::redact_fields(value)
     }
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value>;
+    /// Exactly one transport attempt. Custom adapters must opt in explicitly;
+    /// delegating to an ordinary retrying request would violate this contract.
+    async fn request_once(
+        &self,
+        _method: Method,
+        _path: &str,
+        _body: Option<Value>,
+    ) -> Result<Value> {
+        Err(crate::YappinError::validation(
+            "request_once",
+            "transport does not implement single-attempt requests",
+        ))
+    }
 
     /// Public metadata reads. Client omits Authorization; adapters can override.
     async fn public_request(&self, path: &str) -> Result<Value> {
@@ -278,6 +291,9 @@ impl Api for crate::Client {
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
         self.request_json(method, path, body.as_ref()).await
     }
+    async fn request_once(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
+        self.request_json_once(method, path, body).await
+    }
     async fn public_request(&self, path: &str) -> Result<Value> {
         self.public_json(path).await
     }
@@ -324,6 +340,9 @@ impl<T: Api + ?Sized> Api for std::sync::Arc<T> {
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
         (**self).request(method, path, body).await
     }
+    async fn request_once(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
+        (**self).request_once(method, path, body).await
+    }
     async fn public_request(&self, path: &str) -> Result<Value> {
         (**self).public_request(path).await
     }
@@ -355,6 +374,14 @@ macro_rules! native_context {
             ) -> Result<Value> {
                 Api::request(self.client.as_ref(), method, path, body).await
             }
+            async fn request_once(
+                &self,
+                method: Method,
+                path: &str,
+                body: Option<Value>,
+            ) -> Result<Value> {
+                self.client.request_once(method, path, body).await
+            }
             async fn public_request(&self, path: &str) -> Result<Value> {
                 self.client.public_request(path).await
             }
@@ -383,6 +410,9 @@ native_context!(crate::InteractionContext);
 #[cfg(feature = "hot-reload")]
 #[async_trait]
 impl Api for crate::WorkerContext {
+    async fn request_once(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
+        self.api_once(method.as_str(), path, body).await
+    }
     async fn public_request(&self, path: &str) -> Result<Value> {
         crate::WorkerContext::public_request(self, path).await
     }

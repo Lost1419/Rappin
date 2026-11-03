@@ -89,24 +89,24 @@ impl Gateway {
         let (mut ws, _) = timeout(Duration::from_secs(10), connect_async(&self.url))
             .await
             .map_err(|_| transport())?
-            .map_err(|_| transport())?;
+            .map_err(transport_cause)?;
         let hello = timeout(Duration::from_secs(10), ws.next())
             .await
             .map_err(|_| transport())?
             .ok_or_else(transport)?
-            .map_err(|_| transport())?;
+            .map_err(transport_cause)?;
         if let Message::Close(frame) = hello {
             return Err(close(frame.map(|f| u16::from(f.code))));
         }
         let value: serde_json::Value =
-            serde_json::from_str(hello.to_text().map_err(|_| transport())?)?;
+            serde_json::from_str(hello.to_text().map_err(transport_cause)?)?;
         if value["op"] != "hello" {
-            return Err(transport());
+            return Err(protocol_failure());
         }
         let ms = value["heartbeat_interval"]
             .as_u64()
             .filter(|n| *n >= 100 && *n <= 60000)
-            .ok_or_else(transport)?;
+            .ok_or_else(protocol_failure)?;
         self.interval = Duration::from_millis(ms);
         let mut auth = serde_json::json!({"op":if after==0{"identify"}else{"resume"},"token":self.client.token()});
         if after > 0 {
@@ -125,7 +125,7 @@ impl Gateway {
         }
         ws.send(Message::Text(auth.to_string().into()))
             .await
-            .map_err(|_| transport())?;
+            .map_err(transport_cause)?;
         self.socket = Some(ws);
         self.heartbeat = Instant::now() + self.interval;
         self.awaiting_ack = false;
@@ -147,7 +147,7 @@ impl Gateway {
                     self.awaiting_ack=true;self.heartbeat_sent=Some(Instant::now());self.heartbeat=Instant::now()+self.interval;
                 },
                 frame=socket.next()=>{
-                    match frame.ok_or_else(transport)?.map_err(|_|transport())?{
+                    match frame.ok_or_else(transport)?.map_err(transport_cause)?{
                         Message::Close(f)=>return Err(close(f.map(|f|u16::from(f.code)))),
                         Message::Ping(p)=>{socket.send(Message::Pong(p)).await.map_err(|_|transport())?;},
                         Message::Text(t)=>{
@@ -186,7 +186,10 @@ impl Gateway {
                         s.active = None;
                         s.heartbeat_rtt = None;
                     });
-                    if e.is_unauthorized() {
+                    if e.is_unauthorized()
+                        || (crate::client::single_attempt_active()
+                            && matches!(e, YappinError::Config(_) | YappinError::Json(_)))
+                    {
                         return Err(e);
                     }
                     if !self.allow_fallback {
@@ -224,6 +227,16 @@ impl Gateway {
     }
 }
 fn transport() -> YappinError {
+    if crate::client::single_attempt_active() {
+        return YappinError::Remote(crate::RemoteError {
+            kind: "gateway_transport".into(),
+            message: "gateway disconnected during an availability read".into(),
+            status: None,
+            retry_after: None,
+            details: Default::default(),
+        });
+    }
+
     YappinError::Config("gateway disconnected; resume with the last handled event ID".into())
 }
 fn close(code: Option<u16>) -> YappinError {
@@ -235,6 +248,37 @@ fn close(code: Option<u16>) -> YappinError {
             message: "gateway closed".into(),
             retry_after: None,
         }
+    }
+}
+
+fn protocol_failure() -> YappinError {
+    if crate::client::single_attempt_active() {
+        YappinError::Config("gateway returned an invalid protocol frame".into())
+    } else {
+        transport()
+    }
+}
+
+fn transport_cause(error: tokio_tungstenite::tungstenite::Error) -> YappinError {
+    use tokio_tungstenite::tungstenite::Error;
+    if !crate::client::single_attempt_active() {
+        return transport();
+    }
+    match error {
+        Error::Http(response) => YappinError::Api {
+            status: response.status().as_u16(),
+            message: "gateway HTTP handshake failed".into(),
+            retry_after: response
+                .headers()
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok())
+                .and_then(crate::rate_limits::retry_after)
+                .map(|delay| delay.as_secs_f64()),
+        },
+        Error::Io(_) | Error::Tls(_) | Error::ConnectionClosed | Error::AlreadyClosed => {
+            transport()
+        }
+        _ => protocol_failure(),
     }
 }
 
