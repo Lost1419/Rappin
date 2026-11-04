@@ -112,6 +112,12 @@ pub trait UiApiExt: Api {
         kind: InteractionCallbackType,
         body: &UiMessageBody,
     ) -> Result<()> {
+        if body.reply_to.is_some() {
+            return Err(YappinError::validation(
+                "reply_to",
+                "interaction callbacks do not accept reply targets",
+            ));
+        }
         if kind == InteractionCallbackType::Ack {
             return Err(YappinError::validation(
                 "type",
@@ -200,7 +206,7 @@ impl Api for UiInteractionContext {
         self.context.client.track_interaction(event).await
     }
     fn sanitize(&self, value: Value) -> Value {
-        self.context.client.redact_credentials(value)
+        Api::sanitize(&self.context, value)
     }
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
         Api::request(&self.context, method, path, body).await
@@ -234,16 +240,11 @@ impl UiInteractionContext {
         kind: InteractionCallbackType,
         body: &UiMessageBody,
     ) -> Result<()> {
-        self.context
-            .client
-            .track_interaction(&self.context.event)
-            .await?;
         UiApiExt::respond_ui(self, &self.context.event, kind, body).await
     }
 }
 impl InteractionContext {
     pub async fn show_modal(&self, modal: &Modal) -> Result<()> {
-        self.client.track_interaction(&self.event).await?;
         UiApiExt::show_modal(self, &self.event, modal).await
     }
 }

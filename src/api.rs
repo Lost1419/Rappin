@@ -424,6 +424,9 @@ native_context!(crate::InteractionContext);
 #[cfg(feature = "hot-reload")]
 #[async_trait]
 impl Api for crate::WorkerContext {
+    async fn track_interaction(&self, _event: &crate::InteractionEvent) -> Result<()> {
+        self.require_ui_api().await
+    }
     async fn request_once(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
         self.api_once(method.as_str(), path, body).await
     }

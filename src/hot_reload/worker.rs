@@ -25,6 +25,7 @@ struct Connection {
     output: Stdout,
     poisoned: bool,
     allow_single_attempt: bool,
+    allow_ui: bool,
 }
 
 /// Rust handler context inside a worker. Authenticated JSON API requests go through the parent.
@@ -123,6 +124,14 @@ impl WorkerContext {
         };
         let event = self.wait_request(filter, timeout, Some(message)).await?;
         serde_json::from_value(event.data).map_err(Into::into)
+    }
+    pub(crate) async fn require_ui_api(&self) -> Result<()> {
+        self.ensure_active()?;
+        if self.connection.lock().await.allow_ui {
+            Ok(())
+        } else {
+            Err(YappinError::validation("ui_api","worker UI callbacks require WorkerCog::ui_api() or on_ui_interaction and a protocol v7 parent"))
+        }
     }
     pub fn ui_interaction(&self) -> Option<&crate::UiInteraction> {
         match &self.event {
@@ -354,6 +363,7 @@ pub struct WorkerCog {
     buttons: HashMap<String, Handler>,
     listeners: HashMap<Listener, Handler>,
     single_attempt_api: bool,
+    ui_api: bool,
 }
 impl WorkerCog {
     pub fn command_typed<A, F, Fut>(
@@ -397,6 +407,7 @@ impl WorkerCog {
             buttons: HashMap::new(),
             listeners: HashMap::new(),
             single_attempt_api: false,
+            ui_api: false,
         }
     }
     /// Runtime argument schemas on workers use the same parser as native commands.
@@ -509,6 +520,11 @@ impl WorkerCog {
     {
         self.listen(Listener::UiInteraction, handler)
     }
+    /// Require a protocol v7 parent for UI callbacks from existing button/command routes.
+    pub fn ui_api(mut self) -> Self {
+        self.ui_api = true;
+        self
+    }
     /// Require parent protocol v6 before starting handlers that use request_once.
     pub fn single_attempt_api(mut self) -> Self {
         self.single_attempt_api = true;
@@ -521,13 +537,16 @@ impl WorkerCog {
             output: tokio::io::stdout(),
             poisoned: false,
             allow_single_attempt: self.single_attempt_api,
+            allow_ui: self.ui_api || self.manifest.listeners.contains(&Listener::UiInteraction),
         }));
         protocol::write(
             &mut connection.lock().await.output,
             &Wire::Ready {
                 // Existing handlers retain protocol v4 compatibility. Opting into
                 // message outcomes requires a parent that understands protocol v5.
-                protocol: if self.manifest.listeners.contains(&Listener::UiInteraction) {
+                protocol: if self.ui_api
+                    || self.manifest.listeners.contains(&Listener::UiInteraction)
+                {
                     protocol::VERSION
                 } else if self.single_attempt_api {
                     6

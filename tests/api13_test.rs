@@ -214,6 +214,13 @@ async fn modal_is_initial_only_and_unknown_responses_cannot_be_replayed() {
         .await
         .is_err());
     assert_eq!(client.request_metrics().attempts, 0);
+    let mut reply = UiMessageBody::new("reply");
+    reply.reply_to = Some(Uuid::nil());
+    assert!(client
+        .respond_ui(&event.interaction, InteractionCallbackType::Reply, &reply)
+        .await
+        .is_err());
+    assert_eq!(client.request_metrics().attempts, 0);
 }
 #[tokio::test]
 async fn opt_in_ui_routing_keeps_values_separate_from_legacy_buttons_and_failures_explicit() {
@@ -505,6 +512,10 @@ async fn extended_context_forwards_public_reads_and_upload_transport_without_aut
         UiInteraction::from_event(&interaction("select")).unwrap(),
         None,
     );
+    let sanitized =
+        ctx.sanitize(json!({"token":"interaction_secret","text":"private_parent_token"}));
+    assert_eq!(sanitized["token"], "[REDACTED]");
+    assert!(!sanitized.to_string().contains("private_parent_token"));
     assert_eq!(ctx.get_api_version().await.unwrap().api, "1.3.0");
     ctx.upload(
         &format!("/channels/{}/messages", Uuid::nil()),

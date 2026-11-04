@@ -118,7 +118,11 @@ ephemeral, acknowledgement or an initial modal as appropriate.
 
 `WorkerCog::on_ui_interaction` opts into protocol v7; upgrade the parent and enable
 `interactive_events(true)` before loading it. `WorkerContext::ui_interaction()`
-exposes typed data, and `UiApiExt` sends requests through the parent. For example:
+exposes typed data, and `UiApiExt` sends requests through the parent. To open a
+modal or use UI callback helpers from an existing worker button/command route,
+opt into `WorkerCog::ui_api()` instead. Without either opt-in these helpers fail
+before sending a callback, so an older parent cannot silently skip new response
+coordination. For example:
 
 ```rust,no_run
 # #[cfg(feature="hot-reload")]

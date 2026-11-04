@@ -1181,6 +1181,10 @@ async fn main()->Result<()> {
     WorkerCog::new("role-fixture").command("no-once","Check opt-in",|ctx|async move {
         let error=ctx.request_once("DELETE".parse().unwrap(),"/roles",None).await.unwrap_err();
         assert!(error.to_string().contains("single_attempt_api"));Ok(())
+    }).command("no-ui","Check UI opt-in",|ctx|async move {
+        let event:InteractionEvent=serde_json::from_value(serde_json::json!({"id":"fixture","token":"fixture","type":"button"}))?;
+        let error=ctx.show_modal(&event,&Modal::new("f","F").input(TextInput::short("n","N"))).await.unwrap_err();
+        assert!(error.to_string().contains("ui_api"));Ok(())
     }).run().await
 }
 "#;
@@ -1200,6 +1204,7 @@ async fn main()->Result<()> {
     .await
     .unwrap();
     bot.process_event(event("no-once")).await.unwrap();
+    bot.process_event(event("no-ui")).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
