@@ -1,6 +1,6 @@
 [package]
 name = "rappin-rs"
-version = "0.1.21"
+version = "0.1.22"
 edition = "2021"
 rust-version = "1.88"
 autobins = false
@@ -31,6 +31,8 @@ cli = ["dep:clap", "dep:toml", "dep:fs2", "tokio/io-std", "tokio/io-util"]
 gateway = ["dep:tokio-tungstenite", "dep:log"]
 voice = ["tokio/process", "tokio/io-util"]
 hot-reload = ["tokio/process", "tokio/io-util", "tokio/io-std"]
+webhook-middleware = ["dep:axum", "dep:hex"]
+metrics = ["dep:metrics", "dep:metrics-exporter-prometheus"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -53,10 +55,15 @@ clap = { version = "4.6", features = ["derive"], optional = true }
 toml = { version = "0.9", optional = true }
 fs2 = { version = "0.4", optional = true }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"], optional = true }
+axum = { version = "0.8", optional = true }
+hex = { version = "0.4", optional = true }
+metrics = { version = "0.22", optional = true }
+metrics-exporter-prometheus = { version = "0.14", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = "0.3"
+tower = { version = "0.5", features = ["util"] }
 
 # Opt-in local builds with small artifacts; normal dev/test profiles are unchanged.
 [profile.compact]

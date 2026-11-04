@@ -108,6 +108,8 @@ pub mod validation;
 #[cfg(feature = "voice")]
 pub mod voice;
 pub mod webhook;
+#[cfg(feature = "webhook-middleware")]
+pub mod webhook_middleware;
 
 pub mod availability;
 pub use availability::{
@@ -118,12 +120,19 @@ pub mod api;
 pub mod capabilities;
 pub mod lookup;
 pub use lookup::{LookupResult, LookupStatus, SearchStop};
+#[cfg(feature = "metrics")]
+pub mod metrics;
 pub mod permissions;
 pub mod role_hierarchy;
 pub use api::{Api, ApiExt};
 pub use bot::{
     EventFailure, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,
     HandlerKind, MessageDisposition, MessageFailure, MessageStage,
+};
+#[cfg(feature = "metrics")]
+pub use metrics::{
+    install_prometheus, install_prometheus_with_config, record_availability_status,
+    record_request_metrics, record_request_observation, record_transport_status,
 };
 pub use permissions::{PermissionEvaluation, PermissionSnapshot};
 pub use role_hierarchy::{
@@ -157,6 +166,10 @@ pub use utils::{
     DEFAULT_SITE_BASE, IS_COMPONENTS_V2, LEGACY_API_BASE,
 };
 pub use webhook::{WebhookClient, WebhookInfo, WebhookMessage};
+#[cfg(feature = "webhook-middleware")]
+pub use webhook_middleware::{
+    get_verified_event, route, verified_handler, verify_middleware, WebhookConfig,
+};
 
 /// Commonly used types for building bots and interacting with Yapin'.
 pub mod prelude {
@@ -172,6 +185,11 @@ pub mod prelude {
     pub use crate::events::{EventConsumer, EventCursor};
     #[cfg(feature = "hot-reload")]
     pub use crate::hot_reload::{HotReload, Listener, WorkerCog, WorkerContext, WorkerProject};
+    #[cfg(feature = "metrics")]
+    pub use crate::metrics::{
+        install_prometheus, install_prometheus_with_config, record_availability_status,
+        record_request_metrics, record_request_observation, record_transport_status,
+    };
     pub use crate::models::component::{
         ActionRow, Button, ButtonStyle, Component, Container, FileDisplay, LayoutComponent,
         MediaGallery, MediaItem, Section, Separator, TextDisplay, ThumbnailComponent,
@@ -185,6 +203,10 @@ pub mod prelude {
     pub use crate::utils::IS_COMPONENTS_V2;
     pub use crate::validation::split_message;
     pub use crate::webhook::{WebhookClient, WebhookInfo, WebhookMessage};
+    #[cfg(feature = "webhook-middleware")]
+    pub use crate::webhook_middleware::{
+        get_verified_event, route, verified_handler, verify_middleware, WebhookConfig,
+    };
     pub use crate::{
         check_fn, Api, ApiExt, ArgumentInfo, ArgumentSchema, ArgumentType, Arguments, BoundedU32,
         Cache, CachePolicy, Cached, ChannelId, Check, Collector, CommandCheck, CommandError,
