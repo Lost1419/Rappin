@@ -13,6 +13,11 @@ acknowledging its watermark. Partial acknowledgements may use an ID actually in
 the batch. Poll again to obtain the remaining events and the rotated receipt.
 Without acknowledgement, the next poll replays the pending batch.
 
+Only acknowledge a completed prefix. Failed/uncertain work needs reconciliation
+before acknowledging its ID; a later successful event does not make that earlier
+work complete. Store durable effects/receipts in application-owned storage.
+Receiving or logging an event alone does not establish completed processing.
+
 Receipts persist beside the numeric checkpoint and are bound to the bot token
 and configured API base. They can contain interaction credentials: do not print
 or publish the state files. Keep them outside source control. Cursor locks are

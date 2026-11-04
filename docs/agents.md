@@ -1,5 +1,19 @@
 # Rappin for agents
 
+## Bundled skills
+
+Use [rappin](../skills/rappin/SKILL.md) for CLI/MCP operations,
+[rappin-bot-dev](../skills/rappin-bot-dev/SKILL.md) for Rust bot implementation,
+and [rappin-diagnostics](../skills/rappin-diagnostics/SKILL.md) for incidents.
+Each entrypoint links to task-specific references; load only the relevant ones.
+Install or refresh the complete skill folder in the agent's configured skill
+directory, including `references` and any `assets`. Updating this repository
+does not automatically replace separately installed copies. Match SDK examples
+to the application's selected dependency; CLI discovery describes its installed
+binary. Skill updates do not require changing an application's SDK dependency.
+
+## CLI setup
+
 Install a binary from this checkout:
 
 ```sh

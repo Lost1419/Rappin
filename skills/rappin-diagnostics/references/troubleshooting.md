@@ -1,60 +1,134 @@
 # Troubleshooting paths
 
+Use the application's selected SDK version. Availability/hierarchy/single-attempt
+helpers below require Rappin 0.1.20+; older deployments need their matching contract.
+
 ## Slow replies
 
 Separate REST header timing, full-call/body decode time, gateway heartbeat RTT,
-event delivery age and handler execution. Doctor's last request describes only
-its own request, not another running bot's telemetry. A running Rust bot exposes
-`transport_status` and Client request observations; consult that application's
-logs or diagnostics to measure its actual path. Include Retry-After waits and
-attempt counts before attributing time to the network or service. Use several
-paced observations, not a single sample or an unbounded probe.
+event delivery age and handler execution. Doctor's last request measures only its
+own request. Inspect the running application's `transport_status()` and Client
+telemetry for its actual path. Include waits and attempts before attributing time
+to the network/service; use a few paced observations rather than a load probe.
+
+`Client::request_metrics()` retains exact cumulative totals across clones.
+`subscribe_request_events()` provides a bounded attempt stream; record sequence
+gaps / broadcast `Lagged` errors. Legacy `subscribe_requests()` is latest-only;
+counting its notifications can underreport a burst. Do not derive latency
+percentiles or traffic totals from a stream with unreported losses.
 
 ## Missing events or reconnects
 
-Check configured versus active transport and fallback reason in the bot's
-telemetry. The gateway is feature-gated and may deny a bot's beta access; polling
-fallback is expected in that case. Distinguish a received cursor from a committed
-cursor. An agent consumer replays its persisted pending batch until acknowledgement;
-acknowledge only delivered IDs after processing them. A failed Rust handler can
-block the checkpoint at that event; a completed prefix can advance. Check backlog and handler saturation
-before blaming the gateway. Keep a separate state file for each bot/consumer.
+Check configured/active transport and fallback reason. Gateway is feature-gated;
+access denial may cause expected polling fallback. Distinguish received from
+committed cursor, pending batches and completed-but-uncommitted handlers. A
+consumer's pending events replay until acknowledgement; acknowledge only processed,
+delivered IDs. A failed handler can retain a checkpoint barrier while a completed
+prefix advances. Check backlog/saturation before blaming transport. Keep one owner
+per cursor file and a separate file per bot/consumer.
+
+## Startup and intake availability
+
+Identify the failing read: startup identity (`GET /me`), initial cursor probe
+(`GET /events` without a saved cursor), or intake. Existing behavior remains unless
+`BotBuilder::availability_policy` is configured. Bounded opt-in recovery includes
+520/521/522, cancellable backoff and reads; it never restarts handlers/processes.
+
+Inspect `availability_status()` / `subscribe_availability()` for phase, state,
+configured limits, attempts, last cause and cumulative retries/exhaustions.
+Notifications can coalesce while counters remain exact. Recover the structured
+`AvailabilityFailure` with `availability_failure()` on native or remote errors;
+retain its cause/status/hint and termination reason. `Recovered` is a successful
+read, while the recovery counter counts reads requiring additional attempts.
+
+Availability owns retry attempts and disables nested client retries in those reads.
+Its elapsed limit includes request time, shared waits and backoff; choose longer
+than a normal 25-second long poll. Attempts share the client's `max_retry_wait`
+allowance for server-advised/shared waits. Additional outage backoff has its own
+elapsed budget. These are distinct limits: increasing one cannot renew the other.
+Authentication/configuration/decode and exhausted client wait budgets stay terminal.
+
+`BotHandle::stop()` cancels reads/backoff. Startup cancellation returns a structured
+availability failure; intake stop drains accepted work and commits only completed
+prefixes. Keep intake failures separate from handler failure callbacks and cursor
+storage errors. Do not add a catch-all retry loop or tune budgets without evidence.
 
 ## Handler failures and stopped intake
 
-Typed input/check rejections complete after a successful reply. Failed replies
-and unexpected errors remain unprocessed unless an explicit failure callback
-completes/reconciles them. Legacy error callbacks are observers, not completion
-callbacks. Preserve `FailureHandling.source` and `handling_error`, status, retry
-hints and partial-write receipts.
+Determine whether the failure came from a command, button, server-message gate or
+post-command listener. `on_command_failure`, `on_button_failure` and
+`on_message_failure` supply explicit dispositions; legacy `()` callbacks observe
+failures without completing them. Typed `CommandError` input/check rejections
+complete after a successful reply; failed replies and unexpected errors remain
+incomplete by default. Preserve `FailureHandling.source` and `handling_error`.
+
+A shared `message_gate` runs before native/worker command dispatch. Gate Handled
+skips downstream handlers; Stop is incomplete. Fallible natural-language listeners
+use `on_message_result` or `WorkerCog::on_message`. Handled failure callbacks
+complete a listener invocation but do not claim the remaining listeners; returning
+`MessageDisposition::Handled` from the listener does. Post-command rejection does
+not undo a command's earlier effects.
 
 Inspect `EventProcessing` reports: failed IDs, not-started events, completed but
-uncommitted events, and independent intake/cursor causes. Do not retry a whole
-handler because one request has Retry-After. Worker timeout/completion loss is
-uncertain; reconcile using application receipts before explicitly replacing or
-restarting anything. A cursor-write failure does not make completed work safe
-to repeat.
+uncommitted work, and independent intake/cursor causes. Drain/cancellation does
+not silently complete unfinished events. Worker timeout/completion loss is
+uncertain. Reconcile durable application receipts before explicit replay; a
+cursor-write error does not make completed work safe to repeat. Custom
+`process_event` calls own their deduplication and checkpoint behavior.
 
 ## Authentication and permissions
 
-401 requires corrected/rotated credentials. 403 needs the relevant bot/server
-permissions, not another retry. 404 can mean an invisible resource or a wrong ID;
-resolve the target inside its server and inspect current membership/roles. Do not
-change roles or moderation state without authorization. Custom caches may retain
-old permissions; repeat the check with explicit fresh API data when warranted.
+401 requires corrected credentials, not retries. For 403 distinguish bot server
+permissions, requester authorization, effective channel/category access, hierarchy,
+override/grant restrictions and endpoint rollout. 404 may hide an invisible or
+foreign resource. Keep bot and requester separate; a bot read or server-wide
+Manage Channels does not establish requester ACLs. Use scoped fresh membership/
+role evidence rather than stale custom caches when diagnosing revocation.
+
+`ValidatedOperation` reports Allowed, Denied and Unknown required checks. Missing
+public ACL precedence, hierarchy or rollout evidence remains Unknown; do not
+replace it with a blanket allow policy. `test_server_access` needs trusted host
+evidence. `RoleHierarchyPolicy` defaults conservative; `owner_admin_strict()` is
+an explicit application rule, not proof of undocumented platform behavior.
+Owner requests do not elevate the bot. A read-before-delete assessment is not an
+atomic reservation; preserve a later 403 or uncertain delete result as returned.
 
 ## Writes and rate limits
 
-Inspect `status`, `retry_after`, `retry_safety`, and `outcome`. The client has
-already applied bounded automatic retries for supported server-advised waits.
-502/504 or transport failures on writes can have unknown outcomes. Check history
-before a deliberate retry; identical content alone does not establish which
-request created a message. A split-send failure returns confirmed completed
-steps and the failed step index. Replaying the whole split duplicates successes.
+Inspect `status`, `retry_after`, `retry_safety`, `outcome` and confirmed receipts.
+Normal Client calls already apply bounded supported server-advised retries;
+`request_once` and validated role-deletion composition intentionally do not replay
+the mutation. Never retry a whole command because one request supplied Retry-After.
+502/504, write cancellation/lost completion or malformed successful responses may
+leave an unknown outcome. Reconcile state before deciding on a deliberate retry.
+Matching message text alone is not proof of which request created it. Split-send
+errors retain completed steps and failed-step index; replay duplicates successes.
+
+## Worker builds and watchers
+
+Inspect `hot_reload_failure()` on native/remote errors or callbacks. Retain phase:
+Compilation, Startup, Protocol, Registration or Publication. Useful evidence is
+compiler code/message/project-relative spans, `exit`, `timed_out`,
+`candidate_started`, `publication_attempted`, `routes_published`, `source`, and
+`truncated`. An absent exit is not success. Unpublished local routes do not prove
+remote rollback; failed candidates normally leave active routes installed.
+
+`WatchGuard::status()` separates `scan_error`, `reload_error` and `reload_failure`.
+Recovered scans clear only scan errors, even with unchanged digest; a failed
+candidate stays visible until a changed candidate installs. Use path/phase context
+for missing files; distinguish transient runtime churn from required source/input
+loss. Do not suppress every ENOENT or repeatedly rebuild to clear an alert.
+
+Check parent/worker versions before blaming source: legacy handlers use v4,
+fallible `WorkerCog::on_message` uses v5, `single_attempt_api()` requires v6.
+Upgrade the parent before enabling newer worker contracts. Worker stdout belongs
+to the protocol. Review bounded diagnostics before sharing: trusted code can embed
+application data in compiler text. Builds, procedural macros and workers execute
+trusted code; neither compilation failure nor timeout makes them a sandbox or
+proves they produced no effects.
 
 ## API origin
 
 Doctor reports configured and active hosts. Default REST failover is restricted
-to the documented bot and website API origins. Custom bases never fail over.
-Preserve custom transport/endpoint choices while diagnosing them; do not change
-a working configuration or re-enable redirects as a speculative fix.
+to documented bot/website API origins; custom bases never fail over. Preserve
+custom endpoint choices and do not re-enable redirects as a speculative fix.

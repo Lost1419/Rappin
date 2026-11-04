@@ -19,6 +19,13 @@ embeds/components. Deletion and reaction changes are separate named operations.
 These verbs use the bot's API permissions; read access alone does not authorize
 sending messages or moderation.
 
+For uploads, discover the installed named operation and its inline file schema.
+MCP accepts bounded inline data, not arbitrary local paths (128 KiB inline-data
+boundary in Rappin 0.1.20). Explicit operator CLI uploads and Rust SDK uploads can
+handle larger files within their documented limits. Confirm the intended files
+and destination; do not convert a tool-selected path into filesystem access.
+Preserve every confirmed per-file/message receipt when an upload partially succeeds.
+
 `--split` performs multiple sends. If one fails, inspect `completed_steps` and
 `failed_step` (one-based). Do not replay the whole workflow. A failed step with
 `outcome: unknown` might have executed; inspect recent history before deciding
@@ -26,7 +33,8 @@ whether to send again. History can help reconcile, but matching text is not proo
 of identity and the API provides no documented idempotency key.
 
 Errors distinguish `server_advised` waits, request corrections, and unknown write
-outcomes. Respect `retry_after`; a permission error needs changed permissions.
+outcomes. Respect `retry_after`; permission/hierarchy/rollout failures need evidence
+and a relevant correction, not an automatic privilege change.
 The CLI already applies its bounded retry policy, so avoid an additional blind
 retry loop around writes.
 

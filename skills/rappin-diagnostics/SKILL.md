@@ -1,30 +1,34 @@
 ---
 name: rappin-diagnostics
-description: "Diagnose Yapin bot failures, latency, missing events, permissions, retries, and gateway fallback using Rappin diagnostics and bounded reads. Use for troubleshooting rather than API load benchmarking."
+description: "Investigate running Yapin/Rappin bot failures: latency, missing events, stopped intake, authorization, retries, and worker reload errors. Use bounded diagnostics and existing evidence, not load benchmarks or ordinary feature implementation."
 ---
 
-Start with `rappin doctor --offline`, then `rappin doctor` for a bounded live auth
-check. Inspect `authenticated`, `reachable`, `active_base_url`, and `last_request`;
-doctor's successful exit alone does not establish authentication. Use
-`rappin capabilities` to identify compiled features and available tools.
-Do not print tokens or configuration contents.
+Inspect the installed SDK/CLI version and existing application evidence first.
+`rappin doctor --offline` checks local setup; a bounded live `rappin doctor` checks
+its own authentication/reachability when needed. Inspect `authenticated`,
+`reachable`, `active_base_url` and `last_request`, not only its exit status.
+`rappin capabilities` identifies compiled features. Never print credentials or
+configuration contents. Doctor cannot inspect another running process's metrics.
 
-Choose the investigation from the symptom; read only the relevant part of
-[the troubleshooting reference](references/troubleshooting.md). Establish whether
-an observation came from the SDK, its transport, a handler, or the Yapin service
-before assigning blame. Retain sanitized status codes, timing boundaries,
-attempt counts, cursor values and a minimal reproduction.
+Choose the relevant section of [troubleshooting](references/troubleshooting.md):
 
-For command/button failures, distinguish typed rejections, unexpected handler
-errors, failed replies and intake/cursor failures. `on_command_failure` and
-`on_button_failure` return explicit dispositions; legacy `()` error observers
-do not complete an invocation. Inspect structured `EventProcessing` reports,
-including completed-but-uncommitted work, before any restart. Never mark an
-uncertain write handled merely to keep intake running.
+- [Slow replies](references/troubleshooting.md#slow-replies) and
+  [missing events](references/troubleshooting.md#missing-events-or-reconnects).
+- [Startup/intake availability](references/troubleshooting.md#startup-and-intake-availability).
+- [Message/handler completion](references/troubleshooting.md#handler-failures-and-stopped-intake).
+- [Authorization](references/troubleshooting.md#authentication-and-permissions),
+  [writes](references/troubleshooting.md#writes-and-rate-limits), or
+  [worker builds/watchers](references/troubleshooting.md#worker-builds-and-watchers).
 
-Use bounded history and exact IDs when possible. Do not clear state, force an
-acknowledgement, change permissions or resend an uncertain write just to make an
-error disappear. Honor the user's existing authorization; ask only for scope or
-information actually needed. Existing log evidence and local fixtures should
-precede additional live traffic. This skill does not run load tests; use the
-separate YapBench project when benchmarking is explicitly requested.
+Establish whether the evidence comes from the application, SDK transport or Yapin
+before assigning blame. Retain sanitized status/kind, timing boundaries, attempts,
+received/committed cursors, failure phase and a minimal reproduction. Report
+Unknown separately from Denied; preserve partial receipts and uncertain outcomes.
+Do not turn an unknown mutation into Handled merely to keep intake running.
+
+Use bounded reads/exact IDs and local fixtures before additional live traffic.
+Honor the user's existing authorization; do not clear cursors, force acknowledgements,
+change permissions, rebuild source, restart processes or resend uncertain writes
+as speculative fixes. Propose a concrete correction supported by the evidence,
+then validate within the authorized scope. This skill does not run load benchmarks
+or assume any separate benchmarking project exists.
