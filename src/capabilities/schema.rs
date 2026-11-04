@@ -74,6 +74,71 @@ pub(super) fn body_schema(name: &str) -> Option<Value> {
             ["schema"],
         0,
     );
+    // API 1.3 explicitly accepts emoji objects when sending, although its
+    // normalized response schema describes emoji as text.
+    fn sending_emojis(value: &mut Value) {
+        if let Value::Object(object) = value {
+            if let Some(kind) = object.get_mut("properties").and_then(|p| p.get_mut("type")) {
+                let constant = kind["const"].clone();
+                let alias = match (constant.as_i64(), constant.as_str()) {
+                    (Some(1), _) => Some(json!("row")),
+                    (Some(2), _) => Some(json!("button")),
+                    (Some(3), _) => Some(json!("select")),
+                    (_, Some("row")) => Some(json!(1)),
+                    (_, Some("button")) => Some(json!(2)),
+                    (_, Some("select")) => Some(json!(3)),
+                    _ => None,
+                };
+                if let Some(alias) = alias {
+                    *kind = json!({"anyOf":[{"const":constant},{"const":alias}]});
+                }
+            }
+            // Component IDs are assigned upstream when omitted on writes.
+            if object
+                .get("properties")
+                .is_some_and(|p| p.get("id").is_some() && p.get("type").is_some())
+            {
+                if let Some(Value::Array(required)) = object.get_mut("required") {
+                    required.retain(|field| field != "id");
+                }
+            }
+            if let Some(emoji) = object
+                .get_mut("properties")
+                .and_then(|p| p.get_mut("emoji"))
+            {
+                if emoji["type"] == "string" {
+                    let text = emoji.clone();
+                    *emoji = json!({"anyOf":[text,{"type":"object","properties":{"id":{"type":"string","format":"uuid"},"name":{"type":"string","minLength":1,"maxLength":80},"animated":{"type":"boolean"}},"required":["id","name"],"additionalProperties":false}]});
+                }
+            }
+            for child in object.values_mut() {
+                sending_emojis(child);
+            }
+            fn component_choice(value: &Value) -> bool {
+                value["properties"].get("type").is_some()
+                    || ["oneOf", "anyOf"].iter().any(|key| {
+                        value[*key].as_array().is_some_and(|items| {
+                            !items.is_empty() && items.iter().all(component_choice)
+                        })
+                    })
+            }
+            // Classic and numeric V2 rows overlap once send aliases/default IDs
+            // are admitted. Either documented form is valid, not exactly one.
+            if object
+                .get("oneOf")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty() && items.iter().all(component_choice))
+            {
+                let choices = object.remove("oneOf").expect("oneOf choices");
+                object.insert("anyOf".into(), choices);
+            }
+        } else if let Value::Array(array) = value {
+            for child in array {
+                sending_emojis(child);
+            }
+        }
+    }
+    sending_emojis(&mut schema);
     schema["additionalProperties"] = false.into();
     // Fill gaps in the bundled OpenAPI using the existing typed SDK contract.
     match name {

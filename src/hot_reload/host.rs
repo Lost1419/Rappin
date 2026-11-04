@@ -880,6 +880,26 @@ impl Cog for ProcessCog {
         )
         .await;
     }
+    async fn on_ui_interaction(&self, ctx: &crate::UiInteractionContext) -> Result<()> {
+        if self
+            .generation
+            .manifest
+            .listeners
+            .contains(&Listener::UiInteraction)
+        {
+            self.generation
+                .invoke(
+                    CogEvent::UiInteraction {
+                        event: ctx.data.clone(),
+                    },
+                    &ctx.context.client,
+                )
+                .await
+                .map(|_| ())
+        } else {
+            Ok(())
+        }
+    }
     async fn on_interaction(&self, ctx: &InteractionContext) {
         self.listen(
             Listener::Interaction,

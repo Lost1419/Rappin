@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.21 — 2026-11-04
+
+- Update the bundled OpenAPI to 1.3.0. Add `get_message_emojis` across Client, shared APIs, scoped bindings, CLI and MCP, with independent history-access checks, message/channel scope verification and test-server availability metadata (57 operations total).
+- Add select menus, modal inputs/forms, structured emoji references and lossless UI message bodies/responses. Keep existing component/button/callback types source-compatible; new request schemas accept documented numeric/string aliases and server-assigned component IDs. CLI/MCP rich send/edit/history retain the new data.
+- Add opt-in typed select/modal/slash-interaction handlers and fallible cog hooks. Extended workers advertise protocol v7; existing v4/v5/v6 modes remain supported. Slash interaction registration is explicit and uses the same transactional command-publication path.
+- Enforce initial-response-only modals, callback expiry and source-message requirements for updates. Retain Uncertain after ambiguous callback failures instead of reopening the response slot. Cover validation bounds, patch nulls, worker causes, mixed/duplicate events and ordered checkpoints over polling and WebSocket fixtures.
+
 ## 0.1.20 — 2026-11-03
 
 - Add opt-in `AvailabilityPolicy` for startup identity/cursor reads and event intake. Bound attempts, elapsed time and jittered backoff; recover transient 520/521/522 outages while keeping authentication, configuration, decode and exhausted client wait budgets terminal. Cancel reads/backoff through `BotHandle::stop`, with structured exhaustion causes and separate cumulative telemetry.

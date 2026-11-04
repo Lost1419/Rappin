@@ -1,8 +1,7 @@
 use super::*;
 use crate::{
     CreateCategoryRequest, CreateChannelRequest, CreateMessage, CreateRole, CreateServerEvent,
-    EditCategoryRequest, EditChannelRequest, EditMessage, EditRole, PermissionOverride,
-    Permissions,
+    EditCategoryRequest, EditChannelRequest, EditRole, PermissionOverride, Permissions,
 };
 
 pub(super) fn validate(descriptor: &Capability, args: &Value) -> Result<ValidatedOperation> {
@@ -40,44 +39,55 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
     let mut writes = vec![];
     match entry.name {
         "send_message" => {
-            let mut message: CreateMessage = if args.get("body").is_some() {
-                serde_json::from_value(args["body"].clone())?
-            } else {
-                CreateMessage::new(args["content"].as_str().expect("validated content"))
-            };
-            if let Some(reply) = args["reply_to"].as_str() {
-                message.reply_to = Some(
-                    reply
-                        .parse()
-                        .map_err(|_| YappinError::validation("reply_to", "invalid UUID"))?,
-                );
-            }
-            let messages = if args["split"] == true {
-                crate::split_message(message.content.as_deref().unwrap_or(""))
-                    .into_iter()
-                    .map(|text| {
-                        let mut part = CreateMessage::new(text);
-                        part.reply_to = message.reply_to;
-                        part
-                    })
-                    .collect()
-            } else {
-                vec![message]
-            };
-            if messages.is_empty() {
-                return Err(YappinError::validation(
-                    "content",
-                    "message cannot be empty",
-                ));
-            }
-            for message in messages {
-                message.validate()?;
+            if args.get("body").is_some() {
+                let mut message: crate::UiMessageBody =
+                    serde_json::from_value(args["body"].clone())?;
+                if let Some(reply) = args["reply_to"].as_str() {
+                    message.reply_to = Some(
+                        reply
+                            .parse()
+                            .map_err(|_| YappinError::validation("reply_to", "invalid UUID"))?,
+                    );
+                }
+                message.validate(true)?;
                 writes.push(serde_json::to_value(message)?);
+            } else {
+                let mut message =
+                    CreateMessage::new(args["content"].as_str().expect("validated content"));
+                if let Some(reply) = args["reply_to"].as_str() {
+                    message.reply_to = Some(
+                        reply
+                            .parse()
+                            .map_err(|_| YappinError::validation("reply_to", "invalid UUID"))?,
+                    );
+                }
+                let messages = if args["split"] == true {
+                    crate::split_message(message.content.as_deref().unwrap_or(""))
+                        .into_iter()
+                        .map(|text| {
+                            let mut part = CreateMessage::new(text);
+                            part.reply_to = message.reply_to;
+                            part
+                        })
+                        .collect()
+                } else {
+                    vec![message]
+                };
+                if messages.is_empty() {
+                    return Err(YappinError::validation(
+                        "content",
+                        "message cannot be empty",
+                    ));
+                }
+                for message in messages {
+                    message.validate()?;
+                    writes.push(serde_json::to_value(message)?);
+                }
             }
         }
         "edit_message" => {
-            let body: EditMessage = serde_json::from_value(args["body"].clone())?;
-            body.validate()?;
+            let body: crate::UiMessageBody = serde_json::from_value(args["body"].clone())?;
+            body.validate(false)?;
             args["body"] = serde_json::to_value(body)?;
         }
         "create_channel" => {
@@ -202,7 +212,7 @@ pub(super) fn collection_key(name: &str) -> Option<&'static str> {
         "list_members" => Some("members"),
         "read_messages" => Some("messages"),
         "search_channels" | "search_members" => Some("matches"),
-        "list_emojis" => Some("emojis"),
+        "list_emojis" | "get_message_emojis" => Some("emojis"),
         "list_channel_webhooks" | "list_bot_webhooks" => Some("webhooks"),
         "list_roles" => Some("roles"),
         "list_invites" => Some("invites"),

@@ -191,7 +191,7 @@ pub mod prelude {
         CommandSchema, CommandSpec, CommandValues, DynamicCommandSpec, EventFilter, EventHub,
         EventTransport, Freshness, FromArgs, HumanDuration, InteractionState, LookupCache,
         Permission, PermissionEvaluation, PermissionSnapshot, ResponsePhase, TransportMode,
-        TransportStatus, UserId, WaitError,
+        TransportStatus, UiApiExt, UiInteractionContext, UserId, WaitError,
     };
 }
 
@@ -225,3 +225,9 @@ pub mod api_1_2_guide {}
 /// Shared server-message gates, fallible listeners and explicit completion.
 #[doc = include_str!("../docs/message-policy.md")]
 pub mod message_policy_guide {}
+
+pub mod ui_api;
+pub use ui_api::{UiApiExt, UiInteractionContext};
+
+#[doc = include_str!("../docs/api-1.3.md")]
+pub mod api_1_3_guide {}

@@ -61,7 +61,7 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.20"
+rappin-rs = "0.1.21"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -192,6 +192,7 @@ The default library build needs neither Node nor the CLI dependencies.
 - [Rust bot guide](docs/rust-bots.md): typed commands, checks, collectors, and delivery semantics.
 - [Handler failures](docs/handler-failures.md): completion decisions, structured errors, draining, and checkpoints.
 - [Transport and caching](docs/transport-and-cache.md): API hosts, retries, custom caches, and prefixes.
+- [API 1.3 interactions](docs/api-1.3.md): select menus, modal forms, slash interaction mode, and message emoji discovery.
 - [Server management](docs/server-management.md): roles, permission overrides, invites, counts, and scheduled events.
 - [Availability and role hierarchy](docs/availability-and-hierarchy.md): bounded read recovery and fresh, independent requester/bot role checks.
 - [Shared SDK workflows](docs/sdk-workflows.md): permissions, native/worker APIs, runtime schemas, request metrics, and bounded lookups.

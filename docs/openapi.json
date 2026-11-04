@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Yapin’ Bot API",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "description": "Drive a Yapin’ bot account over HTTPS. Send `Authorization: Bot <token>` (Settings → Developer). JSON in, JSON out. Pictures (avatar_path, banner_path, icon_path, attachment_path) are paths: the link is https://files.yapper.website/<bucket>/<path> (buckets avatars, banners, icons, attachments). Events come over the gateway (wss://rt.yapper.website/bot), the long poll (GET /events) or your webhook: see webhooks and x-gateway. Every answer carries X-Yapin-API-Version (this document's version) and X-Yapin-Build (short commit of the build). Docs: https://www.yapin.gg/developers",
     "termsOfService": "https://www.yapin.gg/terms"
   },
@@ -1008,6 +1008,13 @@
                         }
                       ]
                     ]
+                  },
+                  "interactions": {
+                    "type": "boolean",
+                    "description": "true: when someone picks one of these from the / menu, send it as a command event (not a chat message) and let the bot answer through the interaction callback. Left out or false: commands come as message events, as before (flag bot_slash_interactions)",
+                    "examples": [
+                      true
+                    ]
                   }
                 },
                 "required": [
@@ -1021,7 +1028,8 @@
                         "name": "ping",
                         "description": "Check the bot is alive"
                       }
-                    ]
+                    ],
+                    "interactions": true
                   }
                 ]
               },
@@ -1031,7 +1039,8 @@
                     "name": "ping",
                     "description": "Check the bot is alive"
                   }
-                ]
+                ],
+                "interactions": true
               }
             }
           }
@@ -5949,7 +5958,7 @@
         "tags": [
           "Messages"
         ],
-        "summary": "React",
+        "summary": "React (custom emojis: from servers the bot is in, flag bot_custom_emojis)",
         "description": "Needs: Add Reactions.",
         "x-permission": "Add Reactions",
         "x-sdk": {
@@ -6055,6 +6064,140 @@
         }
       }
     },
+    "/channels/{id}/messages/{mid}/emojis": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Channel id",
+          "schema": {
+            "type": "string",
+            "format": "uuid",
+            "examples": [
+              "c41f8a2b-7e6d-4b3c-9a1e-0f5d2c8b7e43"
+            ]
+          }
+        },
+        {
+          "name": "mid",
+          "in": "path",
+          "required": true,
+          "description": "Message id",
+          "schema": {
+            "type": "string",
+            "format": "uuid",
+            "examples": [
+              "f7c1d5e2-3b0a-4f6c-9d8e-4a2b1c3f0e87"
+            ]
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getChannelsByIdMessagesByMidEmojis",
+        "tags": [
+          "Emojis"
+        ],
+        "summary": "The custom emojis in one message (text, embeds, buttons, reactions), from any server, for steal emoji commands",
+        "description": "Only emojis already in this message: there’s no way to list another server’s emojis. To copy one into your server, download url and send it to POST /servers/{id}/emojis (Manage Emoji there). Emojis that were deleted are left out. Needs: Read Message History. In testing (flag bot_emoji_lookup): test servers only until it’s published. Limit: 60 lookups a minute.",
+        "x-permission": "Read Message History",
+        "x-flag": "bot_emoji_lookup",
+        "x-rate-limit": "60 lookups a minute",
+        "x-sdk": {
+          "js": [
+            "bot.messageEmojis()"
+          ],
+          "python": [
+            "bot.message_emojis()"
+          ]
+        },
+        "externalDocs": {
+          "url": "https://www.yapin.gg/developers/api/emojis#get-channels-id-messages-mid-emojis"
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Emojis",
+                  "properties": {
+                    "emojis": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/FoundEmoji"
+                      },
+                      "description": "In the order they first show up",
+                      "examples": [
+                        [
+                          {
+                            "id": "4b05b926-7f4e-4dab-b1c2-8e6f5a7d4c2b",
+                            "name": "party_parrot",
+                            "animated": false,
+                            "url": "https://files.yapper.website/emojis/6f1c2b8e-4d0a-4c1e-9a7b-3e5f8d2c1a90/r2-4b05b926-1730480000-a1b2c3.webp",
+                            "in_server": false,
+                            "text": "<:party_parrot:4b05b926-7f4e-4dab-b1c2-8e6f5a7d4c2b>"
+                          }
+                        ]
+                      ]
+                    }
+                  },
+                  "required": [
+                    "emojis"
+                  ],
+                  "additionalProperties": false,
+                  "examples": [
+                    {
+                      "emojis": [
+                        {
+                          "id": "4b05b926-7f4e-4dab-b1c2-8e6f5a7d4c2b",
+                          "name": "party_parrot",
+                          "animated": false,
+                          "url": "https://files.yapper.website/emojis/6f1c2b8e-4d0a-4c1e-9a7b-3e5f8d2c1a90/r2-4b05b926-1730480000-a1b2c3.webp",
+                          "in_server": false,
+                          "text": "<:party_parrot:4b05b926-7f4e-4dab-b1c2-8e6f5a7d4c2b>"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "example": {
+                  "emojis": [
+                    {
+                      "id": "4b05b926-7f4e-4dab-b1c2-8e6f5a7d4c2b",
+                      "name": "party_parrot",
+                      "animated": false,
+                      "url": "https://files.yapper.website/emojis/6f1c2b8e-4d0a-4c1e-9a7b-3e5f8d2c1a90/r2-4b05b926-1730480000-a1b2c3.webp",
+                      "in_server": false,
+                      "text": "<:party_parrot:4b05b926-7f4e-4dab-b1c2-8e6f5a7d4c2b>"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/E401"
+          },
+          "403": {
+            "$ref": "#/components/responses/E403"
+          },
+          "404": {
+            "$ref": "#/components/responses/E404"
+          },
+          "429": {
+            "$ref": "#/components/responses/E429"
+          },
+          "500": {
+            "$ref": "#/components/responses/E500"
+          },
+          "503": {
+            "$ref": "#/components/responses/E503"
+          }
+        }
+      }
+    },
     "/interactions/{id}/{token}/callback": {
       "parameters": [
         {
@@ -6088,7 +6231,8 @@
         "tags": [
           "Interactions"
         ],
-        "summary": "Answer a button click (within 15 minutes, up to 10 answers)",
+        "summary": "Answer a click, a pick, a modal or a slash command (within 15 minutes, up to 10 answers)",
+        "description": "A slash command (the command event) has no message of its own: answer it with reply (shown with “<user> used /cmd” above it), ephemeral, ack or modal. update is refused for commands, and for a modal_submit that came from a command.",
         "x-sdk": {
           "js": [
             "bot.respond()"
@@ -6114,12 +6258,17 @@
                       "reply",
                       "ephemeral",
                       "update",
-                      "ack"
+                      "ack",
+                      "modal"
                     ],
-                    "description": "reply: new message. ephemeral: only the clicker sees it. update: edit the clicked message. ack: just “got it”",
+                    "description": "reply: new message. ephemeral: only the clicker sees it. update: edit the clicked message. ack: just “got it”. modal: open a form (flag bot_modals; only as the first answer, not to a modal_submit)",
                     "examples": [
                       "reply"
                     ]
+                  },
+                  "modal": {
+                    "$ref": "#/components/schemas/Modal",
+                    "description": "type modal only: the form"
                   },
                   "content": {
                     "type": [
@@ -6183,6 +6332,24 @@
                 "examples": [
                   {
                     "type": "reply",
+                    "modal": {
+                      "custom_id": "apply",
+                      "title": "Apply to join",
+                      "components": [
+                        {
+                          "type": "text_input",
+                          "custom_id": "why",
+                          "label": "Why do you want to join?",
+                          "description": "Be honest",
+                          "style": "short",
+                          "min_length": 1,
+                          "max_length": 200,
+                          "required": true,
+                          "value": "Hi",
+                          "placeholder": "Tell us a bit"
+                        }
+                      ]
+                    },
                     "content": "You’re in!",
                     "embeds": null,
                     "components": null,
@@ -6192,6 +6359,24 @@
               },
               "example": {
                 "type": "reply",
+                "modal": {
+                  "custom_id": "apply",
+                  "title": "Apply to join",
+                  "components": [
+                    {
+                      "type": "text_input",
+                      "custom_id": "why",
+                      "label": "Why do you want to join?",
+                      "description": "Be honest",
+                      "style": "short",
+                      "min_length": 1,
+                      "max_length": 200,
+                      "required": true,
+                      "value": "Hi",
+                      "placeholder": "Tell us a bit"
+                    }
+                  ]
+                },
                 "content": "You’re in!",
                 "embeds": null,
                 "components": null,
@@ -6223,7 +6408,8 @@
                         "reply",
                         "ephemeral",
                         "update",
-                        "ack"
+                        "ack",
+                        "modal"
                       ],
                       "description": "What was done",
                       "examples": [
@@ -10612,11 +10798,11 @@
                   "$ref": "#/components/schemas/VersionInfo"
                 },
                 "example": {
-                  "api": "1.2.0",
+                  "api": "1.3.0",
                   "build": "a1b2c3d",
                   "sdk": {
-                    "js": "1.5.0",
-                    "python": "1.5.0"
+                    "js": "1.6.0",
+                    "python": "1.6.0"
                   },
                   "packages": {
                     "npm": "yapin",
@@ -10679,7 +10865,7 @@
                       "description": "API version now",
                       "pattern": "^\\d+\\.\\d+\\.\\d+$",
                       "examples": [
-                        "1.2.0"
+                        "1.3.0"
                       ]
                     },
                     "entries": {
@@ -10693,8 +10879,8 @@
                           {
                             "date": "2026-11-02",
                             "title": "Week of Oct 27",
-                            "api": "1.2.0",
-                            "sdk": "1.5.0",
+                            "api": "1.3.0",
+                            "sdk": "1.6.0",
                             "changes": [
                               {
                                 "type": "added",
@@ -10714,13 +10900,13 @@
                   "additionalProperties": false,
                   "examples": [
                     {
-                      "api": "1.2.0",
+                      "api": "1.3.0",
                       "entries": [
                         {
                           "date": "2026-11-02",
                           "title": "Week of Oct 27",
-                          "api": "1.2.0",
-                          "sdk": "1.5.0",
+                          "api": "1.3.0",
+                          "sdk": "1.6.0",
                           "changes": [
                             {
                               "type": "added",
@@ -10734,13 +10920,13 @@
                   ]
                 },
                 "example": {
-                  "api": "1.2.0",
+                  "api": "1.3.0",
                   "entries": [
                     {
                       "date": "2026-11-02",
                       "title": "Week of Oct 27",
-                      "api": "1.2.0",
-                      "sdk": "1.5.0",
+                      "api": "1.3.0",
+                      "sdk": "1.6.0",
                       "changes": [
                         {
                           "type": "added",
@@ -11365,9 +11551,74 @@
         }
       }
     },
+    "command": {
+      "post": {
+        "summary": "Someone picked one of the bot’s slash commands from the / menu (bots that sent PUT /commands with interactions: true). Nothing is posted in chat: answer through the interaction callback within 15 minutes",
+        "tags": [
+          "Events"
+        ],
+        "description": "In testing (flag bot_slash_interactions). Sent to your event webhook as { id, event: \"command\", data }, signed in X-Yapper-Signature (sha256 HMAC of the body with your webhook secret). The long poll and the gateway send the same data as components.schemas.Event_command.",
+        "x-flag": "bot_slash_interactions",
+        "externalDocs": {
+          "url": "https://www.yapin.gg/developers/api/events#command"
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "event",
+                  "data"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "integer",
+                    "description": "Event id: dedupe on it",
+                    "examples": [
+                      4812
+                    ]
+                  },
+                  "event": {
+                    "type": "string",
+                    "const": "command",
+                    "description": "Event type"
+                  },
+                  "data": {
+                    "$ref": "#/components/schemas/Event_command/properties/data"
+                  }
+                }
+              },
+              "example": {
+                "id": 4812,
+                "event": "command",
+                "data": {
+                  "id": "3af4a815-6e3d-4c9f-a0b1-7d5e4f6c3b1a",
+                  "token": "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928",
+                  "command": "roll",
+                  "args": "2d6",
+                  "channel_id": "c41f8a2b-7e6d-4b3c-9a1e-0f5d2c8b7e43",
+                  "server_id": "a3d9e1f0-5b7c-4a2e-8f6d-1c0b9e8d7a65",
+                  "user_id": "0b7e3c55-9f2d-4e8a-b1c4-7d6a5e3f2b18",
+                  "username": "sam",
+                  "expires_at": "2026-11-01T18:30:00.000Z"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Any 2xx: received (3 second timeout, not retried)"
+          }
+        }
+      }
+    },
     "interaction": {
       "post": {
-        "summary": "Someone clicked one of the bot’s buttons. Answer within 15 minutes",
+        "summary": "Someone clicked one of the bot’s buttons, picked in its select menu or sent its modal. Answer within 15 minutes",
         "tags": [
           "Events"
         ],
@@ -11412,6 +11663,9 @@
                   "token": "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928",
                   "type": "button",
                   "custom_id": "join",
+                  "values": [
+                    "pizza"
+                  ],
                   "message_id": "f7c1d5e2-3b0a-4f6c-9d8e-4a2b1c3f0e87",
                   "channel_id": "c41f8a2b-7e6d-4b3c-9a1e-0f5d2c8b7e43",
                   "server_id": "a3d9e1f0-5b7c-4a2e-8f6d-1c0b9e8d7a65",
@@ -12571,7 +12825,7 @@
           },
           "emoji": {
             "type": "string",
-            "description": "One emoji: \"🔥\" or a server emoji \"<:name:id>\"",
+            "description": "One emoji: \"🔥\" or a server emoji \"<:name:id>\" (or { id, name, animated } when sending; from a server the bot is in with flag bot_custom_emojis)",
             "maxLength": 80,
             "examples": [
               "🔥"
@@ -12619,9 +12873,168 @@
           }
         ]
       },
+      "SelectOption": {
+        "type": "object",
+        "description": "One choice in a select menu",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Text shown in the list",
+            "maxLength": 100,
+            "examples": [
+              "Pizza"
+            ]
+          },
+          "value": {
+            "type": "string",
+            "description": "Sent back in values when picked (unique in the menu)",
+            "maxLength": 100,
+            "examples": [
+              "pizza"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "description": "Smaller text under the label",
+            "maxLength": 100,
+            "examples": [
+              "Cheesy"
+            ]
+          },
+          "emoji": {
+            "type": "string",
+            "description": "One emoji: \"🍕\", a server emoji \"<:name:id>\" (or { id, name, animated } when sending)",
+            "maxLength": 80,
+            "examples": [
+              "🍕"
+            ]
+          },
+          "default": {
+            "type": "boolean",
+            "description": "Picked when the menu shows up",
+            "examples": [
+              false
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "additionalProperties": false,
+        "examples": [
+          {
+            "label": "Pizza",
+            "value": "pizza",
+            "description": "Cheesy",
+            "emoji": "🍕",
+            "default": false
+          }
+        ]
+      },
+      "Select": {
+        "type": "object",
+        "description": "A dropdown (flag bot_selects). Alone in its row. Picking sends an interaction event with type \"select\" and values",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "select",
+            "description": "Always \"select\" (3 works too when sending)",
+            "examples": [
+              "select"
+            ]
+          },
+          "custom_id": {
+            "type": "string",
+            "description": "Sent back in the interaction event; unique per message (buttons and menus share them)",
+            "maxLength": 100,
+            "examples": [
+              "food"
+            ]
+          },
+          "placeholder": {
+            "type": "string",
+            "description": "Shown while nothing is picked",
+            "maxLength": 150,
+            "examples": [
+              "Pick a food"
+            ]
+          },
+          "min_values": {
+            "type": "integer",
+            "description": "Fewest picks (0 to 25). Default 1",
+            "minimum": 0,
+            "maximum": 25,
+            "examples": [
+              1
+            ]
+          },
+          "max_values": {
+            "type": "integer",
+            "description": "Most picks (1 to 25, up to the number of options). Default 1",
+            "minimum": 1,
+            "maximum": 25,
+            "examples": [
+              1
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SelectOption"
+            },
+            "description": "The choices",
+            "minItems": 1,
+            "maxItems": 25,
+            "examples": [
+              [
+                {
+                  "label": "Pizza",
+                  "value": "pizza",
+                  "description": "Cheesy",
+                  "emoji": "🍕",
+                  "default": false
+                }
+              ]
+            ]
+          },
+          "disabled": {
+            "type": "boolean",
+            "description": "Shown greyed out, can’t be used",
+            "examples": [
+              false
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "custom_id",
+          "options"
+        ],
+        "additionalProperties": false,
+        "examples": [
+          {
+            "type": "select",
+            "custom_id": "food",
+            "placeholder": "Pick a food",
+            "min_values": 1,
+            "max_values": 1,
+            "options": [
+              {
+                "label": "Pizza",
+                "value": "pizza",
+                "description": "Cheesy",
+                "emoji": "🍕",
+                "default": false
+              }
+            ],
+            "disabled": false
+          }
+        ]
+      },
       "ActionRow": {
         "type": "object",
-        "description": "A row of buttons. Up to 5 rows a message",
+        "description": "A row of buttons or one select menu. Up to 5 rows a message",
         "properties": {
           "type": {
             "type": "string",
@@ -12634,9 +13047,17 @@
           "components": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Button"
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Button"
+                },
+                {
+                  "$ref": "#/components/schemas/Select"
+                }
+              ],
+              "description": "A button, or one select menu"
             },
-            "description": "The buttons",
+            "description": "Up to 5 buttons, or one select menu",
             "minItems": 1,
             "maxItems": 5,
             "examples": [
@@ -12671,6 +13092,326 @@
                 "custom_id": "join",
                 "url": "https://example.com",
                 "disabled": false
+              }
+            ]
+          }
+        ]
+      },
+      "TextInput": {
+        "type": "object",
+        "description": "A text box in a modal",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "text_input",
+            "description": "Always \"text_input\" (4 works too when sending)",
+            "examples": [
+              "text_input"
+            ]
+          },
+          "custom_id": {
+            "type": "string",
+            "description": "Key of this answer in the modal_submit values",
+            "maxLength": 100,
+            "examples": [
+              "why"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "Question above the box",
+            "maxLength": 45,
+            "examples": [
+              "Why do you want to join?"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "description": "Smaller text under the label",
+            "maxLength": 100,
+            "examples": [
+              "Be honest"
+            ]
+          },
+          "style": {
+            "type": "string",
+            "enum": [
+              "short",
+              "paragraph"
+            ],
+            "description": "short: one line. paragraph: a big box (1 and 2 work too when sending)",
+            "examples": [
+              "short"
+            ]
+          },
+          "min_length": {
+            "type": "integer",
+            "description": "Fewest characters",
+            "minimum": 0,
+            "maximum": 4000,
+            "examples": [
+              1
+            ]
+          },
+          "max_length": {
+            "type": "integer",
+            "description": "Most characters (up to 4000)",
+            "minimum": 1,
+            "maximum": 4000,
+            "examples": [
+              200
+            ]
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Must be filled in. Default true",
+            "examples": [
+              true
+            ]
+          },
+          "value": {
+            "type": "string",
+            "description": "Filled in already",
+            "examples": [
+              "Hi"
+            ]
+          },
+          "placeholder": {
+            "type": "string",
+            "description": "Grey hint while empty",
+            "maxLength": 100,
+            "examples": [
+              "Tell us a bit"
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "custom_id",
+          "label",
+          "style",
+          "required"
+        ],
+        "additionalProperties": false,
+        "examples": [
+          {
+            "type": "text_input",
+            "custom_id": "why",
+            "label": "Why do you want to join?",
+            "description": "Be honest",
+            "style": "short",
+            "min_length": 1,
+            "max_length": 200,
+            "required": true,
+            "value": "Hi",
+            "placeholder": "Tell us a bit"
+          }
+        ]
+      },
+      "ModalSelect": {
+        "type": "object",
+        "description": "A select menu in a modal",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "select",
+            "description": "Always \"select\" (3 works too when sending)",
+            "examples": [
+              "select"
+            ]
+          },
+          "custom_id": {
+            "type": "string",
+            "description": "Sent back in the interaction event; unique per message (buttons and menus share them)",
+            "maxLength": 100,
+            "examples": [
+              "food"
+            ]
+          },
+          "placeholder": {
+            "type": "string",
+            "description": "Shown while nothing is picked",
+            "maxLength": 150,
+            "examples": [
+              "Pick a food"
+            ]
+          },
+          "min_values": {
+            "type": "integer",
+            "description": "Fewest picks (0 to 25). Default 1",
+            "minimum": 0,
+            "maximum": 25,
+            "examples": [
+              1
+            ]
+          },
+          "max_values": {
+            "type": "integer",
+            "description": "Most picks (1 to 25, up to the number of options). Default 1",
+            "minimum": 1,
+            "maximum": 25,
+            "examples": [
+              1
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SelectOption"
+            },
+            "description": "The choices",
+            "minItems": 1,
+            "maxItems": 25,
+            "examples": [
+              [
+                {
+                  "label": "Pizza",
+                  "value": "pizza",
+                  "description": "Cheesy",
+                  "emoji": "🍕",
+                  "default": false
+                }
+              ]
+            ]
+          },
+          "disabled": {
+            "type": "boolean",
+            "description": "Shown greyed out, can’t be used",
+            "examples": [
+              false
+            ]
+          },
+          "label": {
+            "type": "string",
+            "description": "Question above the menu",
+            "maxLength": 45,
+            "examples": [
+              "Your favourite food"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "description": "Smaller text under the label",
+            "maxLength": 100,
+            "examples": [
+              "Pick up to 3"
+            ]
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Something must be picked. Default true",
+            "examples": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "custom_id",
+          "options",
+          "label",
+          "required"
+        ],
+        "additionalProperties": false,
+        "examples": [
+          {
+            "type": "select",
+            "custom_id": "food",
+            "placeholder": "Pick a food",
+            "min_values": 1,
+            "max_values": 1,
+            "options": [
+              {
+                "label": "Pizza",
+                "value": "pizza",
+                "description": "Cheesy",
+                "emoji": "🍕",
+                "default": false
+              }
+            ],
+            "disabled": false,
+            "label": "Your favourite food",
+            "description": "Pick up to 3",
+            "required": true
+          }
+        ]
+      },
+      "Modal": {
+        "type": "object",
+        "description": "A form that pops up for the person who clicked or ran the command (flag bot_modals)",
+        "properties": {
+          "custom_id": {
+            "type": "string",
+            "description": "Sent back in the modal_submit interaction",
+            "maxLength": 100,
+            "examples": [
+              "apply"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "description": "Shown at the top",
+            "maxLength": 45,
+            "examples": [
+              "Apply to join"
+            ]
+          },
+          "components": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TextInput"
+                },
+                {
+                  "$ref": "#/components/schemas/ModalSelect"
+                }
+              ],
+              "description": "A text box or a select menu"
+            },
+            "description": "Up to 5 inputs. Discord’s wrappers work too when sending: { type: 1, components: [input] } or { type: 18, label, description, component: input }",
+            "minItems": 1,
+            "maxItems": 5,
+            "examples": [
+              [
+                {
+                  "type": "text_input",
+                  "custom_id": "why",
+                  "label": "Why do you want to join?",
+                  "description": "Be honest",
+                  "style": "short",
+                  "min_length": 1,
+                  "max_length": 200,
+                  "required": true,
+                  "value": "Hi",
+                  "placeholder": "Tell us a bit"
+                }
+              ]
+            ]
+          }
+        },
+        "required": [
+          "custom_id",
+          "title",
+          "components"
+        ],
+        "additionalProperties": false,
+        "examples": [
+          {
+            "custom_id": "apply",
+            "title": "Apply to join",
+            "components": [
+              {
+                "type": "text_input",
+                "custom_id": "why",
+                "label": "Why do you want to join?",
+                "description": "Be honest",
+                "style": "short",
+                "min_length": 1,
+                "max_length": 200,
+                "required": true,
+                "value": "Hi",
+                "placeholder": "Tell us a bit"
               }
             ]
           }
@@ -12720,7 +13461,7 @@
           },
           "emoji": {
             "type": "string",
-            "description": "One emoji: \"🔥\" or a server emoji \"<:name:id>\"",
+            "description": "One emoji: \"🔥\" or a server emoji \"<:name:id>\" (or { id, name, animated } when sending; from a server the bot is in with flag bot_custom_emojis)",
             "maxLength": 80,
             "examples": [
               "🔥"
@@ -12770,9 +13511,119 @@
           }
         ]
       },
+      "V2Select": {
+        "type": "object",
+        "description": "A select menu (type 3, flag bot_selects), alone in its row",
+        "properties": {
+          "type": {
+            "type": "integer",
+            "const": 3,
+            "description": "String select",
+            "examples": [
+              3
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "description": "Number of this component, unique in the message (1 to 2147483647). Filled in for you when left out",
+            "minimum": 1,
+            "examples": [
+              1
+            ]
+          },
+          "custom_id": {
+            "type": "string",
+            "description": "Sent back in the interaction event; unique per message (buttons and menus share them)",
+            "maxLength": 100,
+            "examples": [
+              "food"
+            ]
+          },
+          "placeholder": {
+            "type": "string",
+            "description": "Shown while nothing is picked",
+            "maxLength": 150,
+            "examples": [
+              "Pick a food"
+            ]
+          },
+          "min_values": {
+            "type": "integer",
+            "description": "Fewest picks (0 to 25). Default 1",
+            "minimum": 0,
+            "maximum": 25,
+            "examples": [
+              1
+            ]
+          },
+          "max_values": {
+            "type": "integer",
+            "description": "Most picks (1 to 25, up to the number of options). Default 1",
+            "minimum": 1,
+            "maximum": 25,
+            "examples": [
+              1
+            ]
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SelectOption"
+            },
+            "description": "The choices",
+            "minItems": 1,
+            "maxItems": 25,
+            "examples": [
+              [
+                {
+                  "label": "Pizza",
+                  "value": "pizza",
+                  "description": "Cheesy",
+                  "emoji": "🍕",
+                  "default": false
+                }
+              ]
+            ]
+          },
+          "disabled": {
+            "type": "boolean",
+            "description": "Shown greyed out, can’t be used",
+            "examples": [
+              false
+            ]
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "custom_id",
+          "options"
+        ],
+        "additionalProperties": false,
+        "examples": [
+          {
+            "type": 3,
+            "id": 1,
+            "custom_id": "food",
+            "placeholder": "Pick a food",
+            "min_values": 1,
+            "max_values": 1,
+            "options": [
+              {
+                "label": "Pizza",
+                "value": "pizza",
+                "description": "Cheesy",
+                "emoji": "🍕",
+                "default": false
+              }
+            ],
+            "disabled": false
+          }
+        ]
+      },
       "V2ActionRow": {
         "type": "object",
-        "description": "A row of buttons (type 1)",
+        "description": "A row of buttons or one select menu (type 1)",
         "properties": {
           "type": {
             "type": "integer",
@@ -12793,9 +13644,17 @@
           "components": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/V2Button"
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/V2Button"
+                },
+                {
+                  "$ref": "#/components/schemas/V2Select"
+                }
+              ],
+              "description": "A button, or one select menu"
             },
-            "description": "Buttons",
+            "description": "Buttons, or one select menu",
             "minItems": 1,
             "maxItems": 5,
             "examples": [
@@ -14782,6 +15641,74 @@
           }
         ]
       },
+      "FoundEmoji": {
+        "type": "object",
+        "description": "A custom emoji seen in a message",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Emoji id",
+            "examples": [
+              "4b05b926-7f4e-4dab-b1c2-8e6f5a7d4c2b"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name",
+            "examples": [
+              "party_parrot"
+            ]
+          },
+          "animated": {
+            "type": "boolean",
+            "description": "A GIF or animated WebP",
+            "examples": [
+              false
+            ]
+          },
+          "url": {
+            "type": "string",
+            "description": "Full link to the picture",
+            "examples": [
+              "https://files.yapper.website/emojis/6f1c2b8e-4d0a-4c1e-9a7b-3e5f8d2c1a90/r2-4b05b926-1730480000-a1b2c3.webp"
+            ]
+          },
+          "in_server": {
+            "type": "boolean",
+            "description": "From a server the bot is in, so the bot can use it itself",
+            "examples": [
+              false
+            ]
+          },
+          "text": {
+            "type": "string",
+            "description": "Ready to paste: <:name:id>, or <a:name:id> when animated",
+            "examples": [
+              "<:party_parrot:4b05b926-7f4e-4dab-b1c2-8e6f5a7d4c2b>"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "animated",
+          "url",
+          "in_server",
+          "text"
+        ],
+        "additionalProperties": false,
+        "examples": [
+          {
+            "id": "4b05b926-7f4e-4dab-b1c2-8e6f5a7d4c2b",
+            "name": "party_parrot",
+            "animated": false,
+            "url": "https://files.yapper.website/emojis/6f1c2b8e-4d0a-4c1e-9a7b-3e5f8d2c1a90/r2-4b05b926-1730480000-a1b2c3.webp",
+            "in_server": false,
+            "text": "<:party_parrot:4b05b926-7f4e-4dab-b1c2-8e6f5a7d4c2b>"
+          }
+        ]
+      },
       "CustomEmoji": {
         "type": "object",
         "description": "A server’s custom emoji",
@@ -16229,9 +17156,165 @@
           }
         ]
       },
+      "Event_command": {
+        "type": "object",
+        "description": "Someone picked one of the bot’s slash commands from the / menu (bots that sent PUT /commands with interactions: true). Nothing is posted in chat: answer through the interaction callback within 15 minutes",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Event id, increasing. Pass the last one as ?after= (or resume with it on the gateway)",
+            "examples": [
+              4812
+            ]
+          },
+          "type": {
+            "type": "string",
+            "const": "command",
+            "description": "Event type",
+            "examples": [
+              "command"
+            ]
+          },
+          "data": {
+            "type": "object",
+            "description": "command data",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Interaction id",
+                "examples": [
+                  "3af4a815-6e3d-4c9f-a0b1-7d5e4f6c3b1a"
+                ]
+              },
+              "token": {
+                "type": "string",
+                "description": "One-off token for the callback (48 hex characters)",
+                "examples": [
+                  "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928"
+                ]
+              },
+              "command": {
+                "type": "string",
+                "description": "The command, without the /",
+                "examples": [
+                  "roll"
+                ]
+              },
+              "args": {
+                "type": "string",
+                "description": "Text after the command, \"\" for none",
+                "examples": [
+                  "2d6"
+                ]
+              },
+              "channel_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Channel id",
+                "examples": [
+                  "c41f8a2b-7e6d-4b3c-9a1e-0f5d2c8b7e43"
+                ]
+              },
+              "server_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Server id",
+                "examples": [
+                  "a3d9e1f0-5b7c-4a2e-8f6d-1c0b9e8d7a65"
+                ]
+              },
+              "user_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "Who used it",
+                "examples": [
+                  "0b7e3c55-9f2d-4e8a-b1c4-7d6a5e3f2b18"
+                ]
+              },
+              "username": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Their username",
+                "examples": [
+                  "sam"
+                ]
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Answer before this",
+                "examples": [
+                  "2026-11-01T18:30:00.000Z"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "token",
+              "command",
+              "args",
+              "channel_id",
+              "server_id",
+              "user_id",
+              "username",
+              "expires_at"
+            ],
+            "additionalProperties": false,
+            "examples": [
+              {
+                "id": "3af4a815-6e3d-4c9f-a0b1-7d5e4f6c3b1a",
+                "token": "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928",
+                "command": "roll",
+                "args": "2d6",
+                "channel_id": "c41f8a2b-7e6d-4b3c-9a1e-0f5d2c8b7e43",
+                "server_id": "a3d9e1f0-5b7c-4a2e-8f6d-1c0b9e8d7a65",
+                "user_id": "0b7e3c55-9f2d-4e8a-b1c4-7d6a5e3f2b18",
+                "username": "sam",
+                "expires_at": "2026-11-01T18:30:00.000Z"
+              }
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When it happened",
+            "examples": [
+              "2026-11-01T18:30:00.000Z"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "data",
+          "created_at"
+        ],
+        "additionalProperties": false,
+        "examples": [
+          {
+            "id": 4812,
+            "type": "command",
+            "data": {
+              "id": "3af4a815-6e3d-4c9f-a0b1-7d5e4f6c3b1a",
+              "token": "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928",
+              "command": "roll",
+              "args": "2d6",
+              "channel_id": "c41f8a2b-7e6d-4b3c-9a1e-0f5d2c8b7e43",
+              "server_id": "a3d9e1f0-5b7c-4a2e-8f6d-1c0b9e8d7a65",
+              "user_id": "0b7e3c55-9f2d-4e8a-b1c4-7d6a5e3f2b18",
+              "username": "sam",
+              "expires_at": "2026-11-01T18:30:00.000Z"
+            },
+            "created_at": "2026-11-01T18:30:00.000Z"
+          }
+        ]
+      },
       "Event_interaction": {
         "type": "object",
-        "description": "Someone clicked one of the bot’s buttons. Answer within 15 minutes",
+        "description": "Someone clicked one of the bot’s buttons, picked in its select menu or sent its modal. Answer within 15 minutes",
         "properties": {
           "id": {
             "type": "integer",
@@ -16269,17 +17352,63 @@
               },
               "type": {
                 "type": "string",
-                "const": "button",
-                "description": "Always \"button\"",
+                "enum": [
+                  "button",
+                  "select",
+                  "modal_submit"
+                ],
+                "description": "button: a click. select: a pick in a select menu (flag bot_selects). modal_submit: a modal sent back (flag bot_modals)",
                 "examples": [
                   "button"
                 ]
               },
               "custom_id": {
                 "type": "string",
-                "description": "The button’s custom_id",
+                "description": "The button’s, menu’s or modal’s custom_id",
                 "examples": [
                   "join"
+                ]
+              },
+              "values": {
+                "oneOf": [
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "description": "A picked option’s value"
+                    },
+                    "description": "select: the picked values"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": {
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "description": "What was typed (trimmed)"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "description": "A picked value"
+                          },
+                          "description": "Picked values"
+                        }
+                      ],
+                      "description": "One answer",
+                      "examples": [
+                        "Because I like it"
+                      ]
+                    },
+                    "description": "modal_submit: each input’s custom_id with its answer: text for a text box (\"\" when skipped), a list for a select menu"
+                  }
+                ],
+                "description": "select and modal_submit only",
+                "examples": [
+                  [
+                    "pizza"
+                  ]
                 ]
               },
               "message_id": {
@@ -16309,7 +17438,7 @@
               "user_id": {
                 "type": "string",
                 "format": "uuid",
-                "description": "Who clicked",
+                "description": "Who clicked, picked or sent it",
                 "examples": [
                   "0b7e3c55-9f2d-4e8a-b1c4-7d6a5e3f2b18"
                 ]
@@ -16352,6 +17481,9 @@
                 "token": "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928",
                 "type": "button",
                 "custom_id": "join",
+                "values": [
+                  "pizza"
+                ],
                 "message_id": "f7c1d5e2-3b0a-4f6c-9d8e-4a2b1c3f0e87",
                 "channel_id": "c41f8a2b-7e6d-4b3c-9a1e-0f5d2c8b7e43",
                 "server_id": "a3d9e1f0-5b7c-4a2e-8f6d-1c0b9e8d7a65",
@@ -16386,6 +17518,9 @@
               "token": "9f8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928",
               "type": "button",
               "custom_id": "join",
+              "values": [
+                "pizza"
+              ],
               "message_id": "f7c1d5e2-3b0a-4f6c-9d8e-4a2b1c3f0e87",
               "channel_id": "c41f8a2b-7e6d-4b3c-9a1e-0f5d2c8b7e43",
               "server_id": "a3d9e1f0-5b7c-4a2e-8f6d-1c0b9e8d7a65",
@@ -16848,6 +17983,9 @@
             "$ref": "#/components/schemas/Event_voice_leave"
           },
           {
+            "$ref": "#/components/schemas/Event_command"
+          },
+          {
             "$ref": "#/components/schemas/Event_interaction"
           },
           {
@@ -17020,7 +18158,7 @@
             "description": "API version (semver), same as the X-Yapin-API-Version header",
             "pattern": "^\\d+\\.\\d+\\.\\d+$",
             "examples": [
-              "1.2.0"
+              "1.3.0"
             ]
           },
           "build": {
@@ -17039,7 +18177,7 @@
                 "description": "Newest JavaScript SDK (npm package and /sdk/yapper.js)",
                 "pattern": "^\\d+\\.\\d+\\.\\d+$",
                 "examples": [
-                  "1.5.0"
+                  "1.6.0"
                 ]
               },
               "python": {
@@ -17047,7 +18185,7 @@
                 "description": "Newest Python SDK (PyPI package and /sdk/yapper.py)",
                 "pattern": "^\\d+\\.\\d+\\.\\d+$",
                 "examples": [
-                  "1.5.0"
+                  "1.6.0"
                 ]
               }
             },
@@ -17058,8 +18196,8 @@
             "additionalProperties": false,
             "examples": [
               {
-                "js": "1.5.0",
-                "python": "1.5.0"
+                "js": "1.6.0",
+                "python": "1.6.0"
               }
             ]
           },
@@ -17104,11 +18242,11 @@
         "additionalProperties": false,
         "examples": [
           {
-            "api": "1.2.0",
+            "api": "1.3.0",
             "build": "a1b2c3d",
             "sdk": {
-              "js": "1.5.0",
-              "python": "1.5.0"
+              "js": "1.6.0",
+              "python": "1.6.0"
             },
             "packages": {
               "npm": "yapin",
@@ -17141,7 +18279,7 @@
             "description": "API version at the end of that week",
             "pattern": "^\\d+\\.\\d+\\.\\d+$",
             "examples": [
-              "1.2.0"
+              "1.3.0"
             ]
           },
           "sdk": {
@@ -17149,7 +18287,7 @@
             "description": "SDK version at the end of that week",
             "pattern": "^\\d+\\.\\d+\\.\\d+$",
             "examples": [
-              "1.5.0"
+              "1.6.0"
             ]
           },
           "changes": {
@@ -17216,8 +18354,8 @@
           {
             "date": "2026-11-02",
             "title": "Week of Oct 27",
-            "api": "1.2.0",
-            "sdk": "1.5.0",
+            "api": "1.3.0",
+            "sdk": "1.6.0",
             "changes": [
               {
                 "type": "added",
@@ -17413,8 +18551,10 @@
             "name": "Quiz Bot"
           },
           "seq": 4812,
-          "heartbeat_interval": 30000
-        }
+          "heartbeat_interval": 30000,
+          "requests": false
+        },
+        "note": "requests: API calls over this socket are on for the bot (flag bot_gateway_requests)"
       },
       "event": {
         "from": "server",
@@ -17461,6 +18601,42 @@
           "op": "heartbeat_ack",
           "seq": 4812
         }
+      },
+      "presence": {
+        "from": "bot",
+        "example": {
+          "op": "presence",
+          "status": "dnd",
+          "activity": "Playing trivia"
+        },
+        "note": "Send after PUT /me/status so the dot changes at once (the SDKs do). No answer"
+      },
+      "request": {
+        "from": "bot",
+        "example": {
+          "op": "request",
+          "id": "1",
+          "method": "POST",
+          "path": "/channels/0b7e3c55-1d2a-4f6e-9c8b-7a6d5e4f3c2b/messages",
+          "body": {
+            "content": "hi"
+          }
+        },
+        "note": "Only when ready said requests: true. An API call with this bot’s token: same rules, limits and answers as HTTPS. JSON bodies only (files over HTTPS), not /events. Up to 8 at once and 100 per 10 s per socket"
+      },
+      "response": {
+        "from": "server",
+        "example": {
+          "op": "response",
+          "id": "1",
+          "status": 200,
+          "body": {
+            "message": {
+              "id": "…"
+            }
+          }
+        },
+        "note": "The answer to the request with the same id: the HTTP status and JSON body (retry_after on 429)"
       }
     }
   },
@@ -17470,7 +18646,8 @@
     "bot_member_events": "692_bot_invite_tracking.sql",
     "bot_reaction_events": "899_bot_dm_reaction_events.sql",
     "bot_voice_event": "453_bot_voice_join.sql",
-    "press_button": "315_bot_components_v2.sql",
+    "run_command": "1003_bot_gateway_presence_commands.sql",
+    "bot_interaction_start": "982_bot_selects_modals.sql",
     "bot_invite_events": "692_bot_invite_tracking.sql",
     "bot_test_event": "109_bot_events.sql"
   }

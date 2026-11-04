@@ -1,5 +1,9 @@
 # Rappin for agents
 
+For API 1.3 select menus, modal forms, optional slash interaction delivery and
+message emoji lookup, see [API 1.3 workflows](api-1.3.md). The shared catalogue
+exposes `get_message_emojis`; rich send/edit/history preserve the new component data.
+
 ## Bundled skills
 
 Use [rappin](../skills/rappin/SKILL.md) for CLI/MCP operations,

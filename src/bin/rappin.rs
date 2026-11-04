@@ -1,7 +1,7 @@
 //! Composable JSON interface to the Yapin Bot API.
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
-use rappin::{Client, CreateMessage, EditMessage, EventCursor, Result, YappinError};
+use rappin::{Client, CreateMessage, EventCursor, Result, UiApiExt, YappinError};
 use reqwest::Method;
 use serde_json::{json, Value};
 use std::{io::Read, path::PathBuf};
@@ -875,7 +875,7 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                 for _ in 0..max_pages {
                     let page = ctx
                         .client()?
-                        .get_messages(channel, Some(limit), cursor, forward)
+                        .get_ui_messages(channel, Some(limit), cursor, forward)
                         .await?;
                     pages += 1;
                     more = page.messages.len() == limit as usize;
@@ -927,7 +927,22 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                 split,
             } => {
                 let mut message = match body_file {
-                    Some(p) => serde_json::from_value::<CreateMessage>(ctx.body(&p)?)?,
+                    Some(p) => {
+                        let mut body: rappin::UiMessageBody =
+                            serde_json::from_value(ctx.body(&p)?)?;
+                        if reply_to.is_some() {
+                            body.reply_to = reply_to;
+                        }
+                        body.validate(true)?;
+                        let response = ctx
+                            .request(
+                                Method::POST,
+                                &format!("/channels/{channel}/messages"),
+                                Some(serde_json::to_value(body)?),
+                            )
+                            .await?;
+                        return Ok(json!({"messages":[response]}));
+                    }
                     None => CreateMessage::new(content.ok_or_else(|| {
                         YappinError::validation("content", "pass --content or --body-file")
                     })?),
@@ -982,8 +997,8 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                 message,
                 body_file,
             } => {
-                let body: EditMessage = serde_json::from_value(ctx.body(&body_file)?)?;
-                body.validate()?;
+                let body: rappin::UiMessageBody = serde_json::from_value(ctx.body(&body_file)?)?;
+                body.validate(false)?;
                 ctx.request(
                     Method::PATCH,
                     &format!("/channels/{channel}/messages/{message}"),

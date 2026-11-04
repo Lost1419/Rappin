@@ -83,6 +83,11 @@ impl Api for MockApi {
         if path == "/me" {
             return Ok(json!({"id":bot_id()}));
         }
+        if path.contains("/messages/") && path.ends_with("/emojis") {
+            return Ok(
+                json!({"emojis":[{"id":role(),"name":"visible","in_server":false,"animated":false,"url":"https://files.yapper.website/emojis/visible.webp","text":"emoji"}]}),
+            );
+        }
         if path.contains("/messages/") {
             let id = path.rsplit('/').next().unwrap();
             return Ok(
@@ -191,12 +196,12 @@ impl OperationPolicy for HostEvidence {
 
 #[test]
 fn catalogue_is_offline_filtered_complete_and_has_one_schema_source() {
-    assert_eq!(catalogue().len(), 56);
+    assert_eq!(catalogue().len(), 57);
     let names = catalogue()
         .iter()
         .map(|c| c.name)
         .collect::<std::collections::HashSet<_>>();
-    assert_eq!(names.len(), 56);
+    assert_eq!(names.len(), 57);
     for descriptor in catalogue() {
         let tool = descriptor.tool_definition();
         assert_eq!(tool["inputSchema"], descriptor.input_schema());
@@ -329,7 +334,7 @@ async fn preview_and_local_metadata_need_no_api_access() {
     assert!(api.requests.lock().unwrap().is_empty());
     let call = operation("get_capabilities", json!({}));
     let result = call.execute(&api, &context()).await.unwrap();
-    assert_eq!(result.data["tools"].as_array().unwrap().len(), 56);
+    assert_eq!(result.data["tools"].as_array().unwrap().len(), 57);
     assert!(api.requests.lock().unwrap().is_empty());
     for name in ["ack_events", "poll_events", "doctor"] {
         let args = if name == "ack_events" {
@@ -1437,4 +1442,62 @@ async fn api12_bot_webhook_lists_are_scoped_and_command_schemas_use_current_meta
         .await
         .iter()
         .any(|c| c.name == "emoji add"));
+}
+
+#[tokio::test]
+async fn message_emoji_lookup_requires_scoped_message_both_actors_and_rollout_evidence() {
+    let mut api = MockApi::standard();
+    let call = operation(
+        "get_message_emojis",
+        json!({"channel":channel(),"message":Uuid::from_u128(10)}),
+    );
+    let result = call
+        .execute_with_policy(
+            &api,
+            &context().test_server_access(true),
+            &HostEvidence::allow(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.data["emojis"][0]["in_server"], false);
+    {
+        let requests = api.requests.lock().unwrap();
+        assert!(requests
+            .iter()
+            .any(|(_, path, _)| path.ends_with("/messages/00000000-0000-0000-0000-00000000000a")));
+    }
+    api.reply_channel = Some(Uuid::from_u128(999));
+    api.requests.lock().unwrap().clear();
+    assert!(call
+        .execute_with_policy(
+            &api,
+            &context().test_server_access(true),
+            &HostEvidence::allow()
+        )
+        .await
+        .is_err());
+    assert!(!api
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(_, path, _)| path.ends_with("/emojis")));
+    api.reply_channel = Some(channel());
+    let denied = HostEvidence {
+        requester: AccessDecision::Denied,
+        bot: AccessDecision::Allowed,
+    };
+    assert!(call
+        .execute_with_policy(&api, &context().test_server_access(true), &denied)
+        .await
+        .is_err());
+    api.channel_server = Some(Uuid::from_u128(999));
+    assert!(call
+        .execute_with_policy(
+            &api,
+            &context().test_server_access(true),
+            &HostEvidence::allow()
+        )
+        .await
+        .is_err());
 }

@@ -1037,3 +1037,33 @@ async fn api12_cli_public_metadata_and_local_upload_preview_are_composable() {
     cleanup(&file);
     cleanup(&path);
 }
+
+#[tokio::test]
+async fn api13_mcp_select_payloads_and_message_emoji_lookup_preserve_data() {
+    let id = Uuid::nil();
+    let row = json!({"type":"row","components":[{"type":"select","custom_id":"topic","options":[{"label":"Rust","value":"rust","emoji":{"id":id,"name":"crab","animated":false}}]}]});
+    let (base,mut requests,http)=mock(vec![response(200,json!({"message":{"id":id,"channel_id":id,"author_id":id,"created_at":"2026-11-04T00:00:00Z","content":"Pick","components":[row.clone()]}})),response(200,json!({"emojis":[{"id":id,"name":"crab","in_server":false}]}))]).await;
+    let mut mcp = Mcp::new(Some(&base), None);
+    mcp.call(
+        1,
+        "send_message",
+        json!({"channel":id,"body":{"content":"Pick","components":[row]}}),
+    )
+    .await;
+    let result = mcp.recv().await;
+    assert_ne!(result["result"]["isError"], true);
+    let request = requests.recv().await.unwrap();
+    assert!(request.contains("\"type\":\"select\""));
+    assert!(request.contains("\"animated\":false"));
+    mcp.call(2, "get_message_emojis", json!({"channel":id,"message":id}))
+        .await;
+    let result = mcp.recv().await;
+    assert_eq!(data(&result)["emojis"][0]["in_server"], false);
+    assert!(requests
+        .recv()
+        .await
+        .unwrap()
+        .starts_with(&format!("GET /channels/{id}/messages/{id}/emojis ")));
+    http.await.unwrap();
+    mcp.close().await;
+}

@@ -26,6 +26,8 @@ pub(crate) struct Tracked {
     pub state: InteractionState,
     pub expires: Instant,
     retire_at: Instant,
+    pub kind: Option<String>,
+    pub has_message: bool,
 }
 pub(crate) struct Registry {
     entries: Mutex<HashMap<[u8; 32], Arc<AsyncMutex<Tracked>>>>,
@@ -66,6 +68,8 @@ impl Registry {
             state: InteractionState::default(),
             expires: Instant::now() + Duration::from_secs(900),
             retire_at: Instant::now() + Duration::from_secs(900),
+            kind: None,
+            has_message: false,
         }));
         entries.insert(key, entry.clone());
         Ok(entry)
@@ -82,16 +86,30 @@ impl crate::Client {
                 .created_at
                 .and_then(|created| created.checked_add_signed(chrono::Duration::seconds(900)))
         });
+        // Preserve no-op tracking for legacy partial button events with no
+        // server deadline. New kinds need kind/source tracking even without one.
+        if deadline.is_none()
+            && !matches!(
+                event.kind.as_deref(),
+                Some("select" | "modal_submit" | "command")
+            )
+        {
+            return Ok(());
+        }
+        let entry = self
+            .interaction_registry()
+            .entry(&path(&event.id, &event.token))?;
+        let mut tracked = entry.lock().await;
+        if tracked.kind.is_none() {
+            tracked.kind = event.kind.clone();
+        }
+        tracked.has_message |= event.message_id.is_some();
         if let Some(deadline) = deadline {
             let remaining = (deadline - now)
                 .to_std()
                 .unwrap_or(Duration::ZERO)
                 .min(Duration::from_secs(900));
             let expires = Instant::now() + remaining;
-            let entry = self
-                .interaction_registry()
-                .entry(&path(&event.id, &event.token))?;
-            let mut tracked = entry.lock().await;
             tracked.expires = tracked.expires.min(expires);
         }
         Ok(())

@@ -50,6 +50,8 @@ fn kind(v: &Value) -> i64 {
     match v["type"].as_str() {
         Some("row") => 1,
         Some("button") => 2,
+        Some("select") => 3,
+        Some("text_input") => 4,
         _ => v["type"].as_i64().unwrap_or(-1),
     }
 }
@@ -68,11 +70,19 @@ fn component(
             let children = v["components"]
                 .as_array()
                 .ok_or_else(|| invalid(path, "row requires buttons"))?;
-            if children.is_empty() || children.len() > 5 || children.iter().any(|c| kind(c) != 2) {
-                return Err(invalid(path, "row requires 1 to 5 buttons"));
+            if !(children.len() == 1 && kind(&children[0]) == 3)
+                && (children.is_empty()
+                    || children.len() > 5
+                    || children.iter().any(|c| kind(c) != 2))
+            {
+                return Err(invalid(
+                    path,
+                    "row requires 1 to 5 buttons or one select menu",
+                ));
             }
         }
         2 => {
+            validate_component_emoji(&v["emoji"], path)?;
             if parent != 1 && parent != 9 {
                 return Err(invalid(path, "button must be in a row or section"));
             }
@@ -109,6 +119,12 @@ fn component(
                     return Err(invalid(path, "invalid button style"));
                 }
             }
+        }
+        3 => {
+            if parent != 1 {
+                return Err(invalid(path, "select must be alone in a row"));
+            }
+            select(v, path, ids)?;
         }
         9 => {
             let children = v["components"]
@@ -329,6 +345,171 @@ pub(crate) fn validate_commands(commands: &[crate::Command]) -> Result<()> {
                 "commands.description",
                 "maximum 100 characters",
             ));
+        }
+    }
+    Ok(())
+}
+
+fn optional_text(value: &Value, path: &str, max: usize) -> Result<()> {
+    if !value.is_null() && !value.is_string() {
+        return Err(invalid(path, "string required"));
+    }
+    text(value, path, max)?;
+    Ok(())
+}
+fn optional_bool(value: &Value, path: &str) -> Result<()> {
+    if !value.is_null() && !value.is_boolean() {
+        return Err(invalid(path, "boolean required"));
+    }
+    Ok(())
+}
+fn required_text(value: &Value, path: &str, max: usize) -> Result<()> {
+    if !value.as_str().is_some_and(|s| !s.is_empty()) {
+        return Err(invalid(path, "nonempty string required"));
+    }
+    text(value, path, max)?;
+    Ok(())
+}
+fn custom_id(value: &Value, path: &str, ids: &mut HashSet<String>) -> Result<()> {
+    required_text(value, path, 100)?;
+    if !ids.insert(value.as_str().unwrap().into()) {
+        return Err(invalid(path, "custom_id must be unique"));
+    }
+    Ok(())
+}
+fn validate_component_emoji(value: &Value, path: &str) -> Result<()> {
+    if value.is_null() {
+        return Ok(());
+    }
+    if value.is_string() {
+        return required_text(value, path, 80);
+    }
+    if !value.is_object()
+        || value["id"]
+            .as_str()
+            .is_none_or(|id| uuid::Uuid::parse_str(id).is_err())
+    {
+        return Err(invalid(path, "emoji requires text or a custom emoji UUID"));
+    }
+    required_text(&value["name"], path, 80)?;
+    if !value["animated"].is_null() && !value["animated"].is_boolean() {
+        return Err(invalid(path, "animated must be boolean"));
+    }
+    Ok(())
+}
+fn select(value: &Value, path: &str, ids: &mut HashSet<String>) -> Result<()> {
+    custom_id(&value["custom_id"], path, ids)?;
+    optional_text(&value["placeholder"], path, 150)?;
+    optional_bool(&value["disabled"], path)?;
+    let options = value["options"]
+        .as_array()
+        .ok_or_else(|| invalid(path, "select requires options"))?;
+    if options.is_empty() || options.len() > 25 {
+        return Err(invalid(path, "select requires 1 to 25 options"));
+    }
+    let minimum = if value["min_values"].is_null() {
+        1
+    } else {
+        value["min_values"]
+            .as_u64()
+            .ok_or_else(|| invalid(path, "invalid min_values"))?
+    };
+    let maximum = if value["max_values"].is_null() {
+        1
+    } else {
+        value["max_values"]
+            .as_u64()
+            .ok_or_else(|| invalid(path, "invalid max_values"))?
+    };
+    if minimum > 25
+        || maximum == 0
+        || maximum > 25
+        || minimum > maximum
+        || maximum > options.len() as u64
+    {
+        return Err(invalid(path, "invalid select bounds"));
+    }
+    let mut values = HashSet::new();
+    let mut defaults = 0;
+    for option in options {
+        required_text(&option["label"], path, 100)?;
+        required_text(&option["value"], path, 100)?;
+        optional_text(&option["description"], path, 100)?;
+        optional_bool(&option["default"], path)?;
+        validate_component_emoji(&option["emoji"], path)?;
+        if !values.insert(option["value"].as_str().unwrap()) {
+            return Err(invalid(path, "option values must be unique"));
+        }
+        if option["default"] == true {
+            defaults += 1;
+        }
+    }
+    if defaults > maximum {
+        return Err(invalid(path, "too many default selections"));
+    }
+    Ok(())
+}
+/// Validate normalized or documented Discord-wrapper modal inputs offline.
+pub fn validate_modal(value: &Value) -> Result<()> {
+    required_text(&value["custom_id"], "modal.custom_id", 100)?;
+    required_text(&value["title"], "modal.title", 45)?;
+    let inputs = value["components"]
+        .as_array()
+        .ok_or_else(|| invalid("modal.components", "inputs required"))?;
+    if inputs.is_empty() || inputs.len() > 5 {
+        return Err(invalid("modal.components", "requires 1 to 5 inputs"));
+    }
+    let mut ids = HashSet::new();
+    for (index, wrapped) in inputs.iter().enumerate() {
+        let path = format!("modal.components[{index}]");
+        let mut value = wrapped.clone();
+        if kind(wrapped) == 1 {
+            let row = wrapped["components"]
+                .as_array()
+                .filter(|r| r.len() == 1)
+                .ok_or_else(|| invalid(&path, "modal row requires one input"))?;
+            value = row[0].clone();
+        } else if wrapped["type"] == 18 {
+            value = wrapped["component"].clone();
+            for field in ["label", "description"] {
+                if value[field].is_null() {
+                    value[field] = wrapped[field].clone();
+                }
+            }
+        }
+        required_text(&value["label"], &path, 45)?;
+        optional_text(&value["description"], &path, 100)?;
+        optional_bool(&value["required"], &path)?;
+        match kind(&value) {
+            3 => select(&value, &path, &mut ids)?,
+            4 => {
+                custom_id(&value["custom_id"], &path, &mut ids)?;
+                if !matches!(value["style"].as_str(), Some("short" | "paragraph"))
+                    && !matches!(value["style"].as_u64(), Some(1 | 2))
+                {
+                    return Err(invalid(&path, "invalid text input style"));
+                }
+                let minimum = if value["min_length"].is_null() {
+                    0
+                } else {
+                    value["min_length"]
+                        .as_u64()
+                        .ok_or_else(|| invalid(&path, "invalid min_length"))?
+                };
+                let maximum = if value["max_length"].is_null() {
+                    4000
+                } else {
+                    value["max_length"]
+                        .as_u64()
+                        .ok_or_else(|| invalid(&path, "invalid max_length"))?
+                };
+                if minimum > 4000 || maximum == 0 || maximum > 4000 || minimum > maximum {
+                    return Err(invalid(&path, "invalid text input bounds"));
+                }
+                optional_text(&value["placeholder"], &path, 100)?;
+                optional_text(&value["value"], &path, maximum as usize)?;
+            }
+            _ => return Err(invalid(&path, "modal requires text inputs or select menus")),
         }
     }
     Ok(())

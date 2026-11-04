@@ -124,6 +124,12 @@ impl WorkerContext {
         let event = self.wait_request(filter, timeout, Some(message)).await?;
         serde_json::from_value(event.data).map_err(Into::into)
     }
+    pub fn ui_interaction(&self) -> Option<&crate::UiInteraction> {
+        match &self.event {
+            CogEvent::UiInteraction { event } => Some(event),
+            _ => None,
+        }
+    }
     pub fn args(&self) -> &str {
         self.event.args()
     }
@@ -495,6 +501,14 @@ impl WorkerCog {
         );
         self
     }
+    /// Extended select/modal/command event values. Parent must opt into interactive_events.
+    pub fn on_ui_interaction<F, Fut>(self, handler: F) -> Self
+    where
+        F: Fn(WorkerContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.listen(Listener::UiInteraction, handler)
+    }
     /// Require parent protocol v6 before starting handlers that use request_once.
     pub fn single_attempt_api(mut self) -> Self {
         self.single_attempt_api = true;
@@ -513,8 +527,10 @@ impl WorkerCog {
             &Wire::Ready {
                 // Existing handlers retain protocol v4 compatibility. Opting into
                 // message outcomes requires a parent that understands protocol v5.
-                protocol: if self.single_attempt_api {
+                protocol: if self.manifest.listeners.contains(&Listener::UiInteraction) {
                     protocol::VERSION
+                } else if self.single_attempt_api {
+                    6
                 } else if self.manifest.listeners.contains(&Listener::ServerMessage) {
                     5
                 } else {
@@ -541,6 +557,7 @@ impl WorkerCog {
                 CogEvent::ReactionAdd { .. } => self.listeners.get(&Listener::ReactionAdd),
                 CogEvent::ReactionRemove { .. } => self.listeners.get(&Listener::ReactionRemove),
                 CogEvent::Interaction { .. } => self.listeners.get(&Listener::Interaction),
+                CogEvent::UiInteraction { .. } => self.listeners.get(&Listener::UiInteraction),
                 CogEvent::MemberJoin { .. } => self.listeners.get(&Listener::MemberJoin),
                 CogEvent::MemberLeave { .. } => self.listeners.get(&Listener::MemberLeave),
                 CogEvent::InviteCreate { .. } => self.listeners.get(&Listener::InviteCreate),

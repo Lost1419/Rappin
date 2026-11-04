@@ -390,13 +390,15 @@ impl ValidatedOperation {
             CheckResolution::allowed("bot ID obtained through the authenticated API"),
             None,
         );
-        let needs_message = matches!(
-            self.entry.permissions.requester,
-            PermissionRule::MessageAuthorOr(_) | PermissionRule::BotMessageAuthor
-        ) || matches!(
-            self.entry.permissions.bot,
-            PermissionRule::MessageAuthorOr(_) | PermissionRule::BotMessageAuthor
-        );
+        let needs_message = self.name() == "get_message_emojis"
+            || matches!(
+                self.entry.permissions.requester,
+                PermissionRule::MessageAuthorOr(_) | PermissionRule::BotMessageAuthor
+            )
+            || matches!(
+                self.entry.permissions.bot,
+                PermissionRule::MessageAuthorOr(_) | PermissionRule::BotMessageAuthor
+            );
         let mut author = None;
         if needs_message {
             let channel = channel.expect("message operation has a verified channel");

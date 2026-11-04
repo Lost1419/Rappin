@@ -657,6 +657,24 @@ impl Client {
             if kind.as_deref() == Some("ack") && entry.state.phase != ResponsePhase::Unanswered {
                 return serde_json::from_value(serde_json::json!({})).map_err(Into::into);
             }
+            if kind.as_deref() == Some("modal") && entry.state.phase != ResponsePhase::Unanswered {
+                return Err(YappinError::validation("modal", "modal must be the first response; acknowledgement or an earlier response prevents opening it"));
+            }
+            if kind.as_deref() == Some("modal") && entry.kind.as_deref() == Some("modal_submit") {
+                return Err(YappinError::validation(
+                    "modal",
+                    "cannot open a modal from its submission",
+                ));
+            }
+            if kind.as_deref() == Some("update")
+                && (entry.kind.as_deref() == Some("command")
+                    || entry.kind.as_deref() == Some("modal_submit") && !entry.has_message)
+            {
+                return Err(YappinError::validation(
+                    "interaction",
+                    "interaction has no source message to update",
+                ));
+            }
             // A cancelled request leaves Uncertain rather than permitting a duplicate initial response.
             entry.state.phase = ResponsePhase::Uncertain;
         }
@@ -692,6 +710,7 @@ impl Client {
                     };
                     entry.state.responses = entry.state.responses.saturating_add(1);
                 }
+                Err(error) if error.to_json()["outcome"] == "unknown" => (),
                 Err(YappinError::Api { .. } | YappinError::Unauthorized) => {
                     if let Some(previous) = previous {
                         entry.state = previous;

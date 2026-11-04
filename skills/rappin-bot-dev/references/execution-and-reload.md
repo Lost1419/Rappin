@@ -93,3 +93,14 @@ not a sandbox. Do not trigger repeated builds of untrusted source as diagnostics
 The version-matched `message_policy_guide`, `handler_failures_guide`,
 `availability_and_hierarchy_guide` and `hot_reload` Rust APIs provide full contracts;
 a checkout also includes `examples/message_gate.rs` and hot-reload examples.
+
+## API 1.3 UI events (0.1.21+)
+
+Use `UiMessageBody` / `UiApiExt` for lossless select messages and typed modal forms.
+`on_select`, `on_modal`, or `on_command_interaction` opt into extended event routing;
+worker `on_ui_interaction` requires protocol v7 and parent `interactive_events(true)`.
+Slash interaction mode is separate from existing MessageContext commands and their
+server-message gate; enforce the application's authorization inside UI handlers.
+A modal must precede acknowledgement or any other response. Match custom IDs,
+retain typed submitted values and propagate failures through the existing explicit
+completion policy. See the version-matched `api_1_3_guide` and included forms example.

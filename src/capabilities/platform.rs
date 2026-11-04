@@ -5,7 +5,8 @@ use reqwest::Method;
 pub(super) fn is_platform_operation(name: &str) -> bool {
     matches!(
         name,
-        "get_api_version"
+        "get_message_emojis"
+            | "get_api_version"
             | "get_api_changelog"
             | "list_emojis"
             | "create_emoji"
@@ -80,6 +81,15 @@ impl ValidatedOperation {
                     self.args["limit"].as_u64().unwrap_or(10)
                 ),
                 true,
+            ),
+            "get_message_emojis" => (
+                Method::GET,
+                format!(
+                    "/channels/{}/messages/{}/emojis",
+                    id("channel"),
+                    id("message")
+                ),
+                false,
             ),
             "list_emojis" => (Method::GET, format!("/servers/{}/emojis", id("id")), false),
             "create_emoji" => (Method::POST, format!("/servers/{}/emojis", id("id")), false),

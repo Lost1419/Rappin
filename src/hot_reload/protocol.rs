@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub(super) const VERSION: u32 = 6;
+pub(super) const VERSION: u32 = 7;
 const MAX_FRAME: u64 = 1024 * 1024;
 
 /// Optional listeners implemented by a worker in addition to commands and buttons.
@@ -25,6 +25,8 @@ pub enum Listener {
     /// Opt-in fallible server-message listener with explicit completion.
     /// Appended to preserve the discriminants of existing public variants.
     ServerMessage,
+    /// API 1.3 values; opt-in parent protocol v7.
+    UiInteraction,
 }
 
 /// Serializable handler input. The bot credential is never part of this message.
@@ -69,6 +71,9 @@ pub enum CogEvent {
     InviteDelete {
         event: crate::InviteEvent,
     },
+    UiInteraction {
+        event: crate::UiInteraction,
+    },
 }
 impl CogEvent {
     pub fn message(&self) -> Option<&MessageEvent> {
@@ -84,12 +89,14 @@ impl CogEvent {
             Self::Button { interaction, .. } | Self::Interaction { interaction } => {
                 Some(interaction)
             }
+            Self::UiInteraction { event } => Some(&event.interaction),
             _ => None,
         }
     }
     pub fn args(&self) -> &str {
         match self {
             Self::Command { args, .. } => args,
+            Self::UiInteraction { event } => event.args.as_deref().unwrap_or(""),
             _ => "",
         }
     }

@@ -156,6 +156,11 @@ pub trait Cog: Send + Sync + 'static {
         Ok(())
     }
 
+    /// Fallible extended event hook; requires opt-in interactive_events on the parent.
+    async fn on_ui_interaction(&self, _ctx: &crate::UiInteractionContext) -> crate::Result<()> {
+        Ok(())
+    }
+
     /// Optional interaction listener hook.
     async fn on_interaction(&self, _ctx: &InteractionContext) {}
 

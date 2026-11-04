@@ -212,6 +212,14 @@ pub type MessageFailureHandlerFn = Arc<
         + Sync,
 >;
 
+type UiHandler = Arc<
+    dyn Fn(
+            crate::UiInteractionContext,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send>>
+        + Send
+        + Sync,
+>;
+
 pub(crate) struct BotState {
     client: Arc<Client>,
     prefixes: Vec<String>,
@@ -235,6 +243,9 @@ pub(crate) struct BotState {
     cursor: Option<EventCursor>,
     max_age: Option<u32>,
     availability_policy: Option<crate::AvailabilityPolicy>,
+    ui_events: bool,
+    interaction_commands: bool,
+    ui_handlers: HashMap<String, UiHandler>,
     handler_concurrency: usize,
     pending_batches: usize,
     auto_ack_after: Option<Duration>,
@@ -486,7 +497,7 @@ impl BotHandle {
             // Do not hold dispatch locks while waiting for the API. Old code stays available.
             if synchronize && self.inner.sync_commands && self.inner.running.load(Ordering::SeqCst)
             {
-                if let Err(cause) = self.client().set_commands(&planned).await {
+                if let Err(cause) = self.publish_commands(&planned).await {
                     #[cfg(feature = "hot-reload")]
                     if expected.is_some() {
                         return Err(crate::hot_reload::diagnostics::error(
@@ -573,7 +584,7 @@ impl BotHandle {
                 .retain(|_, c| c.cog_name.as_deref() != Some(name));
             let planned = advertised_commands(&planned)?;
             if self.inner.sync_commands && self.inner.running.load(Ordering::SeqCst) {
-                self.client().set_commands(&planned).await?;
+                self.publish_commands(&planned).await?;
             }
             let mut commands = self.inner.commands.write().await;
             let mut buttons = self.inner.buttons.write().await;
@@ -619,11 +630,18 @@ impl BotHandle {
         self.install_cog(cog, true, None).await
     }
 
+    async fn publish_commands(&self, commands: &[Command]) -> Result<Vec<Command>> {
+        if self.inner.interaction_commands {
+            crate::UiApiExt::set_interaction_commands(self.client(), commands, true).await
+        } else {
+            self.client().set_commands(commands).await
+        }
+    }
     /// Synchronize a consistent command snapshot without blocking normal dispatch.
     pub async fn sync_commands(&self) -> Result<Vec<Command>> {
         let _update = self.inner.registry_update.lock().await;
         let commands = advertised_commands(&*self.inner.commands.read().await)?;
-        self.client().set_commands(&commands).await
+        self.publish_commands(&commands).await
     }
 
     /// Stops the bot's event loop.
@@ -658,6 +676,9 @@ pub struct BotBuilder {
     cursor: Option<EventCursor>,
     max_age: Option<u32>,
     availability_policy: Option<crate::AvailabilityPolicy>,
+    ui_events: bool,
+    interaction_commands: bool,
+    ui_handlers: HashMap<String, UiHandler>,
     handler_concurrency: usize,
     pending_batches: usize,
     auto_ack_after: Option<Duration>,
@@ -695,6 +716,9 @@ impl BotBuilder {
             cursor: None,
             max_age: None,
             availability_policy: None,
+            ui_events: false,
+            interaction_commands: false,
+            ui_handlers: HashMap::new(),
             handler_concurrency: 8,
             pending_batches: 4,
             auto_ack_after: None,
@@ -856,6 +880,52 @@ impl BotBuilder {
             },
         );
         self
+    }
+
+    /// Enable extended interaction events for native/cog/worker UI hooks.
+    pub fn interactive_events(mut self, enabled: bool) -> Self {
+        self.ui_events = enabled;
+        self
+    }
+    /// Opt into slash command interaction events, leaving message commands unchanged.
+    /// Register an on_command_interaction handler or cog UI hook to answer them.
+    pub fn interaction_commands(mut self, enabled: bool) -> Self {
+        self.interaction_commands = enabled;
+        if enabled {
+            self.ui_events = true;
+        }
+        self
+    }
+    fn ui_handler<F, Fut>(mut self, kind: &str, handler: F) -> Self
+    where
+        F: Fn(crate::UiInteractionContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.ui_events = true;
+        self.ui_handlers
+            .insert(kind.into(), Arc::new(move |ctx| Box::pin(handler(ctx))));
+        self
+    }
+    pub fn on_select<F, Fut>(self, handler: F) -> Self
+    where
+        F: Fn(crate::UiInteractionContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.ui_handler("select", handler)
+    }
+    pub fn on_modal<F, Fut>(self, handler: F) -> Self
+    where
+        F: Fn(crate::UiInteractionContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.ui_handler("modal_submit", handler)
+    }
+    pub fn on_command_interaction<F, Fut>(self, handler: F) -> Self
+    where
+        F: Fn(crate::UiInteractionContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.ui_handler("command", handler)
     }
 
     /// Registers a handler for button clicks whose `custom_id` starts with `prefix`.
@@ -1109,6 +1179,9 @@ impl BotBuilder {
             cursor: self.cursor,
             max_age: self.max_age,
             availability_policy: self.availability_policy,
+            ui_events: self.ui_events,
+            interaction_commands: self.interaction_commands,
+            ui_handlers: self.ui_handlers,
             handler_concurrency: self.handler_concurrency,
             pending_batches: self.pending_batches,
             auto_ack_after: self.auto_ack_after,
@@ -1353,6 +1426,15 @@ impl Bot {
         me: &BotProfile,
         prepared: Option<Box<InteractionEvent>>,
     ) -> Result<()> {
+        if self.handle.inner.ui_events
+            && (event.kind == "command"
+                || event.kind == "interaction"
+                    && matches!(event.data["type"].as_str(), Some("select" | "modal_submit")))
+        {
+            let data = crate::UiInteraction::from_event(&event)?;
+            self.client().track_interaction(&data.interaction).await?;
+            return self.handle_ui_interaction(data, event.id).await;
+        }
         let parsed = match prepared
             .map(|interaction| Ok(EventData::Interaction(*interaction)))
             .unwrap_or_else(|| event.parse_data())
@@ -1679,6 +1761,37 @@ impl Bot {
                 .await?
             {
                 return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_ui_interaction(&self, data: crate::UiInteraction, event_id: u64) -> Result<()> {
+        let kind = data.interaction.kind.clone().unwrap_or_default();
+        let ctx = crate::UiInteractionContext::new(
+            self.handle.inner.client.clone(),
+            data,
+            Some(self.handle.clone()),
+        );
+        if let Some(handler) = self.handle.inner.ui_handlers.get(&kind) {
+            if let Err(error) = failure::catch(handler(ctx.clone())).await {
+                self.button_failed(ctx.context.clone(), event_id, &format!("ui:{kind}"), error)
+                    .await?;
+            }
+        }
+        let cogs: Vec<_> = self
+            .handle
+            .inner
+            .cogs
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect();
+        for cog in cogs {
+            if let Err(error) = failure::catch(cog.on_ui_interaction(&ctx)).await {
+                self.button_failed(ctx.context.clone(), event_id, cog.name(), error)
+                    .await?;
             }
         }
         Ok(())

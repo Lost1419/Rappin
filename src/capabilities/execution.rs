@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Api, ApiExt, Member, MemberDetail, MessagesResponse};
+use crate::{Api, ApiExt, Member, MemberDetail, UiMessagesResponse};
 use uuid::Uuid;
 
 /// Constructed only by catalogue validation, never by deserializing model data.
@@ -346,7 +346,7 @@ impl ValidatedOperation {
                         }
                         format!("/channels/{channel}/messages?{}", query.finish())
                     };
-                    let page: MessagesResponse = api
+                    let page: UiMessagesResponse = api
                         .api_json::<_, ()>("GET".parse().unwrap(), &path, None)
                         .await?;
                     if page.messages.iter().any(|m| m.channel_id != channel) {

@@ -1201,3 +1201,102 @@ async fn main()->Result<()> {
     .unwrap();
     bot.process_event(event("no-once")).await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ui_worker_preserves_values_callbacks_and_failure_causes() {
+    let project = Project::new().await;
+    let manifest=format!("[package]\nname=\"ui-api-worker\"\nversion=\"0.1.0\"\nedition=\"2021\"\n[workspace]\n[dependencies]\nrappin-rs={{path={:?},features=[\"hot-reload\"]}}\ntokio={{version=\"1\",features=[\"macros\",\"rt-multi-thread\"]}}\nserde_json=\"1\"\n",env!("CARGO_MANIFEST_DIR"));
+    tokio::fs::write(project.0.join("Cargo.toml"), manifest)
+        .await
+        .unwrap();
+    #[cfg(unix)]
+    {
+        tokio::fs::create_dir_all(project.0.join("target"))
+            .await
+            .unwrap();
+        let cache = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/rappin-hot");
+        tokio::fs::create_dir_all(&cache).await.unwrap();
+        std::os::unix::fs::symlink(cache, project.0.join("target/rappin-hot")).unwrap();
+    }
+    let source = r#"
+use rappin::*;
+#[tokio::main]
+async fn main()->Result<()> {
+    WorkerCog::new("ui-worker").on_ui_interaction(|ctx|async move {
+        let data=ctx.ui_interaction().expect("extended event");
+        match data.interaction.kind.as_deref() {
+            Some("select")=>{
+                assert!(matches!(&data.values,Some(InteractionValues::Selected(v)) if v==&["rust"]));
+                ctx.show_modal(&data.interaction,&Modal::new("apply","Apply").input(TextInput::short("name","Name"))).await
+            },
+            Some("modal_submit")=>{
+                assert!(matches!(&data.values,Some(InteractionValues::Submitted(v)) if matches!(v.get("name"),Some(ModalValue::Text(t)) if t=="Rust")));
+                Err(YappinError::Api{status:503,message:"structured worker failure".into(),retry_after:Some(2.0)})
+            },
+            Some("command")=>{
+                assert_eq!(data.command.as_deref(),Some("apply"));
+                ctx.respond_ui(&data.interaction,InteractionCallbackType::Reply,&UiMessageBody::new("Command received")).await
+            },
+            _=>panic!("unexpected event"),
+        }
+    }).run().await
+}
+"#;
+    tokio::fs::write(project.0.join("src/main.rs"), source)
+        .await
+        .unwrap();
+    let (base, mut requests, http) = support::mock(vec![
+        support::response(200, json!({"ok":true})),
+        support::response(200, json!({"ok":true})),
+    ])
+    .await;
+    let callbacks = Arc::new(AtomicUsize::new(0));
+    let c = callbacks.clone();
+    let bot = Bot::builder("private_parent_token")
+        .base_url(base)
+        .sync_commands(false)
+        .log(false)
+        .interactive_events(true)
+        .on_button_failure(move |_, failure| {
+            let c = c.clone();
+            async move {
+                assert_eq!(failure.handler, "ui-worker");
+                assert_eq!(failure.error.status, Some(503));
+                assert_eq!(failure.error.retry_after, Some(2.0));
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(rappin::FailureDisposition::Handled)
+            }
+        })
+        .build();
+    bot.cache().set_me(me()).await;
+    let _reload = HotReload::load(
+        bot.handle(),
+        WorkerProject::new(project.0.join("Cargo.toml"), "ui-api-worker").offline(true),
+    )
+    .await
+    .unwrap();
+    for kind in ["select", "modal_submit", "command"] {
+        let mut data = json!({"id":uuid::Uuid::new_v4(),"token":"interaction_secret","type":kind,"custom_id":"apply","channel_id":uuid::Uuid::nil(),"server_id":uuid::Uuid::nil(),"user_id":uuid::Uuid::nil(),"expires_at":chrono::Utc::now()+chrono::Duration::minutes(15)});
+        if kind == "select" {
+            data["values"] = json!(["rust"]);
+        }
+        if kind == "modal_submit" {
+            data["values"] = json!({"name":"Rust"});
+        }
+        if kind == "command" {
+            data["command"] = json!("apply");
+            data["args"] = json!("");
+        }
+        bot.process_event(serde_json::from_value(json!({"id":1,"type":if kind=="command" {"command"}else{"interaction"},"data":data})).unwrap()).await.unwrap();
+    }
+    assert_eq!(callbacks.load(Ordering::SeqCst), 1);
+    let first = requests.recv().await.unwrap();
+    assert!(first.contains("\"type\":\"modal\""));
+    assert!(first
+        .to_lowercase()
+        .contains("authorization: bot private_parent_token"));
+    let second = requests.recv().await.unwrap();
+    assert!(second.contains("Command received"));
+    assert!(!second.contains("private_interaction_token"));
+    http.await.unwrap();
+}

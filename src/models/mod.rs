@@ -8,6 +8,7 @@ pub mod message;
 pub mod platform;
 pub mod server;
 pub mod server_features;
+pub mod ui;
 pub mod user;
 pub mod voice;
 
@@ -21,5 +22,6 @@ pub use message::*;
 pub use platform::*;
 pub use server::*;
 pub use server_features::*;
+pub use ui::*;
 pub use user::*;
 pub use voice::*;

@@ -223,10 +223,9 @@ fn metadata(
         }
         "list_invites" => (S::Server("id"), D::Members),
         "list_server_events" | "create_server_event" => (S::Server("id"), D::Events),
-        "read_messages" | "get_message" | "send_message" | "edit_message" | "delete_message"
-        | "add_reaction" | "remove_reaction" | "pin_message" | "unpin_message" => {
-            (S::Channel("channel"), D::Messages)
-        }
+        "read_messages" | "get_message" | "get_message_emojis" | "send_message"
+        | "edit_message" | "delete_message" | "add_reaction" | "remove_reaction"
+        | "pin_message" | "unpin_message" => (S::Channel("channel"), D::Messages),
         "list_emojis" | "create_emoji" | "edit_emoji" | "delete_emoji" => {
             (S::Server("id"), D::Emojis)
         }
@@ -296,6 +295,10 @@ fn metadata(
                     .additional_checks
                     .push(ExternalCheck::MessageContentRules);
             }
+        }
+        "get_message_emojis" => {
+            permissions.requester_channel.push("read_history");
+            permissions.bot_channel.push("read_history");
         }
         "send_files" => {
             permissions
@@ -379,7 +382,8 @@ fn metadata(
     }
     let test_servers_only = matches!(
         name,
-        "send_files"
+        "get_message_emojis"
+            | "send_files"
             | "list_emojis"
             | "create_emoji"
             | "edit_emoji"

@@ -10,6 +10,11 @@ use uuid::Uuid;
 /// Implement this for application adapters or local test transports as needed.
 #[async_trait]
 pub trait Api: Send + Sync {
+    /// Record callback deadlines/kind when supported by the transport. Custom
+    /// adapters own their coordination; worker invocations are tracked by the parent.
+    async fn track_interaction(&self, _event: &crate::InteractionEvent) -> Result<()> {
+        Ok(())
+    }
     /// Sanitize operation results before returning them to model-facing code.
     fn sanitize(&self, value: Value) -> Value {
         crate::security::redact_fields(value)
@@ -285,6 +290,9 @@ impl<T: Api + ?Sized> ApiExt for T {}
 
 #[async_trait]
 impl Api for crate::Client {
+    async fn track_interaction(&self, event: &crate::InteractionEvent) -> Result<()> {
+        crate::Client::track_interaction(self, event).await
+    }
     fn sanitize(&self, value: Value) -> Value {
         crate::security::redact_fields(self.redact_credentials(value))
     }
@@ -334,6 +342,9 @@ impl Api for crate::Client {
 
 #[async_trait]
 impl<T: Api + ?Sized> Api for std::sync::Arc<T> {
+    async fn track_interaction(&self, event: &crate::InteractionEvent) -> Result<()> {
+        Api::track_interaction(&**self, event).await
+    }
     fn sanitize(&self, value: Value) -> Value {
         (**self).sanitize(value)
     }
@@ -363,6 +374,9 @@ macro_rules! native_context {
     ($ty:ty) => {
         #[async_trait]
         impl Api for $ty {
+            async fn track_interaction(&self, event: &crate::InteractionEvent) -> Result<()> {
+                self.client.track_interaction(event).await
+            }
             fn sanitize(&self, value: Value) -> Value {
                 self.client.sanitize(value)
             }
