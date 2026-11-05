@@ -1,11 +1,16 @@
 //! Opt-in shared admission and durable receipt contract.
 mod conflicts;
+mod reconciliation;
 use super::{BotHandle, EventProcessingFailure};
 use crate::{Event, RemoteError, Result, YappinError};
 use conflicts::{hex, Evidence};
 pub use conflicts::{
     ConflictDisposition, IngressConflict, IngressConflictPolicy, IngressSource, PayloadDifference,
     PayloadType,
+};
+pub use reconciliation::{
+    prepare_timestamp_reconciliation, PreparedTimestampReconciliation, TimestampReconciliation,
+    TimestampReconciliationOptions, TimestampReconciliationRequest, TimestampReconciliationState,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -134,6 +139,8 @@ pub struct IngressRecovery {
     pub records: Vec<IngressRecord>,
     #[serde(default)]
     pub conflicts: Vec<IngressConflict>,
+    #[serde(default)]
+    pub timestamp_reconciliations: Vec<TimestampReconciliation>,
 }
 #[async_trait::async_trait]
 pub trait IngressStore: Send + Sync + 'static {
@@ -145,6 +152,18 @@ pub trait IngressStore: Send + Sync + 'static {
     /// overriding this hook rather than claiming the default is persistent.
     async fn record_conflict(&self, _conflict: IngressConflict) -> Result<AdmissionDurability> {
         Ok(AdmissionDurability::Volatile)
+    }
+    /// Atomically insert/transition a timestamp decision after calling its
+    /// `validate_write` against the transaction's current snapshot. Preserve the
+    /// original event, receipt, conflicts and checkpoint. Requires an exclusive
+    /// consumer lease; approval is unavailable for stores using this default.
+    async fn commit_timestamp_reconciliation(
+        &self,
+        _decision: TimestampReconciliation,
+    ) -> Result<()> {
+        Err(YappinError::Config(
+            "atomic timestamp reconciliation storage is unsupported".into(),
+        ))
     }
     /// Atomically persist an authoritative polling checkpoint. Pruning records
     /// at/below it is permitted only once this checkpoint is durable.
@@ -172,6 +191,7 @@ struct Claim {
     source: IngressSource,
     recovered_source: Option<IngressSource>,
     polling_verified: bool,
+    reconciliation: Option<TimestampReconciliation>,
     conflict: bool,
     pending_since: Option<tokio::time::Instant>,
     status: watch::Sender<ReceiptStatus>,
@@ -434,7 +454,7 @@ impl EventIngress {
                             let id=state.claims.iter().find(|(_,c)|c.pending_since.is_some_and(|start|start+self.0.config.conflict_recovery_timeout<=tokio::time::Instant::now())).map(|(id,_)|*id);
                             id.and_then(|id| {
                                 state.claims.get_mut(&id).unwrap().pending_since=None;
-                                state.conflicts.iter_mut().find(|r|r.event_id==id&&r.disposition==ConflictDisposition::AwaitingPolling).map(|r|{r.disposition=ConflictDisposition::TimedOut;r.clone()})
+                                state.conflicts.iter_mut().find(|r|r.event_id==id&&matches!(r.disposition,ConflictDisposition::AwaitingPolling | ConflictDisposition::AwaitingReconciliationPolling)).map(|r|{r.disposition=ConflictDisposition::TimedOut;r.clone()})
                             })
                         };
                         if let Some(report)=expired {
@@ -462,7 +482,7 @@ impl EventIngress {
             .collect()
     }
     pub(super) fn recoverable_conflict(&self, error: &YappinError) -> bool {
-        matches!(error, YappinError::IngressConflict{conflict} if matches!(conflict.disposition,ConflictDisposition::AwaitingPolling|ConflictDisposition::PollingConfirmed))
+        matches!(error, YappinError::IngressConflict{conflict} if matches!(conflict.disposition,ConflictDisposition::AwaitingPolling|ConflictDisposition::PollingConfirmed|ConflictDisposition::AwaitingReconciliationPolling|ConflictDisposition::Reconciled))
     }
     async fn persist_conflict(&self, report: &IngressConflict) -> Result<()> {
         if let Some(store) = &self.0.store {
@@ -489,10 +509,13 @@ impl EventIngress {
             return Ok(());
         }
         if state.conflicts.len() == self.0.config.max_conflict_reports {
-            let retired = state
-                .conflicts
-                .iter()
-                .position(|r| r.disposition != ConflictDisposition::AwaitingPolling);
+            let retired = state.conflicts.iter().position(|r| {
+                !matches!(
+                    r.disposition,
+                    ConflictDisposition::AwaitingPolling
+                        | ConflictDisposition::AwaitingReconciliationPolling
+                )
+            });
             if let Some(index) = retired {
                 state.conflicts.remove(index);
                 state.status.conflict_reports_dropped =
@@ -517,6 +540,7 @@ impl EventIngress {
             let recover = self.0.config.conflict_policy
                 == IngressConflictPolicy::RetainCompletedAndPoll
                 && stage == ReceiptStage::Completed
+                && claim.reconciliation.is_none()
                 && !(claim.conflict && claim.pending_since.is_none())
                 && matches!(source, IngressSource::Webhook | IngressSource::Gateway);
             let disposition = if recover && claim.polling_verified {
@@ -639,6 +663,15 @@ impl EventIngress {
         }
         let mut state = self.0.state.lock().unwrap();
         let claim = state.claims.get_mut(&id).unwrap();
+        if claim
+            .reconciliation
+            .as_ref()
+            .is_some_and(|r| r.state == TimestampReconciliationState::Approved)
+        {
+            // Original payload polling is not the explicitly approved candidate.
+            guard.armed = false;
+            return Ok(());
+        }
         claim.polling_verified = true;
         if !reports.is_empty() {
             claim.pending_since = None;
@@ -710,23 +743,9 @@ impl EventIngress {
         s.status.full = s.status.full.saturating_add(1);
     }
     fn fingerprint(&self, event: &Event) -> Result<[u8; 32]> {
-        if event.id == 0 {
-            return Err(YappinError::validation(
-                "ingress.event_id",
-                "must be nonzero",
-            ));
-        }
-        let mut canonical = serde_json::to_value(event)?;
-        conflicts::canonicalize(&mut canonical);
-        let bytes = serde_json::to_vec(&canonical)?;
-        if bytes.len() > self.0.config.max_event_bytes {
-            return Err(YappinError::validation(
-                "ingress.event",
-                "event exceeds configured size bound",
-            ));
-        }
-        Ok(Sha256::digest(bytes).into())
+        event_fingerprint(event, self.0.config.max_event_bytes)
     }
+
     async fn existing(&self, event: &Event, source: IngressSource) -> Result<Option<EventReceipt>> {
         let hash = self.fingerprint(event)?;
         let _fence = self.0.checkpoint_fence.lock().await;
@@ -738,15 +757,30 @@ impl EventIngress {
         source: IngressSource,
         hash: [u8; 32],
     ) -> Result<Option<EventReceipt>> {
-        let mismatch = self
-            .0
-            .state
-            .lock()
-            .unwrap()
-            .claims
-            .get(&event.id)
-            .is_some_and(|claim| claim.fingerprint != hash);
-        if mismatch {
+        let (mismatch, decision) = {
+            let state = self.0.state.lock().unwrap();
+            state
+                .claims
+                .get(&event.id)
+                .map(|claim| {
+                    (
+                        claim.fingerprint != hash,
+                        claim
+                            .reconciliation
+                            .as_ref()
+                            .filter(|r| r.polling_fingerprint == hex(&hash))
+                            .cloned(),
+                    )
+                })
+                .unwrap_or((false, None))
+        };
+        let approved_duplicate = if let Some(decision) = decision {
+            self.confirm_reconciliation(event.id, source, decision)
+                .await?
+        } else {
+            false
+        };
+        if mismatch && !approved_duplicate {
             self.conflict(event, source, hash).await?;
         }
         if source == IngressSource::Polling
@@ -816,6 +850,7 @@ impl EventIngress {
                     source,
                     recovered_source: None,
                     polling_verified: source == IngressSource::Polling,
+                    reconciliation: None,
                     conflict: false,
                     pending_since: None,
                     status: tx,
@@ -1036,6 +1071,31 @@ impl EventIngress {
                 "stored claims exceed configured bound",
             ));
         }
+        if recovery.timestamp_reconciliations.len() > self.0.config.max_conflict_reports {
+            return Err(YappinError::validation(
+                "ingress.recovery",
+                "stored reconciliation capacity exceeded",
+            ));
+        }
+        let mut decisions = BTreeMap::new();
+        for decision in &recovery.timestamp_reconciliations {
+            if decision.bot_id != bot {
+                return Err(YappinError::validation(
+                    "ingress.recovery",
+                    "reconciliation bot mismatch",
+                ));
+            }
+            decision.validate_retained(&recovery)?;
+            if decisions
+                .insert(decision.event_id, decision.clone())
+                .is_some()
+            {
+                return Err(YappinError::validation(
+                    "ingress.recovery",
+                    "duplicate timestamp reconciliation",
+                ));
+            }
+        }
         let mut pending = vec![];
         let mut uncertain = vec![];
         for record in recovery.records {
@@ -1103,6 +1163,7 @@ impl EventIngress {
                         source: IngressSource::Recovery,
                         recovered_source: record.source,
                         polling_verified: false,
+                        reconciliation: decisions.remove(&id),
                         conflict: false,
                         pending_since: None,
                         status: tx,
@@ -1149,6 +1210,20 @@ impl EventIngress {
                     "ingress.recovery",
                     "conflict does not match a completed retained receipt",
                 ));
+            }
+            if let Some(decision) = &claim.reconciliation {
+                if !decision.covers(&conflict) {
+                    return Err(conflict.to_error());
+                }
+                if decision.state == TimestampReconciliationState::Confirmed {
+                    conflict.disposition = ConflictDisposition::Reconciled;
+                } else {
+                    claim.conflict = true;
+                    claim.pending_since = Some(tokio::time::Instant::now());
+                    conflict.disposition = ConflictDisposition::AwaitingReconciliationPolling;
+                }
+                self.remember(&mut state, conflict)?;
+                continue;
             }
             claim.conflict = true;
             if self.0.config.conflict_policy == IngressConflictPolicy::RetainCompletedAndPoll
@@ -1401,4 +1476,23 @@ impl Drop for ConflictGuard {
             );
         }
     }
+}
+
+fn event_fingerprint(event: &Event, limit: usize) -> Result<[u8; 32]> {
+    if event.id == 0 {
+        return Err(YappinError::validation(
+            "ingress.event_id",
+            "must be nonzero",
+        ));
+    }
+    let mut canonical = serde_json::to_value(event)?;
+    conflicts::canonicalize(&mut canonical);
+    let bytes = serde_json::to_vec(&canonical)?;
+    if bytes.len() > limit {
+        return Err(YappinError::validation(
+            "ingress.event",
+            "event exceeds configured size bound",
+        ));
+    }
+    Ok(Sha256::digest(bytes).into())
 }

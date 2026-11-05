@@ -269,3 +269,11 @@ remain consumer-owned.
 See [the event contract reproduction](event-contract-conflicts.md) for the exact
 upstream guarantees needed when transports disagree. A missing live competing
 payload cannot be reconstructed from a legacy fingerprint-only error.
+
+### Explicit legacy timestamp reconciliation
+
+A completed legacy null outer timestamp can be approved against one fresh polling
+fingerprint through the separate [timestamp reconciliation API](timestamp-reconciliation.md).
+This requires atomic consumer storage and explicit approval. It preserves original
+events/completions, waits for matching normal polling, and never replays handlers
+or forces cursors. Other payload/identity conflicts remain terminal.

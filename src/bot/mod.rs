@@ -6,10 +6,12 @@ mod ingress;
 mod invocation;
 mod shared_pipeline;
 pub use ingress::{
-    Admission, AdmissionDurability, AdmissionStatus, ConflictDisposition, EventIngress,
-    EventReceipt, IngressConfig, IngressConflict, IngressConflictPolicy, IngressRecord,
-    IngressRecovery, IngressSource, IngressStatus, IngressStore, PayloadDifference, PayloadType,
-    ReceiptStage, ReceiptStatus,
+    prepare_timestamp_reconciliation, Admission, AdmissionDurability, AdmissionStatus,
+    ConflictDisposition, EventIngress, EventReceipt, IngressConfig, IngressConflict,
+    IngressConflictPolicy, IngressRecord, IngressRecovery, IngressSource, IngressStatus,
+    IngressStore, PayloadDifference, PayloadType, PreparedTimestampReconciliation, ReceiptStage,
+    ReceiptStatus, TimestampReconciliation, TimestampReconciliationOptions,
+    TimestampReconciliationRequest, TimestampReconciliationState,
 };
 mod message;
 pub use invocation::{

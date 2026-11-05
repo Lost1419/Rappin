@@ -48,7 +48,7 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.25"
+rappin-rs = "0.1.26"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -200,6 +200,7 @@ The default library build needs neither Node nor the CLI dependencies.
 - [Checked invocation](docs/checked-invocation.md): invoke installed commands from the original message context, with read-only preparation, consumer operation IDs, and explicit completion.
 - [Handler failures](docs/handler-failures.md): completion decisions, structured errors, draining, and checkpoints.
 - [Shared ingress](docs/shared-ingress.md): verified webhooks, polling recovery, deduplication, durable receipts, and checkpoint ownership.
+- [Timestamp reconciliation](docs/timestamp-reconciliation.md): explicit audit for completed legacy envelope conflicts.
 - [Gateway API requests](docs/gateway-requests.md): opt-in JSON request transport, bounded concurrency, and uncertain-write handling.
 - [Transport and caching](docs/transport-and-cache.md): API hosts, retries, custom caches, and prefixes.
 - [API 1.3 interactions](docs/api-1.3.md): select menus, modal forms, slash interaction mode, and message emoji discovery.

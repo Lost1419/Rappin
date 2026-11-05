@@ -274,6 +274,11 @@ struct Store {
     block_conflict: AtomicBool,
     conflict_waiting: Notify,
     release_conflict: Notify,
+    fail_reconciliation: AtomicUsize,
+    reconciliation_writes: AtomicUsize,
+    block_confirmation: AtomicBool,
+    confirmation_waiting: Notify,
+    release_confirmation: Notify,
 }
 #[async_trait::async_trait]
 impl IngressStore for Store {
@@ -314,6 +319,43 @@ impl IngressStore for Store {
         data.conflicts.push(report);
         Ok(AdmissionDurability::Durable)
     }
+    async fn commit_timestamp_reconciliation(
+        &self,
+        decision: TimestampReconciliation,
+    ) -> Result<()> {
+        self.reconciliation_writes.fetch_add(1, Ordering::SeqCst);
+        if decision.state == TimestampReconciliationState::Confirmed
+            && self.block_confirmation.load(Ordering::SeqCst)
+        {
+            self.confirmation_waiting.notify_one();
+            self.release_confirmation.notified().await;
+        }
+        let mut data = self.data.lock().unwrap();
+        decision.validate_write(&data)?;
+        let fail = self.fail_reconciliation.load(Ordering::SeqCst);
+        if fail == 1 || fail == 3 && decision.state == TimestampReconciliationState::Confirmed {
+            return Err(YappinError::Api {
+                status: 503,
+                message: "fixture transaction rolled back".into(),
+                retry_after: Some(0.5),
+            });
+        }
+        data.timestamp_reconciliations
+            .retain(|r| r.event_id != decision.event_id);
+        data.timestamp_reconciliations.push(decision);
+        if fail == 2
+            || fail == 4
+                && data.timestamp_reconciliations.last().unwrap().state
+                    == TimestampReconciliationState::Confirmed
+        {
+            return Err(YappinError::Api {
+                status: 503,
+                message: "fixture commit response lost".into(),
+                retry_after: Some(0.5),
+            });
+        }
+        Ok(())
+    }
     async fn checkpoint(&self, _: Uuid, cursor: u64) -> Result<()> {
         if cursor > 0 && self.fail_checkpoint.load(Ordering::SeqCst) > 0 {
             return Err(YappinError::Config(
@@ -323,6 +365,15 @@ impl IngressStore for Store {
         let mut data = self.data.lock().unwrap();
         data.polling_checkpoint = Some(cursor);
         data.records.retain(|r| r.event.id > cursor);
+        let retired = data
+            .timestamp_reconciliations
+            .iter()
+            .filter(|r| r.event_id <= cursor)
+            .map(|r| r.event_id)
+            .collect::<Vec<_>>();
+        data.conflicts.retain(|r| !retired.contains(&r.event_id));
+        data.timestamp_reconciliations
+            .retain(|r| r.event_id > cursor);
         Ok(())
     }
 }
@@ -1664,4 +1715,576 @@ async fn diagnostic_capacity_keeps_unresolved_evidence_and_reports_the_new_confl
     assert_eq!(report.completed_uncommitted_events, [10, 20]);
     assert_eq!(report.committed_cursor, 0);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+// Synthetic scoped server event; all IDs/content are fixtures.
+fn legacy_event() -> Event {
+    let mut value = event(100, "ping");
+    value.data["server_id"] = json!(Uuid::from_u128(201));
+    value.data["channel_id"] = json!(Uuid::from_u128(202));
+    value.data["author_id"] = json!(Uuid::from_u128(203));
+    value.data["created_at"] = json!("2026-01-01T01:02:03Z");
+    value
+}
+fn event_hash(event: &Event) -> String {
+    use sha2::Digest;
+    // The default JSON map is sorted; recursively sort via BTreeMap even if a
+    // downstream crate unifies serde_json/preserve_order.
+    fn canonical(v: Value) -> Value {
+        match v {
+            Value::Object(map) => map
+                .into_iter()
+                .map(|(k, v)| (k, canonical(v)))
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into_iter()
+                .collect(),
+            Value::Array(a) => Value::Array(a.into_iter().map(canonical).collect()),
+            other => other,
+        }
+    }
+    Sha256::digest(serde_json::to_vec(&canonical(serde_json::to_value(event).unwrap())).unwrap())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+async fn legacy_fixture(http: &mut Http) -> (Arc<Store>, Event, Arc<AtomicUsize>) {
+    let store = Arc::new(Store::default());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let c = calls.clone();
+    let bot = builder(http)
+        .ingress_store(store.clone())
+        .command("ping", "fixture", move |_| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .build();
+    let ingress = bot.handle().ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    ingress.wait_ready().await.unwrap();
+    let poll = http.next().await;
+    let mut receipt = ingress
+        .admit(verified(legacy_event()))
+        .await
+        .receipt
+        .unwrap();
+    assert_eq!(receipt.wait().await.stage, ReceiptStage::Completed);
+    let mut incoming = legacy_event();
+    incoming.created_at = Some("2026-02-03T04:05:06Z".parse().unwrap());
+    poll.send(json!({"events":[incoming.clone()],"last":100}))
+        .unwrap();
+    assert!(run.await.unwrap().is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // Model a legacy persisted receipt without original transport provenance.
+    // This is synthetic fixture construction, not a live payload rewrite.
+    {
+        let mut snapshot = store.data.lock().unwrap();
+        snapshot.records[0].source = None;
+        snapshot.conflicts[0].existing_source = IngressSource::Recovery;
+        snapshot.conflicts[0].recovered_source = None;
+    }
+    (store, incoming, calls)
+}
+fn timestamp_request(incoming: &Event) -> TimestampReconciliationRequest {
+    TimestampReconciliationRequest::new(
+        bot_id(),
+        100,
+        event_hash(&legacy_event()),
+        event_hash(incoming),
+    )
+}
+async fn prepare_fixture(
+    http: &mut Http,
+    store: Arc<Store>,
+    incoming: &Event,
+    options: TimestampReconciliationOptions,
+) -> Result<PreparedTimestampReconciliation> {
+    let client = Client::builder("fixture").base_url(&http.url).build();
+    let request = timestamp_request(incoming);
+    let task = tokio::spawn(async move {
+        prepare_timestamp_reconciliation(&client, store, request, options).await
+    });
+    http.next()
+        .await
+        .send(json!({"events":[incoming],"last":100}))
+        .unwrap();
+    task.await.unwrap()
+}
+#[tokio::test]
+async fn explicit_timestamp_approval_preserves_completion_and_requires_normal_polling() {
+    let mut http = Http::new(vec![]).await;
+    let (store, incoming, calls) = legacy_fixture(&mut http).await;
+    let original = serde_json::to_value(&store.data.lock().unwrap().records).unwrap();
+    let prepared = prepare_fixture(&mut http, store.clone(), &incoming, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.evidence().state,
+        TimestampReconciliationState::Prepared
+    );
+    assert!(store
+        .data
+        .lock()
+        .unwrap()
+        .timestamp_reconciliations
+        .is_empty());
+    assert_eq!(http.poll_after.lock().unwrap().last(), Some(&99));
+    let approval = prepared
+        .approve(OperationId::new("fixture/approval/1").unwrap())
+        .await
+        .unwrap();
+    assert_eq!(approval.state, TimestampReconciliationState::Approved);
+    assert_eq!(
+        serde_json::to_value(&store.data.lock().unwrap().records).unwrap(),
+        original
+    );
+    assert_eq!(store.data.lock().unwrap().polling_checkpoint, Some(0));
+    // A fresh process restores only the original Completed receipt and approval.
+    let c = calls.clone();
+    let bot = builder(&http)
+        .ingress_store(store.clone())
+        .command("ping", "fixture", move |_| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .build();
+    let handle = bot.handle();
+    let ingress = handle.ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    ingress.wait_ready().await.unwrap();
+    let poll = http.next().await;
+    assert_eq!(
+        ingress.conflicts()[0].disposition,
+        ConflictDisposition::AwaitingReconciliationPolling
+    );
+    let admission = ingress.admit(verified(incoming.clone())).await;
+    assert_eq!(admission.status, AdmissionStatus::Error);
+    assert_eq!(ingress.status().committed_cursor, 0);
+    // Empty polling/higher watermark is not approval evidence.
+    poll.send(json!({"events":[],"last":100})).unwrap();
+    let poll = http.next().await;
+    assert!(ingress.status().committed_cursor < 100);
+    assert_eq!(
+        store.data.lock().unwrap().timestamp_reconciliations[0].state,
+        TimestampReconciliationState::Approved
+    );
+    poll.send(json!({"events":[incoming.clone()],"last":100}))
+        .unwrap();
+    until(|| ingress.status().committed_cursor == 100).await;
+    assert_eq!(
+        ingress.conflicts()[0].disposition,
+        ConflictDisposition::Reconciled
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(http.posts.load(Ordering::SeqCst), 0);
+    handle.stop();
+    run.await.unwrap().unwrap();
+    // A third start from the committed checkpoint still does not replay.
+    let bot = builder(&http)
+        .ingress_store(store.clone())
+        .command("ping", "fixture", |_| async {
+            panic!("completed handler replayed")
+        })
+        .build();
+    let handle = bot.handle();
+    let ingress = handle.ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    ingress.wait_ready().await.unwrap();
+    http.next()
+        .await
+        .send(json!({"events":[incoming],"last":100}))
+        .unwrap();
+    let _next = http.next().await;
+    handle.stop();
+    run.await.unwrap().unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn timestamp_approval_atomic_failures_and_ambiguous_commits_do_not_replay() {
+    for failure in [1, 2, 3] {
+        let mut http = Http::new(vec![]).await;
+        let (store, incoming, calls) = legacy_fixture(&mut http).await;
+        let prepared = prepare_fixture(&mut http, store.clone(), &incoming, Default::default())
+            .await
+            .unwrap();
+        store.fail_reconciliation.store(failure, Ordering::SeqCst);
+        let result = prepared
+            .approve(OperationId::new("fixture/approved").unwrap())
+            .await;
+        if failure < 3 {
+            let error = result.unwrap_err();
+            assert_eq!(error.status_code(), Some(503));
+            assert_eq!(error.retry_after(), Some(Duration::from_secs_f64(0.5)));
+            assert_eq!(store.reconciliation_writes.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                store
+                    .data
+                    .lock()
+                    .unwrap()
+                    .timestamp_reconciliations
+                    .is_empty(),
+                failure == 1
+            );
+        } else {
+            result.unwrap();
+        }
+        assert_eq!(store.data.lock().unwrap().polling_checkpoint, Some(0));
+        assert_eq!(store.data.lock().unwrap().records[0].event.created_at, None);
+        store
+            .fail_reconciliation
+            .store(if failure == 3 { 3 } else { 0 }, Ordering::SeqCst);
+        let bot = builder(&http)
+            .ingress_store(store.clone())
+            .command("ping", "never replay", |_| async { panic!("replayed") })
+            .build();
+        let handle = bot.handle();
+        let ingress = handle.ingress().unwrap();
+        let run = tokio::spawn(bot.run());
+        if failure == 1 {
+            assert!(run.await.unwrap().is_err());
+        } else {
+            ingress.wait_ready().await.unwrap();
+            http.next()
+                .await
+                .send(json!({"events":[incoming],"last":100}))
+                .unwrap();
+            if failure == 3 {
+                let error = run.await.unwrap().unwrap_err();
+                assert_eq!(error.status_code(), Some(503));
+                assert_eq!(store.data.lock().unwrap().polling_checkpoint, Some(0));
+                assert_eq!(
+                    store.data.lock().unwrap().timestamp_reconciliations[0].state,
+                    TimestampReconciliationState::Approved
+                );
+            } else {
+                until(|| ingress.status().committed_cursor == 100).await;
+                handle.stop();
+                run.await.unwrap().unwrap();
+            }
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(http.posts.load(Ordering::SeqCst), 0);
+    }
+}
+#[tokio::test]
+async fn timestamp_preparation_rejects_changed_scope_payload_and_wrong_fingerprints() {
+    let mut http = Http::new(vec![]).await;
+    let (store, incoming, calls) = legacy_fixture(&mut http).await;
+    for key in [
+        "content",
+        "author_id",
+        "server_id",
+        "channel_id",
+        "id",
+        "created_at",
+    ] {
+        let mut changed = incoming.clone();
+        changed.data[key] = json!("changed");
+        // Bind the request to the changed fingerprint: full comparison must still reject it.
+        assert!(
+            prepare_fixture(&mut http, store.clone(), &changed, Default::default())
+                .await
+                .is_err()
+        );
+    }
+    let client = Client::builder("fixture").base_url(&http.url).build();
+    let mut request = timestamp_request(&incoming);
+    request.polling_fingerprint = "a".repeat(64);
+    let s = store.clone();
+    let task = tokio::spawn(async move {
+        prepare_timestamp_reconciliation(&client, s, request, Default::default()).await
+    });
+    http.next()
+        .await
+        .send(json!({"events":[incoming.clone()],"last":100}))
+        .unwrap();
+    assert!(task.await.unwrap().is_err());
+    // Empty response is not proof, even with a higher watermark.
+    let client = Client::builder("fixture").base_url(&http.url).build();
+    let s = store.clone();
+    let request = timestamp_request(&incoming);
+    let task = tokio::spawn(async move {
+        prepare_timestamp_reconciliation(&client, s, request, Default::default()).await
+    });
+    http.next()
+        .await
+        .send(json!({"events":[],"last":999}))
+        .unwrap();
+    assert!(task.await.unwrap().is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(store.reconciliation_writes.load(Ordering::SeqCst), 0);
+}
+#[tokio::test]
+async fn timestamp_approval_rejects_stale_preparation_expiry_and_ineligible_receipts() {
+    let mut http = Http::new(vec![]).await;
+    let (store, incoming, _) = legacy_fixture(&mut http).await;
+    let mut options = TimestampReconciliationOptions::default();
+    options.approval_ttl = Duration::from_millis(1);
+    let prepared = prepare_fixture(&mut http, store.clone(), &incoming, options)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(3)).await;
+    assert!(prepared
+        .approve(OperationId::new("expired").unwrap())
+        .await
+        .is_err());
+    let prepared = prepare_fixture(&mut http, store.clone(), &incoming, Default::default())
+        .await
+        .unwrap();
+    store.data.lock().unwrap().polling_checkpoint = Some(1);
+    assert!(prepared
+        .approve(OperationId::new("stale").unwrap())
+        .await
+        .is_err());
+    store.data.lock().unwrap().polling_checkpoint = Some(0);
+    for stage in [
+        ReceiptStage::Started,
+        ReceiptStage::Failed,
+        ReceiptStage::Queued,
+    ] {
+        store.data.lock().unwrap().records[0].status.stage = stage;
+        let client = Client::builder("fixture").base_url(&http.url).build();
+        assert!(prepare_timestamp_reconciliation(
+            &client,
+            store.clone(),
+            timestamp_request(&incoming),
+            Default::default()
+        )
+        .await
+        .is_err());
+    }
+    store.data.lock().unwrap().records[0].status.stage = ReceiptStage::Completed;
+    store.data.lock().unwrap().records[0].status.error =
+        Some(YappinError::Config("uncertain fixture".into()).to_remote());
+    let client = Client::builder("fixture").base_url(&http.url).build();
+    assert!(prepare_timestamp_reconciliation(
+        &client,
+        store.clone(),
+        timestamp_request(&incoming),
+        Default::default()
+    )
+    .await
+    .is_err());
+    assert_eq!(store.reconciliation_writes.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn timestamp_confirmation_lost_response_and_failed_checkpoint_recover_from_audit() {
+    for lost_response in [true, false] {
+        let mut http = Http::new(vec![]).await;
+        let (store, incoming, calls) = legacy_fixture(&mut http).await;
+        let prepared = prepare_fixture(&mut http, store.clone(), &incoming, Default::default())
+            .await
+            .unwrap();
+        prepared
+            .approve(OperationId::new("fixture/approval").unwrap())
+            .await
+            .unwrap();
+        if lost_response {
+            store.fail_reconciliation.store(4, Ordering::SeqCst);
+        } else {
+            store.fail_checkpoint.store(1, Ordering::SeqCst);
+        }
+        let bot = builder(&http)
+            .ingress_store(store.clone())
+            .command("ping", "no replay", |_| async { panic!("replayed") })
+            .build();
+        let ingress = bot.handle().ingress().unwrap();
+        let run = tokio::spawn(bot.run());
+        ingress.wait_ready().await.unwrap();
+        http.next()
+            .await
+            .send(json!({"events":[incoming.clone()],"last":100}))
+            .unwrap();
+        assert!(run.await.unwrap().is_err());
+        {
+            let data = store.data.lock().unwrap();
+            assert_eq!(data.polling_checkpoint, Some(0));
+            assert_eq!(
+                data.timestamp_reconciliations[0].state,
+                TimestampReconciliationState::Confirmed
+            );
+            assert!(data.records[0].event.created_at.is_none());
+            assert_eq!(data.records[0].status.stage, ReceiptStage::Completed);
+        }
+        store.fail_reconciliation.store(0, Ordering::SeqCst);
+        store.fail_checkpoint.store(0, Ordering::SeqCst);
+        let bot = builder(&http)
+            .ingress_store(store.clone())
+            .command("ping", "no replay", |_| async { panic!("replayed") })
+            .build();
+        let handle = bot.handle();
+        let ingress = handle.ingress().unwrap();
+        let run = tokio::spawn(bot.run());
+        ingress.wait_ready().await.unwrap();
+        http.next()
+            .await
+            .send(json!({"events":[incoming],"last":100}))
+            .unwrap();
+        until(|| ingress.status().committed_cursor == 100).await;
+        handle.stop();
+        run.await.unwrap().unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(http.posts.load(Ordering::SeqCst), 0);
+    }
+}
+#[tokio::test]
+async fn cancelled_timestamp_confirmation_keeps_original_completion_and_checkpoint() {
+    let mut http = Http::new(vec![]).await;
+    let (store, incoming, calls) = legacy_fixture(&mut http).await;
+    let prepared = prepare_fixture(&mut http, store.clone(), &incoming, Default::default())
+        .await
+        .unwrap();
+    prepared
+        .approve(OperationId::new("fixture/approval").unwrap())
+        .await
+        .unwrap();
+    store.block_confirmation.store(true, Ordering::SeqCst);
+    let bot = builder(&http).ingress_store(store.clone()).build();
+    let ingress = bot.handle().ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    ingress.wait_ready().await.unwrap();
+    http.next()
+        .await
+        .send(json!({"events":[incoming.clone()],"last":100}))
+        .unwrap();
+    store.confirmation_waiting.notified().await;
+    run.abort();
+    let _ = run.await;
+    // The cancelled task must not publish a successful confirmation/checkpoint.
+    until(|| !ingress.status().running).await;
+    {
+        let data = store.data.lock().unwrap();
+        assert_eq!(data.polling_checkpoint, Some(0));
+        assert_eq!(data.records[0].status.stage, ReceiptStage::Completed);
+        assert_eq!(
+            data.timestamp_reconciliations[0].state,
+            TimestampReconciliationState::Approved
+        );
+    }
+    store.block_confirmation.store(false, Ordering::SeqCst);
+    let bot = builder(&http).ingress_store(store.clone()).build();
+    let handle = bot.handle();
+    let ingress = handle.ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    ingress.wait_ready().await.unwrap();
+    http.next()
+        .await
+        .send(json!({"events":[incoming],"last":100}))
+        .unwrap();
+    until(|| ingress.status().committed_cursor == 100).await;
+    handle.stop();
+    run.await.unwrap().unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn original_timestamp_polling_does_not_confirm_a_different_approved_fingerprint() {
+    let mut http = Http::new(vec![]).await;
+    let (store, incoming, _) = legacy_fixture(&mut http).await;
+    let prepared = prepare_fixture(&mut http, store.clone(), &incoming, Default::default())
+        .await
+        .unwrap();
+    prepared
+        .approve(OperationId::new("fixture/approval").unwrap())
+        .await
+        .unwrap();
+    let bot = builder(&http).ingress_store(store.clone()).build();
+    let handle = bot.handle();
+    let ingress = handle.ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    ingress.wait_ready().await.unwrap();
+    http.next()
+        .await
+        .send(json!({"events":[legacy_event()],"last":100}))
+        .unwrap();
+    let next = http.next().await;
+    assert!(ingress.status().committed_cursor < 100);
+    assert_eq!(
+        store.data.lock().unwrap().timestamp_reconciliations[0].state,
+        TimestampReconciliationState::Approved
+    );
+    next.send(json!({"events":[incoming],"last":100})).unwrap();
+    until(|| ingress.status().committed_cursor == 100).await;
+    handle.stop();
+    run.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn timestamp_decisions_bind_receipt_and_conflicts_and_cannot_replace_prior_approval() {
+    let mut http = Http::new(vec![]).await;
+    let (store, incoming, calls) = legacy_fixture(&mut http).await;
+    let prepared = prepare_fixture(&mut http, store.clone(), &incoming, Default::default())
+        .await
+        .unwrap();
+    store.data.lock().unwrap().records[0].event.data["server_id"] = json!(Uuid::from_u128(999));
+    assert!(prepared
+        .approve(OperationId::new("stale/receipt").unwrap())
+        .await
+        .is_err());
+    store.data.lock().unwrap().records[0].event = legacy_event();
+    let prepared = prepare_fixture(&mut http, store.clone(), &incoming, Default::default())
+        .await
+        .unwrap();
+    store.data.lock().unwrap().conflicts[0].incoming_fingerprint = "a".repeat(64);
+    assert!(prepared
+        .approve(OperationId::new("stale/report").unwrap())
+        .await
+        .is_err());
+    store.data.lock().unwrap().conflicts[0].incoming_fingerprint = event_hash(&incoming);
+    let first = prepare_fixture(&mut http, store.clone(), &incoming, Default::default())
+        .await
+        .unwrap();
+    let second = prepare_fixture(&mut http, store.clone(), &incoming, Default::default())
+        .await
+        .unwrap();
+    first
+        .approve(OperationId::new("first/approval").unwrap())
+        .await
+        .unwrap();
+    assert!(second
+        .approve(OperationId::new("competing/approval").unwrap())
+        .await
+        .is_err());
+    assert_eq!(store.reconciliation_writes.load(Ordering::SeqCst), 1);
+    // A stored decision cannot be used after its binding is corrupted.
+    store.data.lock().unwrap().timestamp_reconciliations[0].polling_fingerprint = "b".repeat(64);
+    let bot = builder(&http).ingress_store(store.clone()).build();
+    assert!(bot.run().await.is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(store.data.lock().unwrap().polling_checkpoint, Some(0));
+}
+#[tokio::test]
+async fn unapproved_payload_after_timestamp_approval_stops_and_retains_checkpoint() {
+    let mut http = Http::new(vec![]).await;
+    let (store, incoming, calls) = legacy_fixture(&mut http).await;
+    let prepared = prepare_fixture(&mut http, store.clone(), &incoming, Default::default())
+        .await
+        .unwrap();
+    prepared
+        .approve(OperationId::new("fixture/approval").unwrap())
+        .await
+        .unwrap();
+    let bot = builder(&http).ingress_store(store.clone()).build();
+    let ingress = bot.handle().ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    ingress.wait_ready().await.unwrap();
+    let poll = http.next().await;
+    let mut changed = incoming;
+    changed.data["content"] = json!("unapproved content");
+    poll.send(json!({"events":[changed],"last":100})).unwrap();
+    let report = pipeline_report(run.await.unwrap().unwrap_err());
+    assert_eq!(report.committed_cursor, 0);
+    assert_eq!(store.data.lock().unwrap().polling_checkpoint, Some(0));
+    assert_eq!(
+        store.data.lock().unwrap().timestamp_reconciliations[0].state,
+        TimestampReconciliationState::Approved
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let bot = builder(&http).ingress_store(store.clone()).build();
+    assert!(bot.run().await.is_err());
 }

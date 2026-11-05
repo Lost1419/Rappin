@@ -32,6 +32,10 @@ pub enum ConflictDisposition {
     AwaitingPolling,
     PollingConfirmed,
     TimedOut,
+    /// Explicit durable approval still requires matching normal polling.
+    AwaitingReconciliationPolling,
+    /// Fingerprint-bound timestamp exception confirmed by normal polling.
+    Reconciled,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

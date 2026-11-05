@@ -81,3 +81,9 @@ interaction expiry. Only documented equivalence should become SDK normalization.
 Until then, contradictory polling payloads remain explicit failures. The optional
 completed-only policy can retain original effects and wait for polling proof;
 it cannot repair or authorize an unexplained platform contradiction.
+
+For an already Completed legacy server message whose only difference is a supplied
+outer timestamp, [explicit fingerprint-bound reconciliation](timestamp-reconciliation.md)
+provides a consumer-approved exception. It requires the actual fresh polling event,
+full canonical payload validation and atomic audit storage; it is not SDK-wide
+normalization or a replacement for the platform guarantees above.

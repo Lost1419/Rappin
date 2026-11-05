@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.26 — 2026-11-05
+
+- Add explicit, fingerprint-bound reconciliation for durable Completed server-message events whose only difference is an outer null timestamp supplied by fresh polling. Preserve original events/completions and require consumer approval, atomic audit storage and matching normal polling before checkpoint release.
+- Add the default-deny `IngressStore::commit_timestamp_reconciliation` hook and transaction validation. Reject stale decisions, changed payloads/identity and incomplete or uncertain receipts; keep ambiguous durable commits inspectable without replaying handlers.
+- Include a standalone maintenance example and Unix journal adapter with atomic persistence, exclusive leasing and retained original-receipt audit evidence. Existing ingress defaults and worker protocols are unchanged.
+
 ## 0.1.25 — 2026-11-05
 
 - Return structured shared-ingress payload conflicts with transport/recovery sources, event IDs, canonical SHA-256 fingerprints and bounded schema differences. Keep payload values and arbitrary object keys out of diagnostics; compare JSON objects independently of key order, including when consumers enable serde_json `preserve_order`.
