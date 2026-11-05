@@ -714,8 +714,22 @@ use rappin::{*,hot_reload::WorkerCog};
     assert_eq!(reload.process_id().await, pid);
     handle.stop();
     run.await.unwrap().unwrap();
-    handle.remove_cog("shared-worker").await.unwrap();
-    std::fs::remove_dir_all(root).unwrap();
+    reload.unload().await.unwrap();
+    // Unload releases the generation; its asynchronous shutdown must finish
+    // before Windows can remove the worker's current working directory.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match std::fs::remove_dir_all(&root) {
+                Ok(()) => break,
+                Err(error) if cfg!(windows) && error.raw_os_error() == Some(32) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => panic!("worker project cleanup failed: {error}"),
+            }
+        }
+    })
+    .await
+    .expect("unloaded worker did not release its working directory");
 }
 
 #[cfg(feature = "gateway")]
