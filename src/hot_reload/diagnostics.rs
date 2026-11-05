@@ -160,16 +160,21 @@ impl<'a> CompilerReport<'a> {
                     if !relative
                         .components()
                         .all(|c| matches!(c, Component::Normal(_) | Component::CurDir))
-                        || name.contains('\\')
+                        || name.contains('\\') && !cfg!(windows)
                         || name.contains(':') && !path.is_absolute()
                     {
                         return None;
                     }
-                    let mut text = relative.to_string_lossy().into_owned();
+                    let mut text = relative
+                        .to_string_lossy()
+                        .replace(std::path::MAIN_SEPARATOR, "/");
                     // Relative source locations are metadata, not arbitrary text.
                     // CI often has a non-secret branch variable equal to `main`.
                     for value in &self.sanitizer.credentials {
                         text = text.replace(value, "[redacted]");
+                        if value.contains('\\') {
+                            text = text.replace(&value.replace('\\', "/"), "[redacted]");
+                        }
                     }
                     let text = shorten(
                         text,
@@ -341,13 +346,14 @@ mod tests {
 
     #[test]
     fn compiler_locations_are_relative_and_text_is_sanitized() {
-        let root = Path::new("/trusted/project");
-        let mut report = CompilerReport::new(root);
+        let root = std::env::temp_dir().join("trusted-project");
+        let source = root.join("src").join("main.rs");
+        let mut report = CompilerReport::new(&root);
         report.sanitizer.environment = vec!["secret-env-value".into()];
         report.push(&json!({"level":"error","code":{"code":"E0425"},
             "message":"missing `item`; secret-env-value at note:/unrelated/private.rs and C:\\private\\file.rs",
             "rendered":"SECRET rendered output", "spans":[
-                {"file_name":"/trusted/project/src/main.rs","line_start":4,"line_end":4,"column_start":2,"column_end":9,"is_primary":true,"text":[{"text":"SECRET excerpt"}]},
+                {"file_name":source,"line_start":4,"line_end":4,"column_start":2,"column_end":9,"is_primary":true,"text":[{"text":"SECRET excerpt"}]},
                 {"file_name":"/unrelated/private.rs"}, {"file_name":"../outside.rs"},
                 {"file_name":"C:\\private\\file.rs"}
             ]}));
@@ -357,12 +363,14 @@ mod tests {
         assert_eq!(diagnostic.spans[0].line_start, 4);
         assert!(diagnostic.spans[1..].iter().all(|span| span.file.is_none()));
         let text = serde_json::to_string(&report.failure).unwrap();
+        assert!(!text.contains(root.to_string_lossy().as_ref()));
         for secret in [
             "secret-env-value",
             "unrelated",
             "private",
             "SECRET",
             "trusted/project",
+            "trusted-project",
         ] {
             assert!(!text.contains(secret), "{text}");
         }
