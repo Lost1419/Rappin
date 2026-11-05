@@ -785,6 +785,7 @@ impl Cog for ProcessCog {
                     .map(|info| crate::commands::RegisteredCommand {
                         info: info.clone(),
                         handler: command.handler,
+                        preparation: None,
                     })
             })
             .collect()

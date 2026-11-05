@@ -152,6 +152,14 @@ pub async fn verify_middleware(
         })?;
 
     // Store verified event in request extensions for handler access
+    if let Ok(bot_id) = config.bot_id.parse::<uuid::Uuid>() {
+        request
+            .extensions_mut()
+            .insert(crate::webhook::VerifiedEvent {
+                bot_id,
+                event: event.clone(),
+            });
+    }
     request.extensions_mut().insert(event);
 
     // Restore body for downstream handlers

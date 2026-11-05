@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.23 — 2026-11-05
+
+- Add opt-in shared ingress for verified webhooks, polling and gateway events. Deduplicate before collector/ack/handler effects, fence authoritative polling checkpoints around unfinished claims, and expose bounded admission receipts plus an application-owned durable store contract. Retain completed and uncertain outcomes across restart instead of replaying handlers.
+- Add opt-in gateway JSON API requests when `ready.requests` advertises support. Correlate out-of-order responses, enforce eight in-flight requests and 100 frames per ten seconds, and share existing validation/rate-limit budgets with HTTPS. Preserve single-attempt worker calls and uncertain disconnect/timeout outcomes without HTTP fallback or mutation replay.
+
+- Add checked invocation of installed native/worker commands from active message contexts. Reuse group/alias resolution, parsing, cog/registered checks and cooldowns; reject identity substitution, detached calls, excessive recursion and stale prepared bindings.
+- Add advisory preparation for dynamic schemas and read-only command checks. Defer opaque parsers, checks and cooldowns; recheck authorization at execution. Nested failures retain structured causes and receipts without sending duplicate framework replies or replaying work.
+
 ## 0.1.21 — 2026-11-04
 
 - Update the bundled OpenAPI to 1.3.0. Add `get_message_emojis` across Client, shared APIs, scoped bindings, CLI and MCP, with independent history-access checks, message/channel scope verification and test-server availability metadata (57 operations total).

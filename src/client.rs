@@ -153,12 +153,16 @@ impl ClientBuilder {
                 interactions: crate::interactions::Registry::default(),
                 auto_ack_tasks: std::sync::Mutex::new(Vec::new()),
                 auto_ack_slots: Arc::new(tokio::sync::Semaphore::new(128)),
+                #[cfg(feature = "gateway")]
+                gateway_requests: Default::default(),
             }),
         }
     }
 }
 
 struct ClientInner {
+    #[cfg(feature = "gateway")]
+    gateway_requests: crate::gateway::requests::RequestRouter,
     request_telemetry: crate::diagnostics::RequestTelemetry,
     events: crate::collectors::EventHub,
     rate_limits: crate::rate_limits::RateLimits,
@@ -183,6 +187,23 @@ pub struct Client {
 }
 
 impl Client {
+    /// Opt into JSON requests on a negotiated gateway connection. Configure
+    /// before connecting; `None` restores HTTPS selection for subsequent calls.
+    #[cfg(feature = "gateway")]
+    pub fn configure_gateway_requests(
+        &self,
+        config: Option<crate::gateway::GatewayRequestConfig>,
+    ) -> Result<()> {
+        self.inner.gateway_requests.configure(config)
+    }
+    #[cfg(feature = "gateway")]
+    pub fn gateway_request_status(&self) -> crate::gateway::GatewayRequestStatus {
+        self.inner.gateway_requests.status()
+    }
+    #[cfg(feature = "gateway")]
+    pub(crate) fn inner_gateway_router(&self) -> &crate::gateway::requests::RequestRouter {
+        &self.inner.gateway_requests
+    }
     pub(crate) fn read_wait_budget(&self) -> ReadWaitBudget {
         ReadWaitBudget {
             limit: self.inner.max_retry_wait,
@@ -391,7 +412,7 @@ impl Client {
     // Core HTTP request execution with automatic rate limit / retry handling
     // -----------------------------------------------------------------------
 
-    async fn execute_with_retry<F, Fut>(
+    async fn execute_with_retry<F, Fut, E>(
         &self,
         method: &Method,
         path: &str,
@@ -399,7 +420,8 @@ impl Client {
     ) -> Result<Response>
     where
         F: FnMut(url::Url) -> Fut,
-        Fut: std::future::Future<Output = std::result::Result<Response, reqwest::Error>>,
+        Fut: std::future::Future<Output = std::result::Result<Response, E>>,
+        E: Into<YappinError>,
     {
         let telemetry = self.inner.request_telemetry.start();
         let result = self
@@ -409,7 +431,7 @@ impl Client {
         result
     }
 
-    async fn execute_attempts_with_retry<F, Fut>(
+    async fn execute_attempts_with_retry<F, Fut, E>(
         &self,
         method: &Method,
         path: &str,
@@ -418,7 +440,8 @@ impl Client {
     ) -> Result<Response>
     where
         F: FnMut(url::Url) -> Fut,
-        Fut: std::future::Future<Output = std::result::Result<Response, reqwest::Error>>,
+        Fut: std::future::Future<Output = std::result::Result<Response, E>>,
+        E: Into<YappinError>,
     {
         let mut retries = if single_attempt_active() {
             0
@@ -477,7 +500,7 @@ impl Client {
             telemetry.attempt(attempts > 0);
             attempts += 1;
             let attempt_started = tokio::time::Instant::now();
-            let res = operation(url).await;
+            let res = operation(url).await.map_err(Into::into);
             let status = res.as_ref().ok().map(|res| res.status().as_u16());
             let _ = SINGLE_ATTEMPT_STATUS.try_with(|observed| observed.set(status));
             let label = if matches!(
@@ -518,7 +541,8 @@ impl Client {
                     response.status(),
                     StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT
                 ),
-                Err(error) => error.is_connect(),
+                Err(YappinError::Http(error)) => error.is_connect(),
+                Err(_) => false,
             };
             if unavailable && self.inner.failover.activate(&base) {
                 tracing::warn!("dedicated bot API unavailable; using website API for ten minutes");
@@ -528,7 +552,7 @@ impl Client {
                     continue;
                 }
             }
-            let res = res.map_err(|e| YappinError::Http(e.without_url()))?;
+            let res = res?;
             let status = res.status();
 
             if status.is_success() {
@@ -696,7 +720,24 @@ impl Client {
                         .body(data.clone());
                 }
 
-                req.send()
+                #[cfg(feature = "gateway")]
+                let gateway_method = method.clone();
+                #[cfg(feature = "gateway")]
+                let gateway_body = body_data.clone();
+                async move {
+                    #[cfg(feature = "gateway")]
+                    if let Some(result) = self
+                        .inner
+                        .gateway_requests
+                        .request(&gateway_method, path, gateway_body.as_deref())
+                        .await
+                    {
+                        return result;
+                    }
+                    req.send()
+                        .await
+                        .map_err(|e| YappinError::Http(e.without_url()))
+                }
             })
             .await;
         if let Some(entry) = &mut tracked {

@@ -207,3 +207,37 @@ pub fn verify_event(secret: &str, signature: &str, body: &[u8]) -> Result<Event>
         .map_err(|_| YappinError::Config("invalid webhook signature".into()))?;
     Ok(serde_json::from_slice(body)?)
 }
+
+/// An event whose raw-body signature and authenticated bot header were checked.
+#[derive(Clone)]
+pub struct VerifiedEvent {
+    pub(crate) bot_id: uuid::Uuid,
+    pub(crate) event: Event,
+}
+impl VerifiedEvent {
+    pub fn bot_id(&self) -> uuid::Uuid {
+        self.bot_id
+    }
+    pub fn event(&self) -> &Event {
+        &self.event
+    }
+}
+/// Verify both signature and identity before admitting to shared event ingress.
+pub fn verify_bot_event(
+    secret: &str,
+    expected_bot: uuid::Uuid,
+    received_bot: &str,
+    signature: &str,
+    body: &[u8],
+) -> Result<VerifiedEvent> {
+    if expected_bot.is_nil() || received_bot.parse::<uuid::Uuid>().ok() != Some(expected_bot) {
+        return Err(YappinError::validation(
+            "webhook.bot_id",
+            "authenticated bot identity does not match",
+        ));
+    }
+    Ok(VerifiedEvent {
+        bot_id: expected_bot,
+        event: verify_event(secret, signature, body)?,
+    })
+}

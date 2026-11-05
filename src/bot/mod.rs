@@ -2,7 +2,18 @@ pub mod cog;
 pub mod context;
 mod failure;
 pub mod handler;
+mod ingress;
+mod invocation;
+mod shared_pipeline;
+pub use ingress::{
+    Admission, AdmissionDurability, AdmissionStatus, EventIngress, EventReceipt, IngressConfig,
+    IngressRecord, IngressRecovery, IngressStatus, IngressStore, ReceiptStage, ReceiptStatus,
+};
 mod message;
+pub use invocation::{
+    InvocationOutcome, InvocationStatus, PreparationReport, PreparedInvocation,
+    MAX_INVOCATION_DEPTH,
+};
 mod pipeline;
 pub use failure::{
     EventFailure, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,
@@ -37,6 +48,7 @@ struct CommandDef {
     cog_name: Option<String>,
     handler: CommandHandlerFn,
     info: Option<crate::commands::CommandInfo>,
+    preparation: Option<crate::commands::CommandPreparation>,
 }
 
 #[derive(Clone)]
@@ -147,6 +159,7 @@ fn insert_registered(
                 cog_name: cog_name.clone(),
                 handler: command.handler.clone(),
                 info: Some(command.info.clone()),
+                preparation: command.preparation.clone(),
             },
         );
     }
@@ -249,6 +262,7 @@ pub(crate) struct BotState {
     handler_concurrency: usize,
     pending_batches: usize,
     auto_ack_after: Option<Duration>,
+    ingress: Option<EventIngress>,
     telemetry: crate::diagnostics::Telemetry,
     pub(crate) availability_telemetry: crate::availability::Telemetry,
     #[cfg(feature = "gateway")]
@@ -398,6 +412,7 @@ impl BotHandle {
                 crate::RegisteredCommand {
                     info: info.clone(),
                     handler: Arc::new(|_| Box::pin(async { Ok(()) })),
+                    preparation: None,
                 },
                 replacing_cog.map(str::to_owned),
             )?;
@@ -461,6 +476,7 @@ impl BotHandle {
                         cog_name: Some(name.clone()),
                         handler: command.handler,
                         info: None,
+                        preparation: None,
                     },
                 );
             }
@@ -646,6 +662,9 @@ impl BotHandle {
 
     /// Stops the bot's event loop.
     pub fn stop(&self) {
+        if let Some(ingress) = &self.inner.ingress {
+            ingress.close();
+        }
         self.inner.running.store(false, Ordering::SeqCst);
         self.inner.stopped.notify_waiters();
         self.inner.stopped.notify_one();
@@ -682,6 +701,8 @@ pub struct BotBuilder {
     handler_concurrency: usize,
     pending_batches: usize,
     auto_ack_after: Option<Duration>,
+    ingress_config: Option<IngressConfig>,
+    ingress_store: Option<Arc<dyn IngressStore>>,
     transport_mode: crate::diagnostics::TransportMode,
     lookup_policy: crate::cache::CachePolicy,
     lookup_backend: Option<Arc<dyn crate::cache::LookupCache>>,
@@ -722,6 +743,8 @@ impl BotBuilder {
             handler_concurrency: 8,
             pending_batches: 4,
             auto_ack_after: None,
+            ingress_config: None,
+            ingress_store: None,
             transport_mode: crate::diagnostics::TransportMode::Polling,
             lookup_policy: crate::cache::CachePolicy::default(),
             lookup_backend: None,
@@ -828,6 +851,7 @@ impl BotBuilder {
                 cog_name: None,
                 handler: wrapped_handler,
                 info: None,
+                preparation: None,
             },
         );
         self
@@ -877,6 +901,7 @@ impl BotBuilder {
                 cog_name: None,
                 handler: wrapped_handler,
                 info: None,
+                preparation: None,
             },
         );
         self
@@ -1096,6 +1121,20 @@ impl BotBuilder {
         self
     }
     /// Bounds both prefetched and active event batches (each API batch has at most 100 events).
+    /// Enable bounded shared webhook/polling admission. Existing intake remains
+    /// unchanged unless explicitly enabled. GatewayOnly requires polling recovery
+    /// and is therefore rejected with shared ingress.
+    pub fn shared_ingress(mut self, config: IngressConfig) -> Self {
+        self.ingress_config = Some(config);
+        self
+    }
+    /// Application-owned durable receipts; enables shared ingress with defaults.
+    pub fn ingress_store(mut self, store: Arc<dyn IngressStore>) -> Self {
+        self.ingress_config.get_or_insert_with(Default::default);
+        self.ingress_store = Some(store);
+        self
+    }
+
     pub fn pending_batches(mut self, limit: usize) -> Self {
         self.pending_batches = limit.clamp(1, 32);
         self
@@ -1185,6 +1224,9 @@ impl BotBuilder {
             handler_concurrency: self.handler_concurrency,
             pending_batches: self.pending_batches,
             auto_ack_after: self.auto_ack_after,
+            ingress: self
+                .ingress_config
+                .map(|config| EventIngress::new(config, self.ingress_store)),
             telemetry: crate::diagnostics::Telemetry::new(self.transport_mode),
             availability_telemetry: Default::default(),
             #[cfg(feature = "gateway")]
@@ -1324,6 +1366,12 @@ impl Bot {
             return Err(YappinError::Config(error.clone()));
         }
         advertised_commands(&*self.handle.inner.commands.read().await)?;
+        if let Some(ingress) = &self.handle.inner.ingress {
+            ingress.validate()?;
+            if self.transport_status().mode == crate::TransportMode::GatewayOnly {
+                return Err(YappinError::Config("shared ingress requires authoritative polling recovery; use Polling or GatewayPreferred".into()));
+            }
+        }
         #[cfg(not(feature = "gateway"))]
         if self.transport_status().mode != crate::diagnostics::TransportMode::Polling {
             return Err(YappinError::Config(
@@ -1348,6 +1396,18 @@ impl Bot {
             }
         };
 
+        // Resolve durable recovery before lifecycle hooks or command publication
+        // can perform application/API effects. The default intake order is kept.
+        let shared_last = if let Some(ingress) = &self.handle.inner.ingress {
+            let saved = match &self.handle.inner.cursor {
+                Some(cursor) => cursor.load().await?,
+                None => None,
+            };
+            Some(ingress.restore(me.id, saved).await?.or(saved).unwrap_or(0))
+        } else {
+            None
+        };
+
         // Initial cogs use the same validated, atomic registration path.
         for cog in self.initial_cogs.drain(..) {
             self.handle.install_cog(Arc::from(cog), false, None).await?;
@@ -1360,9 +1420,12 @@ impl Bot {
             }
         }
 
-        let saved = match &self.handle.inner.cursor {
-            Some(c) => c.load().await?,
-            None => None,
+        let saved = match shared_last {
+            Some(last) => Some(last),
+            None => match &self.handle.inner.cursor {
+                Some(cursor) => cursor.load().await?,
+                None => None,
+            },
         };
         let last = match saved {
             Some(id) => id,
@@ -1630,6 +1693,20 @@ impl Bot {
             }
         }
 
+        invocation::with_origin(
+            &self.handle,
+            &msg,
+            self.handle_allowed_message(msg.clone(), me, event_id),
+        )
+        .await
+    }
+
+    async fn handle_allowed_message(
+        &self,
+        msg: MessageEvent,
+        me: &BotProfile,
+        event_id: u64,
+    ) -> Result<()> {
         let mut matched_command: Option<String> = None;
         let mut matched_args = String::new();
 
@@ -1672,20 +1749,9 @@ impl Bot {
 
         let mut unmatched_group = None;
         if let Some(root) = matched_command.clone() {
-            let commands = self.handle.inner.commands.read().await;
-            let tokens = crate::commands::tokenize(&matched_args).unwrap_or_default();
-            let mut path = root.clone();
-            let mut best = commands.contains_key(&path).then_some((path.clone(), 0));
-            for token in tokens.iter().take(7) {
-                path.push(' ');
-                path.push_str(&token.value.to_lowercase());
-                if commands.contains_key(&path) {
-                    best = Some((path.clone(), token.end));
-                }
-            }
-            if let Some((path, end)) = best {
+            if let Some((path, args)) = self.handle.resolve_invocation(&root, &matched_args).await {
                 matched_command = Some(path);
-                matched_args = matched_args[end..].trim_start().to_owned();
+                matched_args = args;
             } else {
                 unmatched_group = Some(root);
                 matched_command = None;
@@ -1707,25 +1773,17 @@ impl Bot {
             }
         }
         if let Some(cmd_name) = matched_command {
-            let cmds_guard = self.handle.inner.commands.read().await;
-            if let Some(def) = cmds_guard.get(&cmd_name) {
-                let handler = def.handler.clone();
-                let usage = def.info.as_ref().map(|info| info.usage());
-                let cog_name = def.cog_name.clone();
-                let cog = match cog_name {
-                    Some(name) => self.handle.inner.cogs.read().await.get(&name).cloned(),
-                    None => None,
-                };
-                drop(cmds_guard);
-                let allow = match cog {
-                    Some(cog) => cog.check(&ctx).await,
-                    None => true,
-                };
-                if allow {
-                    if let Err(error) = failure::catch(async { handler(ctx.clone()).await }).await {
-                        self.command_failed(ctx.clone(), event_id, &cmd_name, usage, error)
-                            .await?;
-                    }
+            let snapshot = self.handle.invocation_snapshot(&cmd_name).await;
+            if let Some(snapshot) = snapshot {
+                let usage = snapshot.def.info.as_ref().map(|info| info.usage());
+                if let Some(error) = self
+                    .handle
+                    .dispatch_invocation(ctx.clone(), snapshot)
+                    .await
+                    .error
+                {
+                    self.command_failed(ctx.clone(), event_id, &cmd_name, usage, error)
+                        .await?;
                 }
             }
         }

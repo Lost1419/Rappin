@@ -24,7 +24,7 @@ impl RemoteError {
             serde_json::from_value(report.clone()).ok()
         } else if matches!(
             self.kind.as_str(),
-            "failure_handling" | "partial_write" | "handler_interrupted"
+            "failure_handling" | "partial_write" | "handler_interrupted" | "command_invocation"
         ) {
             let source: Self = serde_json::from_value(self.details.get("source")?.clone()).ok()?;
             source.hot_reload_failure()
@@ -33,7 +33,14 @@ impl RemoteError {
         }
     }
     pub fn availability_failure(&self) -> Option<crate::AvailabilityFailure> {
-        serde_json::from_value(self.details.get("availability")?.clone()).ok()
+        if let Some(value) = self.details.get("availability") {
+            serde_json::from_value(value.clone()).ok()
+        } else if self.kind == "command_invocation" {
+            let source: Self = serde_json::from_value(self.details.get("source")?.clone()).ok()?;
+            source.availability_failure()
+        } else {
+            None
+        }
     }
     pub fn to_json(&self) -> serde_json::Value {
         let mut value = serde_json::Value::Object(self.details.clone().into_iter().collect());
@@ -57,6 +64,16 @@ impl serde::Serialize for RemoteError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum YappinError {
+    /// An explicitly invoked command did not complete. The outer handler owns
+    /// reconciliation; this wrapper never triggers typed-rejection auto-replies.
+    #[error("command invocation {command} did not complete ({status:?})")]
+    Invocation {
+        command: String,
+        status: crate::bot::InvocationStatus,
+        effects_possible: bool,
+        #[source]
+        source: Option<Box<YappinError>>,
+    },
     #[error("retry wait budget exhausted after {waited:?} (budget {budget:?}): {source}")]
     RetryWaitExceeded {
         waited: std::time::Duration,
@@ -152,6 +169,7 @@ pub enum YappinError {
 impl YappinError {
     pub fn availability_failure(&self) -> Option<crate::AvailabilityFailure> {
         match self {
+            Self::Invocation { source, .. } => source.as_ref()?.availability_failure(),
             Self::Remote(error) => error.availability_failure(),
             Self::EventProcessing { report } => report.primary()?.availability_failure(),
             Self::FailureHandling { source, .. } | Self::PartialWrite { source, .. } => {
@@ -163,6 +181,7 @@ impl YappinError {
     /// Returns the HTTP status code associated with this error, if available.
     pub fn status_code(&self) -> Option<u16> {
         match self {
+            Self::Invocation { source, .. } => source.as_ref().and_then(|e| e.status_code()),
             Self::RetryWaitExceeded { source, .. } => source.status_code(),
             Self::HotReload { failure } => failure.source.as_ref().and_then(|e| e.status),
             Self::EventProcessing { report } => report.primary().and_then(|e| e.status),
@@ -210,6 +229,9 @@ impl YappinError {
     /// Returns the suggested retry wait duration if this error was caused by a rate limit.
     pub fn retry_after(&self) -> Option<std::time::Duration> {
         match self {
+            Self::Invocation { source, .. } => {
+                return source.as_ref().and_then(|e| e.retry_after())
+            }
             Self::RetryWaitExceeded { source, .. } => return source.retry_after(),
             Self::HotReload { failure } => {
                 return failure
@@ -259,6 +281,14 @@ impl YappinError {
     /// Stable JSON representation for agents. Transport URLs are intentionally omitted.
     pub fn to_json(&self) -> serde_json::Value {
         match self {
+            Self::Invocation {
+                command,
+                status,
+                effects_possible,
+                source,
+            } => {
+                return serde_json::json!({"kind":"command_invocation", "message":self.to_string(), "status":self.status_code(), "retry_after":self.retry_after().map(|d|d.as_secs_f64()), "command":command, "invocation_status":status, "effects_possible":effects_possible, "source":source.as_ref().map(|e|e.to_json()), "outcome":if *effects_possible { "unknown" } else { "not_applied" }, "retry_safety":"do_not_replay_workflow"});
+            }
             Self::RetryWaitExceeded {
                 waited,
                 budget,
@@ -377,6 +407,7 @@ impl YappinError {
     /// Does not classify a failed candidate as a completed command.
     pub fn hot_reload_failure(&self) -> Option<crate::HotReloadFailure> {
         match self {
+            Self::Invocation { source, .. } => source.as_ref()?.hot_reload_failure(),
             Self::HotReload { failure } => Some((**failure).clone()),
             Self::Remote(error) => error.hot_reload_failure(),
             Self::FailureHandling { source, .. } | Self::PartialWrite { source, .. } => {

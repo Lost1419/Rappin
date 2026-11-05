@@ -126,8 +126,16 @@ pub mod permissions;
 pub mod role_hierarchy;
 pub use api::{Api, ApiExt};
 pub use bot::{
+    Admission, AdmissionDurability, AdmissionStatus, EventIngress, EventReceipt, IngressConfig,
+    IngressRecord, IngressRecovery, IngressStatus, IngressStore, ReceiptStage, ReceiptStatus,
+};
+pub use bot::{
     EventFailure, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,
     HandlerKind, MessageDisposition, MessageFailure, MessageStage,
+};
+pub use bot::{
+    InvocationOutcome, InvocationStatus, PreparationReport, PreparedInvocation,
+    MAX_INVOCATION_DEPTH,
 };
 #[cfg(feature = "metrics")]
 pub use metrics::{

@@ -293,6 +293,10 @@ impl DynamicCommandSpec {
         let handler = Arc::new(handler);
         Ok(RegisteredCommand {
             info,
+            preparation: Some(CommandPreparation {
+                schema: Some(schema.clone()),
+                checks: checks.clone(),
+            }),
             handler: Arc::new(move |ctx| {
                 let schema = schema.clone();
                 let checks = checks.clone();

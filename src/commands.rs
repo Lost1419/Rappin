@@ -287,6 +287,12 @@ pub type CheckFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>
 /// An async authorization/policy check run before a typed handler.
 pub trait CommandCheck: Send + Sync + 'static {
     fn check<'a>(&'a self, ctx: &'a MessageContext) -> CheckFuture<'a>;
+    /// Optional read-only assessment. Must not reply, mutate application state,
+    /// reserve access, or consume cooldowns. Execution always calls `check` again.
+    /// The default reports this check as deferred.
+    fn prepare<'a>(&'a self, _ctx: &'a MessageContext) -> Option<CheckFuture<'a>> {
+        None
+    }
 }
 
 pub struct CheckFn<F>(F);
@@ -351,6 +357,9 @@ impl Check {
     }
 }
 impl CommandCheck for Check {
+    fn prepare<'a>(&'a self, ctx: &'a MessageContext) -> Option<CheckFuture<'a>> {
+        Some(self.check(ctx))
+    }
     fn check<'a>(&'a self, ctx: &'a MessageContext) -> CheckFuture<'a> {
         Box::pin(async move {
             let deny = |message: &str| YappinError::from(CommandError::Denied(message.into()));
@@ -513,6 +522,10 @@ impl<A: FromArgs> CommandSpec<A> {
         let handler = Arc::new(handler);
         RegisteredCommand {
             info: self.info,
+            preparation: Some(CommandPreparation {
+                schema: None,
+                checks: checks.clone(),
+            }),
             handler: Arc::new(move |ctx| {
                 let checks = checks.clone();
                 let handler = handler.clone();
@@ -534,4 +547,10 @@ impl<A: FromArgs> CommandSpec<A> {
 pub struct RegisteredCommand {
     pub info: CommandInfo,
     pub(crate) handler: crate::bot::CommandHandlerFn,
+    pub(crate) preparation: Option<CommandPreparation>,
+}
+#[derive(Clone)]
+pub(crate) struct CommandPreparation {
+    pub schema: Option<Arc<CommandSchema>>,
+    pub checks: Arc<Vec<Arc<dyn CommandCheck>>>,
 }

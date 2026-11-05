@@ -1295,7 +1295,7 @@ dependencies = [
 
 [[package]]
 name = "rappin-rs"
-version = "0.1.22"
+version = "0.1.23"
 dependencies = [
  "async-trait",
  "axum",
@@ -1307,6 +1307,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hmac",
+ "http",
  "log",
  "metrics",
  "metrics-exporter-prometheus",

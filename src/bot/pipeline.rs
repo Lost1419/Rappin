@@ -30,7 +30,7 @@ struct IntakeFailure {
     error: YappinError,
     unprocessed: Vec<u64>,
 }
-fn retryable_read(error: &YappinError) -> bool {
+pub(super) fn retryable_read(error: &YappinError) -> bool {
     matches!(
         error,
         YappinError::Http(_) | YappinError::RateLimited { .. }
@@ -40,20 +40,20 @@ struct CompletedBatch {
     watermark: u64,
     outcomes: Vec<(u64, Option<Result<()>>)>,
 }
-struct ExecutionGate {
-    limit: usize,
-    semaphore: Semaphore,
-    serial: tokio::sync::Mutex<()>,
-    halted: AtomicBool,
-    failed: tokio::sync::Notify,
+pub(super) struct ExecutionGate {
+    pub(super) limit: usize,
+    pub(super) semaphore: Semaphore,
+    pub(super) serial: tokio::sync::Mutex<()>,
+    pub(super) halted: AtomicBool,
+    pub(super) failed: tokio::sync::Notify,
 }
 impl ExecutionGate {
-    fn halt(&self) {
+    pub(super) fn halt(&self) {
         if !self.halted.swap(true, Ordering::SeqCst) {
             self.failed.notify_one();
         }
     }
-    fn halted(&self) -> bool {
+    pub(super) fn halted(&self) -> bool {
         self.halted.load(Ordering::SeqCst)
     }
 }
@@ -72,6 +72,9 @@ impl Drop for Intake {
 
 impl Bot {
     pub(super) async fn run_pipeline(&self, me: &BotProfile, last: u64) -> Result<()> {
+        if let Some(ingress) = &self.handle.inner.ingress {
+            return self.run_shared_pipeline(me, last, ingress.clone()).await;
+        }
         let mode = self.handle.inner.telemetry.status().mode;
         self.client().events().reopen();
         let client = self.client().clone();

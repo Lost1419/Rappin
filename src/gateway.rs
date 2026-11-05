@@ -9,11 +9,16 @@ use tokio::net::TcpStream;
 use tokio::time::{timeout, Instant};
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
+pub(crate) mod requests;
+pub use requests::{GatewayRequestConfig, GatewayRequestStatus, RequestTransport};
+
 pub const DEFAULT_GATEWAY: &str = "wss://rt.yapper.website/bot";
 pub struct Gateway {
     client: Client,
     url: String,
     socket: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+    pump: Option<requests::Pump>,
+    deliver_duplicates: bool,
     interval: Duration,
     heartbeat: Instant,
     awaiting_ack: bool,
@@ -30,6 +35,8 @@ impl Gateway {
             client,
             url: DEFAULT_GATEWAY.into(),
             socket: None,
+            pump: None,
+            deliver_duplicates: false,
             interval: Duration::from_secs(30),
             heartbeat: Instant::now(),
             awaiting_ack: false,
@@ -60,6 +67,14 @@ impl Gateway {
             .update(|s| s.mode = TransportMode::GatewayOnly);
         self
     }
+    pub(crate) fn shared_delivery(mut self) -> Self {
+        self.deliver_duplicates = true;
+        self
+    }
+    pub(crate) fn without_fallback(mut self) -> Self {
+        self.allow_fallback = false;
+        self
+    }
     pub fn status(&self) -> TransportStatus {
         self.telemetry.status()
     }
@@ -72,6 +87,7 @@ impl Gateway {
     }
     pub(crate) fn backpressure(&mut self) {
         self.socket = None;
+        self.pump = None;
         self.telemetry.update(|s| {
             s.active = None;
             s.heartbeat_rtt = None;
@@ -86,7 +102,16 @@ impl Gateway {
                 "gateway wire tracing is enabled; refusing to send credentials".into(),
             ));
         }
-        let (mut ws, _) = timeout(Duration::from_secs(10), connect_async(&self.url))
+        let connection = async {
+            if self.client.inner_gateway_router().enabled() {
+                let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+                    .max_message_size(Some(1024 * 1024));
+                tokio_tungstenite::connect_async_with_config(&self.url, Some(config), false).await
+            } else {
+                connect_async(&self.url).await
+            }
+        };
+        let (mut ws, _) = timeout(Duration::from_secs(10), connection)
             .await
             .map_err(|_| transport())?
             .map_err(transport_cause)?;
@@ -133,6 +158,9 @@ impl Gateway {
         Ok(())
     }
     async fn receive(&mut self, after: u64) -> Result<EventsResponse> {
+        if let Some(pump) = &mut self.pump {
+            return pump.poll(after, self.deliver_duplicates).await;
+        }
         if self.socket.is_none() {
             self.connect(after).await?;
         }
@@ -159,9 +187,16 @@ impl Gateway {
                                 },
                                 Some("ready")=>{
                                     self.telemetry.update(|s|{s.active=Some(EventTransport::Gateway);s.fallback=None;s.heartbeat_rtt=None;});
+                                    let capability=v["requests"]==true;
+                                    self.client.inner_gateway_router().capability(capability);
+                                    if capability && self.client.inner_gateway_router().enabled() {
+                                        let socket=self.socket.take().ok_or_else(transport)?;
+                                        self.pump=Some(requests::Pump::start(socket,self.client.inner_gateway_router().clone(),self.interval,self.telemetry.clone()));
+                                        if after!=0 {return self.pump.as_mut().expect("request pump").poll(after, self.deliver_duplicates).await;}
+                                    }
                                     if after==0{return Ok(EventsResponse{events:vec![],last:v["seq"].as_u64().unwrap_or(0)});}
                                 },
-                                Some("event")=>{let event:crate::Event=serde_json::from_value(v["d"].clone())?;if event.id>after{self.telemetry.update(|s|{s.active=Some(EventTransport::Gateway);s.fallback=None;s.received_cursor=event.id;});return Ok(EventsResponse{last:event.id,events:vec![event]});}},
+                                Some("event")=>{let event:crate::Event=serde_json::from_value(v["d"].clone())?;if self.deliver_duplicates || event.id>after{self.telemetry.update(|s|{s.active=Some(EventTransport::Gateway);s.fallback=None;s.received_cursor=after.max(event.id);});return Ok(EventsResponse{last:after.max(event.id),events:vec![event]});}},
                                 _=>(),
                             }
                         },_=>(),
@@ -182,6 +217,7 @@ impl Gateway {
                 Ok(batch) => Ok(batch),
                 Err(e) => {
                     self.socket = None;
+                    self.pump = None;
                     self.telemetry.update(|s| {
                         s.active = None;
                         s.heartbeat_rtt = None;
