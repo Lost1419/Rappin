@@ -11,43 +11,30 @@ own, or automate Yapin through the JSON CLI and MCP tools.
 
 ## Compatibility
 
-**0.1.17 is the one-time compatibility transition.** From this release onward,
-0.1.x patch updates will preserve documented public APIs and existing defaults;
-new behavior will be opt-in. Any later breaking change must use a new Cargo
-compatibility line (for example 0.2), with an explicit migration guide. Cargo's
-normal `"0.1.17"` requirement will not automatically select that breaking release.
+0.1.x updates preserve documented public APIs and existing defaults; new behavior
+is opt-in. Application-owned storage, cache backends and custom prefixes remain
+supported. Breaking changes require a new Cargo compatibility line and an explicit
+migration guide.
 
-When upgrading from 0.1.16 or earlier:
-
-- Rebuild hot-reload parents and workers together for protocol v4.
-- Add a wildcard arm when matching extensible event/error/capability enums.
-- Use constructors/builders, deserialization, or `Message::default()` /
-  `RequestObservation::default()` for extensible response types. New attachment,
-  DM and proxy fields require updates to old manual struct literals. Construct
-  embed assets with `EmbedAuthor::new`, `EmbedFooter::new` and `EmbedMedia::new`.
-- Move raw `dm_message` handling to `EventHandler::on_dm`; it returns `Result` and
-  does not dispatch server commands. Typed MessageEvent collectors now include DMs;
-  use server/channel filters or DmMessageEvent collectors to select the source.
-- Rate-limit waits now have a configurable 30-second total budget. Set
-  `max_retry_wait` explicitly if your application needs a different limit.
-
-Application-owned storage, cache backends and custom prefixes remain supported.
-Use [message gates and fallible listeners](docs/message-policy.md) for shared access
-policy and natural-language handlers that perform required I/O.
-See [API 1.2 workflows](docs/api-1.2.md) for the new interfaces and limits.
+If you use 0.1.16 or earlier, follow the [0.1.17 migration notes](CHANGELOG.md#0117--2026-11-02)
+when upgrading. Worker capabilities are opt-in and versioned; upgrade the parent
+before enabling a newer worker protocol. See the [hot-reloading guide](docs/hot-reloading.md).
 
 ## What you can build
 
 - **Command bots:** slash and prefix commands, typed arguments, aliases,
   subcommands, permission checks, cooldowns, and generated help.
 - **Interactive messages:** embeds, buttons, Components V2 layouts, paginators,
-  confirmation dialogs, and typed collectors for replies and clicks.
+  select menus, modal forms, confirmation dialogs, and typed collectors for replies
+  and interactions.
 - **Modular Rust bots:** group handlers into cogs, or rebuild and swap Rust worker
   cogs while the parent bot keeps running.
 - **API integrations:** manage messages, channels, servers, members, roles,
   moderation, reactions, and voice through a standalone REST client.
 - **Agent workflows:** discover channels, inspect history, send messages, and
-  consume events using JSON commands or MCP over stdio.
+  consume events using JSON commands or MCP over stdio. Rust consumers can discover
+  capabilities offline, bind validated operations to commands, and prepare and invoke
+  installed commands with consumer-owned operation IDs.
 
 The library also includes channel webhooks, OAuth2 with PKCE, asset URL helpers,
 and optional encrypted voice playback.
@@ -61,7 +48,7 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.21"
+rappin-rs = "0.1.24"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -119,12 +106,28 @@ Bots use long polling by default, so they can run on a laptop without a public
 HTTP endpoint. Enable the `gateway` feature and add
 `.gateway(rappin::gateway::DEFAULT_GATEWAY)` to receive events over WebSocket,
 with heartbeats, resume, and polling fallback when the gateway is unavailable.
+JSON API calls use HTTPS by default; [gateway API requests](docs/gateway-requests.md)
+can use the same connection when the platform advertises support.
 
 Configure `.cursor_file("./state/events.json")` for restart checkpoints and
 `.handler_concurrency(8)` to bound concurrent handlers. Checkpoints advance after
-ordered completion; unprocessed events and later work remain replayable. Use the
+ordered completion; incomplete work holds the checkpoint. Use the
 [failure policy](docs/handler-failures.md) to complete expected rejections or
-explicitly handle a failed invocation while intake continues.
+explicitly handle a failed invocation while intake continues. Reconcile partial
+or uncertain effects before replaying work. An opt-in
+[availability policy](docs/availability-and-hierarchy.md) provides bounded,
+cancellable recovery for transient startup and intake read failures.
+
+Use [shared ingress](docs/shared-ingress.md) to combine verified webhooks with
+polling recovery and optional gateway delivery. It deduplicates before event
+effects and exposes admission receipts; durable restart recovery uses a
+consumer-owned `IngressStore`.
+
+[Message gates and fallible listeners](docs/message-policy.md) support shared
+access policy before command dispatch and natural-language handlers. For composed
+workflows, [checked invocation](docs/checked-invocation.md) reuses installed command
+checks and handlers while retaining the original message and a separate consumer
+operation identity.
 
 The built-in cache holds profile, server, and channel snapshots. Member/role
 lookup caching is opt-in, and `LookupCache` lets you use your own database or
@@ -182,15 +185,17 @@ The default library build needs neither Node nor the CLI dependencies.
 | Cargo feature | Enables |
 |---|---|
 | `cli` | JSON CLI and MCP stdio server |
-| `gateway` | WebSocket events with resume and polling fallback |
+| `gateway` | WebSocket events and opt-in JSON API requests |
 | `hot-reload` | Compilation and replacement of Rust worker cogs |
+| `webhook-middleware` | Axum webhook signature verification and verified event extraction |
+| `metrics` | Prometheus request, availability, and transport metrics |
 | `voice` | Encrypted voice playback through the Node/ffmpeg bridge |
 
 ## Guides and examples
 
 - [API reference](https://docs.rs/rappin-rs): Rust types and client methods.
 - [Rust bot guide](docs/rust-bots.md): typed commands, checks, collectors, and delivery semantics.
-- [Checked invocation](docs/checked-invocation.md): invoke installed commands from the original message context, with read-only preparation and explicit completion.
+- [Checked invocation](docs/checked-invocation.md): invoke installed commands from the original message context, with read-only preparation, consumer operation IDs, and explicit completion.
 - [Handler failures](docs/handler-failures.md): completion decisions, structured errors, draining, and checkpoints.
 - [Shared ingress](docs/shared-ingress.md): verified webhooks, polling recovery, deduplication, durable receipts, and checkpoint ownership.
 - [Gateway API requests](docs/gateway-requests.md): opt-in JSON request transport, bounded concurrency, and uncertain-write handling.
@@ -206,7 +211,10 @@ The default library build needs neither Node nor the CLI dependencies.
 - [CLI/MCP workflows](docs/cli-mcp.md): shared operations, bounded results, delivery receipts, and recovery.
 - [Changelog](CHANGELOG.md): release history and migration notes.
 
-Run the examples from a checkout with `YAPPER_BOT_TOKEN` set:
+Run these examples from a checkout. Set `YAPPER_BOT_TOKEN` for the bot, client,
+and form examples below. The invocation, operation identity, gateway request and
+shared webhook examples use `YAPIN_BOT_TOKEN`. The shared webhook example also
+requires `YAPIN_BOT_ID` and `YAPIN_WEBHOOK_SECRET`.
 
 | Command | Demonstrates |
 |---|---|
@@ -217,6 +225,11 @@ Run the examples from a checkout with `YAPPER_BOT_TOKEN` set:
 | `cargo run --example advanced_bot` | Cooldowns, cache, pagination, and confirmations |
 | `cargo run --example embeds_and_buttons` | Embeds and Components V2 layouts |
 | `cargo run --example api_client` | Standalone REST client |
+| `cargo run --example interactive_forms` | Select menus and modal forms |
+| `cargo run --example checked_invocation` | Prepare and invoke installed commands |
+| `cargo run --example operation_identity` | Two-step preparation and consumer-owned operation keys |
+| `cargo run --features gateway --example gateway_api_requests` | Gateway events and JSON API requests |
+| `cargo run --features webhook-middleware --example shared_webhook_polling` | Verified webhooks with polling recovery |
 
 Keep bot tokens out of source control and logs. Handlers, custom transports, and
 loaded cogs are trusted application code; see the
