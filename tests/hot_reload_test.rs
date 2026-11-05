@@ -904,9 +904,11 @@ async fn compiler_codes_spans_and_build_script_effects_are_reported_without_sour
     assert!(!encoded.contains(&project.0.to_string_lossy().to_string()));
     assert_eq!(error.to_remote().hot_reload_failure(), Some(failure));
 
+    let home_variable = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    let home = std::env::var(home_variable).unwrap();
     tokio::fs::write(
         project.0.join("src/main.rs"),
-        "compile_error!(env!(\"HOME\"));\nfn main() {}\n",
+        format!("compile_error!(env!({home_variable:?}));\nfn main() {{}}\n"),
     )
     .await
     .unwrap();
@@ -915,7 +917,9 @@ async fn compiler_codes_spans_and_build_script_effects_are_reported_without_sour
         Err(error) => error,
     };
     let text = error.to_json().to_string();
-    assert!(!text.contains(&std::env::var("HOME").unwrap()));
+    let encoded_home = serde_json::to_string(&home).unwrap();
+    assert!(!text.contains(&encoded_home[1..encoded_home.len() - 1]));
+    assert!(text.contains("[redacted]"));
     assert!(!text.contains("compile_error!(env!"), "no source excerpts");
 }
 
