@@ -126,8 +126,10 @@ pub mod permissions;
 pub mod role_hierarchy;
 pub use api::{Api, ApiExt};
 pub use bot::{
-    Admission, AdmissionDurability, AdmissionStatus, EventIngress, EventReceipt, IngressConfig,
-    IngressRecord, IngressRecovery, IngressStatus, IngressStore, ReceiptStage, ReceiptStatus,
+    Admission, AdmissionDurability, AdmissionStatus, ConflictDisposition, EventIngress,
+    EventReceipt, IngressConfig, IngressConflict, IngressConflictPolicy, IngressRecord,
+    IngressRecovery, IngressSource, IngressStatus, IngressStore, PayloadDifference, PayloadType,
+    ReceiptStage, ReceiptStatus,
 };
 pub use bot::{
     EventFailure, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,

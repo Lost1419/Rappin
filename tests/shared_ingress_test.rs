@@ -6,7 +6,7 @@ use sha2::Sha256;
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -46,6 +46,7 @@ struct Http {
     url: String,
     polls: mpsc::UnboundedReceiver<oneshot::Sender<Value>>,
     posts: Arc<AtomicUsize>,
+    poll_after: Arc<Mutex<Vec<u64>>>,
     task: tokio::task::JoinHandle<()>,
 }
 impl Drop for Http {
@@ -60,15 +61,17 @@ impl Http {
         let (tx, polls) = mpsc::unbounded_channel();
         let posts = Arc::new(AtomicUsize::new(0));
         let count = posts.clone();
+        let poll_after = Arc::new(Mutex::new(vec![]));
+        let afters = poll_after.clone();
         let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
         let task = tokio::spawn(async move {
             let mut connections = tokio::task::JoinSet::new();
             loop {
                 tokio::select! {
-                    accept=listener.accept()=>{let (mut socket,_)=accept.unwrap();let tx=tx.clone();let count=count.clone();let responses=responses.clone();connections.spawn(async move {
+                    accept=listener.accept()=>{let (mut socket,_)=accept.unwrap();let tx=tx.clone();let count=count.clone();let responses=responses.clone();let afters=afters.clone();connections.spawn(async move {
                         let mut bytes=vec![];let mut buf=[0;4096];loop {let n=socket.read(&mut buf).await.unwrap();if n==0{return;}bytes.extend_from_slice(&buf[..n]);if let Some(end)=bytes.windows(4).position(|b|b==b"\r\n\r\n") {let headers=String::from_utf8_lossy(&bytes[..end]);let size=headers.lines().find_map(|l|l.split_once(':').filter(|(k,_)|k.eq_ignore_ascii_case("content-length")).map(|(_,v)|v.trim().parse::<usize>().unwrap())).unwrap_or(0);if bytes.len()>=end+4+size {break;}}}
                         let request=String::from_utf8_lossy(&bytes);let line=request.lines().next().unwrap();
-                        let (status,headers,body)=if line.starts_with("GET /me "){support::response(200,support::profile())}else if line.starts_with("GET /events?"){let (send,receive)=oneshot::channel();if tx.send(send).is_err(){return;}let mut closed=[0u8;1];let value=tokio::select!{result=receive=>{let Ok(value)=result else{return;};value},_=socket.read(&mut closed)=>return};support::response(200,value)}else if line.starts_with("POST "){count.fetch_add(1,Ordering::SeqCst);responses.lock().unwrap().pop_front().expect("unexpected mutation")}else{panic!("unexpected request {line}")};
+                        let (status,headers,body)=if line.starts_with("GET /me "){support::response(200,support::profile())}else if line.starts_with("GET /events?"){afters.lock().unwrap().push(line.split("after=").nth(1).unwrap().split(['&',' ']).next().unwrap().parse().unwrap());let (send,receive)=oneshot::channel();if tx.send(send).is_err(){return;}let mut closed=[0u8;1];let value=tokio::select!{result=receive=>{let Ok(value)=result else{return;};value},_=socket.read(&mut closed)=>return};support::response(200,value)}else if line.starts_with("POST "){count.fetch_add(1,Ordering::SeqCst);responses.lock().unwrap().pop_front().expect("unexpected mutation")}else{panic!("unexpected request {line}")};
                         let mut reply=format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",body.len());for (k,v) in headers {reply.push_str(&format!("{k}: {v}\r\n"));}reply.push_str("\r\n");reply.push_str(&body);let _=socket.write_all(reply.as_bytes()).await;
                     });},
                     _=connections.join_next(),if !connections.is_empty()=>(),
@@ -79,6 +82,7 @@ impl Http {
             url,
             polls,
             posts,
+            poll_after,
             task,
         }
     }
@@ -116,7 +120,10 @@ async fn simultaneous_webhooks_polling_sparse_ids_conflicts_and_identity_are_sha
     let mut http = Http::new(vec![]).await;
     let calls = Arc::new(Mutex::new(vec![]));
     let c = calls.clone();
+    let mut config = IngressConfig::default();
+    config.conflict_policy = IngressConflictPolicy::RetainCompletedAndPoll;
     let bot = builder(&http)
+        .shared_ingress(config)
         .command("ping", "record", move |ctx| {
             let c = c.clone();
             async move {
@@ -263,6 +270,10 @@ struct Store {
     block_queued: AtomicUsize,
     queued: Notify,
     release: Notify,
+    fail_conflict: AtomicUsize,
+    block_conflict: AtomicBool,
+    conflict_waiting: Notify,
+    release_conflict: Notify,
 }
 #[async_trait::async_trait]
 impl IngressStore for Store {
@@ -280,6 +291,28 @@ impl IngressStore for Store {
         data.records.retain(|r| r.event.id != record.event.id);
         data.records.push(record);
         Ok(())
+    }
+    async fn record_conflict(&self, report: IngressConflict) -> Result<AdmissionDurability> {
+        if self.block_conflict.load(Ordering::SeqCst) {
+            self.conflict_waiting.notify_one();
+            self.release_conflict.notified().await;
+        }
+        let fail = self.fail_conflict.load(Ordering::SeqCst);
+        if fail == 1 || fail == 2 && report.disposition == ConflictDisposition::PollingConfirmed {
+            return Err(YappinError::Api {
+                status: 503,
+                message: "fixture conflict persistence failed".into(),
+                retry_after: Some(0.1),
+            });
+        }
+        let mut data = self.data.lock().unwrap();
+        data.conflicts.retain(|r| {
+            !(r.event_id == report.event_id
+                && r.incoming_fingerprint == report.incoming_fingerprint
+                && r.incoming_source == report.incoming_source)
+        });
+        data.conflicts.push(report);
+        Ok(AdmissionDurability::Durable)
     }
     async fn checkpoint(&self, _: Uuid, cursor: u64) -> Result<()> {
         if cursor > 0 && self.fail_checkpoint.load(Ordering::SeqCst) > 0 {
@@ -817,10 +850,9 @@ async fn webhook_gateway_and_polling_share_claims_and_report_gateway_payload_con
         other => panic!("{other:?}"),
     };
     assert_eq!(report.committed_cursor, 10);
-    assert_eq!(
-        report.intake_error.unwrap().details["field"],
-        "ingress.payload"
-    );
+    let error = report.intake_error.unwrap();
+    assert_eq!(error.kind, "ingress_conflict");
+    assert_eq!(error.details["conflict"]["incoming_source"], "gateway");
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(http.posts.load(Ordering::SeqCst), 0);
     server.abort();
@@ -877,4 +909,759 @@ async fn cancelling_admission_after_intake_started_stops_without_waiting_for_pol
     assert_eq!(receipt.stage, ReceiptStage::Failed);
     assert_eq!(receipt.error.unwrap().details["outcome"], "unknown");
     assert_eq!(http.posts.load(Ordering::SeqCst), 0);
+}
+
+fn recover_config() -> IngressConfig {
+    let mut config = IngressConfig::default();
+    config.conflict_policy = IngressConflictPolicy::RetainCompletedAndPoll;
+    config
+}
+fn pipeline_report(error: YappinError) -> Box<EventProcessingFailure> {
+    match error {
+        YappinError::EventProcessing { report } => report,
+        other => panic!("unexpected error: {other}"),
+    }
+}
+
+#[tokio::test]
+async fn conflicting_poll_timestamp_has_bounded_source_diagnostics_without_changing_completion() {
+    let mut http = Http::new(vec![]).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let c = calls.clone();
+    let bot = builder(&http)
+        .command("ping", "record", move |_| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .build();
+    let ingress = bot.handle().ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    ingress.wait_ready().await.unwrap();
+    let poll = http.next().await;
+    let mut original = event(10, "ping");
+    original.data["content"] = json!("PRIVATE CONTENT AND CREDENTIAL");
+    original.data["created_at"] = json!("2026-11-05T00:00:00Z");
+    let mut receipt = ingress
+        .admit(verified(original.clone()))
+        .await
+        .receipt
+        .unwrap();
+    assert_eq!(receipt.wait().await.stage, ReceiptStage::Completed);
+    let mut incoming = original.clone();
+    incoming.created_at = Some("2026-11-05T00:00:00Z".parse().unwrap());
+    poll.send(json!({"events":[incoming],"last":10})).unwrap();
+    let report = pipeline_report(run.await.unwrap().unwrap_err());
+    assert_eq!(report.committed_cursor, 0);
+    assert_eq!(report.completed_uncommitted_events, [10]);
+    assert!(report.failed_events.is_empty());
+    let error = report.intake_error.unwrap().to_json();
+    assert_eq!(error["kind"], "ingress_conflict");
+    let conflict = &error["conflict"];
+    assert_eq!(conflict["existing_source"], "webhook");
+    assert_eq!(conflict["incoming_source"], "polling");
+    assert_eq!(conflict["differences"][0]["path"], "/created_at");
+    assert_eq!(conflict["differences"][0]["existing_type"], "null");
+    assert_eq!(conflict["differences"][0]["incoming_type"], "string");
+    assert_ne!(
+        conflict["existing_fingerprint"],
+        conflict["incoming_fingerprint"]
+    );
+    assert!(!error.to_string().contains("PRIVATE"));
+    assert_eq!(receipt.status().stage, ReceiptStage::Completed);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn fast_webhook_conflict_stops_by_default_and_keeps_original_receipt() {
+    let mut http = Http::new(vec![]).await;
+    let bot = builder(&http)
+        .command("ping", "record", |_| async { Ok(()) })
+        .build();
+    let ingress = bot.handle().ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    ingress.wait_ready().await.unwrap();
+    let _poll = http.next().await;
+    let mut receipt = ingress
+        .admit(verified(event(10, "ping")))
+        .await
+        .receipt
+        .unwrap();
+    receipt.wait().await;
+    let mut incoming = event(10, "ping");
+    incoming.data["author_id"] = json!(Uuid::from_u128(999));
+    let admission = ingress.admit(verified(incoming)).await;
+    assert_eq!(admission.status, AdmissionStatus::Error);
+    assert_eq!(
+        admission.receipt.unwrap().status().stage,
+        ReceiptStage::Completed
+    );
+    let error = admission.error.unwrap().to_json();
+    assert_eq!(
+        error["conflict"]["differences"][0]["path"],
+        "/data/author_id"
+    );
+    let report = pipeline_report(run.await.unwrap().unwrap_err());
+    assert_eq!(report.completed_uncommitted_events, [10]);
+    assert_eq!(report.committed_cursor, 0);
+    assert_eq!(receipt.status().stage, ReceiptStage::Completed);
+}
+
+#[tokio::test]
+async fn completed_conflict_requires_matching_polling_payload_not_just_a_watermark() {
+    let mut http = Http::new(vec![]).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let c = calls.clone();
+    let bot = builder(&http)
+        .shared_ingress(recover_config())
+        .command("ping", "record", move |_| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .build();
+    let handle = bot.handle();
+    let ingress = handle.ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    ingress.wait_ready().await.unwrap();
+    let poll = http.next().await;
+    let original = event(10, "ping");
+    let mut receipt = ingress
+        .admit(verified(original.clone()))
+        .await
+        .receipt
+        .unwrap();
+    receipt.wait().await;
+    let mut changed = original.clone();
+    changed.data["content"] = json!("contradictory");
+    let admission = ingress.admit(verified(changed)).await;
+    assert_eq!(admission.status, AdmissionStatus::Error);
+    assert_eq!(
+        admission.error.unwrap().to_json()["conflict"]["disposition"],
+        "awaiting_polling"
+    );
+    poll.send(json!({"events":[],"last":20})).unwrap();
+    let next = http.next().await;
+    until(|| ingress.status().polling_watermark == 20).await;
+    assert_eq!(*http.poll_after.lock().unwrap().last().unwrap(), 9);
+    assert!(ingress.status().committed_cursor < 10);
+    assert!(!receipt.status().committed);
+    next.send(json!({"events":[original],"last":20})).unwrap();
+    until(|| ingress.status().committed_cursor == 20).await;
+    assert_eq!(
+        ingress.conflicts()[0].disposition,
+        ConflictDisposition::PollingConfirmed
+    );
+    assert_eq!(ingress.status().pending_conflicts, 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(receipt.status().committed);
+    handle.stop();
+    run.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn durable_restarts_keep_conflict_evidence_and_original_completion_without_repeated_effects()
+{
+    let store = Arc::new(Store::default());
+    let calls = Arc::new(AtomicUsize::new(0));
+    for phase in 0..3 {
+        let mut http = Http::new(vec![]).await;
+        let c = calls.clone();
+        let bot = builder(&http)
+            .shared_ingress(recover_config())
+            .ingress_store(store.clone())
+            .command("ping", "record", move |_| {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .build();
+        let handle = bot.handle();
+        let ingress = handle.ingress().unwrap();
+        let run = tokio::spawn(bot.run());
+        ingress.wait_ready().await.unwrap();
+        let poll = http.next().await;
+        if phase == 0 {
+            let mut receipt = ingress
+                .admit(verified(event(10, "ping")))
+                .await
+                .receipt
+                .unwrap();
+            receipt.wait().await;
+        } else if phase == 1 {
+            let mut changed = event(10, "ping");
+            changed.data["server_id"] = json!(Uuid::from_u128(77));
+            let result = ingress.admit(verified(changed)).await;
+            let error = result.error.unwrap().to_json();
+            assert_eq!(error["conflict"]["existing_source"], "recovery");
+            assert_eq!(error["conflict"]["recovered_source"], "webhook");
+            assert_eq!(
+                store.data.lock().unwrap().records[0].event,
+                event(10, "ping")
+            );
+            assert_eq!(
+                store.data.lock().unwrap().conflicts[0].disposition,
+                ConflictDisposition::AwaitingPolling
+            );
+        } else {
+            assert_eq!(ingress.status().pending_conflicts, 1);
+            poll.send(json!({"events":[event(10,"ping")],"last":10}))
+                .unwrap();
+            until(|| ingress.status().committed_cursor == 10).await;
+            assert_eq!(store.data.lock().unwrap().polling_checkpoint, Some(10));
+            assert_eq!(
+                store.data.lock().unwrap().conflicts[0].disposition,
+                ConflictDisposition::PollingConfirmed
+            );
+            handle.stop();
+            run.await.unwrap().unwrap();
+            continue;
+        }
+        handle.stop();
+        run.await.unwrap().unwrap();
+        assert_eq!(
+            store.data.lock().unwrap().records[0].status.stage,
+            ReceiptStage::Completed
+        );
+        assert_eq!(store.data.lock().unwrap().polling_checkpoint, Some(0));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn durable_conflict_confirmation_and_checkpoint_failures_never_reexecute_completed_work() {
+    for fail_confirmation in [false, true] {
+        let mut http = Http::new(vec![]).await;
+        let store = Arc::new(Store::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let bot = builder(&http)
+            .shared_ingress(recover_config())
+            .ingress_store(store.clone())
+            .command("ping", "record", move |_| {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .build();
+        let ingress = bot.handle().ingress().unwrap();
+        let run = tokio::spawn(bot.run());
+        ingress.wait_ready().await.unwrap();
+        let poll = http.next().await;
+        let mut receipt = ingress
+            .admit(verified(event(10, "ping")))
+            .await
+            .receipt
+            .unwrap();
+        receipt.wait().await;
+        let mut changed = event(10, "ping");
+        changed.data["content"] = json!("changed");
+        assert_eq!(
+            ingress.admit(verified(changed)).await.status,
+            AdmissionStatus::Error
+        );
+        if fail_confirmation {
+            store.fail_conflict.store(2, Ordering::SeqCst);
+        } else {
+            store.fail_checkpoint.store(1, Ordering::SeqCst);
+        }
+        poll.send(json!({"events":[event(10,"ping")],"last":10}))
+            .unwrap();
+        let report = pipeline_report(run.await.unwrap().unwrap_err());
+        assert_eq!(report.committed_cursor, 0);
+        assert_eq!(report.completed_uncommitted_events, [10]);
+        let error = if fail_confirmation {
+            report.intake_error.unwrap()
+        } else {
+            report.cursor_error.unwrap()
+        };
+        if fail_confirmation {
+            assert_eq!(error.kind, "failure_handling");
+            assert_eq!(error.status, Some(503));
+            assert_eq!(error.details["handling_error"]["kind"], "ingress_storage");
+            assert_eq!(
+                YappinError::from(error.clone())
+                    .ingress_conflict()
+                    .unwrap()
+                    .event_id,
+                10
+            );
+        } else {
+            assert_eq!(error.kind, "ingress_storage");
+        }
+        assert_eq!(receipt.status().stage, ReceiptStage::Completed);
+        assert_eq!(
+            store.data.lock().unwrap().records[0].status.stage,
+            ReceiptStage::Completed
+        );
+        store.fail_conflict.store(0, Ordering::SeqCst);
+        store.fail_checkpoint.store(0, Ordering::SeqCst);
+        let mut restart_http = Http::new(vec![]).await;
+        let c = calls.clone();
+        let restart = builder(&restart_http)
+            .shared_ingress(recover_config())
+            .ingress_store(store.clone())
+            .command("ping", "record", move |_| {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .build();
+        let handle = restart.handle();
+        let input = handle.ingress().unwrap();
+        let run = tokio::spawn(restart.run());
+        input.wait_ready().await.unwrap();
+        restart_http
+            .next()
+            .await
+            .send(json!({"events":[event(10,"ping")],"last":10}))
+            .unwrap();
+        until(|| input.status().committed_cursor == 10).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        handle.stop();
+        run.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn conflicting_polling_batch_is_rejected_before_any_event_effects() {
+    let mut http = Http::new(vec![]).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let c = calls.clone();
+    let bot = builder(&http)
+        .command("ping", "record", move |_| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .build();
+    let input = bot.handle().ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    input.wait_ready().await.unwrap();
+    let mut changed = event(10, "ping");
+    changed.data["content"] = json!("changed");
+    http.next()
+        .await
+        .send(json!({"events":[event(10,"ping"),changed],"last":10}))
+        .unwrap();
+    let report = pipeline_report(run.await.unwrap().unwrap_err());
+    let error = report.intake_error.unwrap().to_json();
+    assert_eq!(error["kind"], "ingress_conflict");
+    assert_eq!(error["conflict"]["existing_source"], "polling");
+    assert_eq!(error["conflict"]["incoming_source"], "polling");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(report.committed_cursor, 0);
+}
+
+#[tokio::test]
+async fn unanswered_recovery_times_out_and_uncertain_handler_effects_cannot_use_recovery_policy() {
+    let mut http = Http::new(vec![]).await;
+    let mut config = recover_config();
+    config.conflict_recovery_timeout = Duration::from_millis(40);
+    let bot = builder(&http)
+        .shared_ingress(config)
+        .command("ping", "record", |_| async { Ok(()) })
+        .build();
+    let input = bot.handle().ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    input.wait_ready().await.unwrap();
+    let _poll = http.next().await;
+    let mut receipt = input
+        .admit(verified(event(10, "ping")))
+        .await
+        .receipt
+        .unwrap();
+    receipt.wait().await;
+    assert_eq!(
+        input.admit(verified(event(10, "different"))).await.status,
+        AdmissionStatus::Error
+    );
+    let report = pipeline_report(
+        tokio::time::timeout(Duration::from_secs(3), run)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err(),
+    );
+    assert_eq!(
+        report.intake_error.unwrap().to_json()["conflict"]["disposition"],
+        "timed_out"
+    );
+    assert_eq!(receipt.status().stage, ReceiptStage::Completed);
+    assert_eq!(report.committed_cursor, 0);
+
+    let mut http = Http::new(vec![(
+        502,
+        vec![("Retry-After", "0.25")],
+        json!({"error":"uncertain write"}).to_string(),
+    )])
+    .await;
+    let ready = Arc::new(Notify::new());
+    let started = ready.clone();
+    let release = Arc::new(Notify::new());
+    let wait = release.clone();
+    let bot = builder(&http)
+        .shared_ingress(recover_config())
+        .command("write", "write", move |ctx| {
+            let started = started.clone();
+            let wait = wait.clone();
+            async move {
+                let error = ctx.reply("attempt exactly once").await.unwrap_err();
+                started.notify_one();
+                wait.notified().await;
+                Err(error)
+            }
+        })
+        .build();
+    let input = bot.handle().ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    input.wait_ready().await.unwrap();
+    let _poll = http.next().await;
+    let receipt = input
+        .admit(verified(event(10, "write")))
+        .await
+        .receipt
+        .unwrap();
+    ready.notified().await;
+    let admission = input.admit(verified(event(10, "different"))).await;
+    assert_eq!(
+        admission.error.unwrap().to_json()["conflict"]["disposition"],
+        "stop"
+    );
+    release.notify_one();
+    let report = pipeline_report(run.await.unwrap().unwrap_err());
+    assert_eq!(http.posts.load(Ordering::SeqCst), 1);
+    assert_eq!(receipt.status().stage, ReceiptStage::Failed);
+    assert_eq!(report.failed_events[0].error.status, Some(502));
+    assert_eq!(report.failed_events[0].error.retry_after, Some(0.25));
+    assert_eq!(report.committed_cursor, 0);
+}
+
+#[tokio::test]
+async fn durable_recovery_refuses_an_unimplemented_conflict_store_hook() {
+    struct Legacy(Arc<Store>);
+    #[async_trait::async_trait]
+    impl IngressStore for Legacy {
+        async fn load(&self, bot: Uuid) -> Result<IngressRecovery> {
+            self.0.load(bot).await
+        }
+        async fn record(&self, record: IngressRecord) -> Result<()> {
+            self.0.record(record).await
+        }
+        async fn checkpoint(&self, bot: Uuid, cursor: u64) -> Result<()> {
+            self.0.checkpoint(bot, cursor).await
+        }
+    }
+    let mut http = Http::new(vec![]).await;
+    let store = Arc::new(Store::default());
+    let bot = builder(&http)
+        .shared_ingress(recover_config())
+        .ingress_store(Arc::new(Legacy(store.clone())))
+        .command("ping", "record", |_| async { Ok(()) })
+        .build();
+    let input = bot.handle().ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    input.wait_ready().await.unwrap();
+    let _poll = http.next().await;
+    let mut receipt = input
+        .admit(verified(event(10, "ping")))
+        .await
+        .receipt
+        .unwrap();
+    receipt.wait().await;
+    let result = input.admit(verified(event(10, "different"))).await;
+    let error = result.error.unwrap();
+    assert_eq!(error.ingress_conflict().unwrap().event_id, 10);
+    assert_eq!(error.to_json()["handling_error"]["kind"], "configuration");
+    let report = pipeline_report(run.await.unwrap().unwrap_err());
+    assert_eq!(report.committed_cursor, 0);
+    assert_eq!(report.completed_uncommitted_events, [10]);
+    assert_eq!(
+        store.data.lock().unwrap().records[0].status.stage,
+        ReceiptStage::Completed
+    );
+}
+
+#[tokio::test]
+async fn simultaneous_conflicting_claims_never_run_the_second_handler_or_resolve_unfinished_effects(
+) {
+    let mut http = Http::new(vec![]).await;
+    let store = Arc::new(Store::default());
+    store.block_queued.store(10, Ordering::SeqCst);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let c = calls.clone();
+    let bot = builder(&http)
+        .shared_ingress(recover_config())
+        .ingress_store(store.clone())
+        .command("ping", "record", move |_| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .build();
+    let input = bot.handle().ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    input.wait_ready().await.unwrap();
+    let _poll = http.next().await;
+    let admission_input = input.clone();
+    let admission =
+        tokio::spawn(async move { admission_input.admit(verified(event(10, "ping"))).await });
+    store.queued.notified().await;
+    let result = input.admit(verified(event(10, "different"))).await;
+    assert_eq!(
+        result
+            .error
+            .unwrap()
+            .ingress_conflict()
+            .unwrap()
+            .disposition,
+        ConflictDisposition::Stop
+    );
+    store.release.notify_one();
+    let first = admission.await.unwrap();
+    let report = pipeline_report(run.await.unwrap().unwrap_err());
+    assert_eq!(report.committed_cursor, 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    if let Some(receipt) = first.receipt {
+        assert_ne!(receipt.status().stage, ReceiptStage::Completed);
+    }
+}
+
+#[cfg(feature = "gateway")]
+#[tokio::test]
+async fn gateway_conflict_can_wait_for_polling_without_repeating_the_completed_handler() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (send, mut frames) = mpsc::unbounded_channel::<Event>();
+    let ready = Arc::new(Notify::new());
+    let connected = ready.clone();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = accept_async(stream).await.unwrap();
+        ws.send(Message::Text(
+            json!({"op":"hello","heartbeat_interval":100})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        ws.next().await.unwrap().unwrap();
+        ws.send(Message::Text(
+            json!({"op":"ready","seq":0,"requests":false})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        connected.notify_one();
+        loop {
+            tokio::select! {
+                Some(event)=frames.recv()=>{ws.send(Message::Text(json!({"op":"event","d":event}).to_string().into())).await.unwrap();},
+                frame=ws.next()=>{let Some(Ok(Message::Text(frame)))=frame else{break;};let value:Value=serde_json::from_str(&frame).unwrap();if value["op"]=="heartbeat"{ws.send(Message::Text(json!({"op":"heartbeat_ack"}).to_string().into())).await.unwrap();}}
+            }
+        }
+    });
+    let mut http = Http::new(vec![]).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let c = calls.clone();
+    let bot = builder(&http)
+        .shared_ingress(recover_config())
+        .gateway(format!("ws://{address}"))
+        .command("ping", "record", move |_| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .build();
+    let handle = bot.handle();
+    let input = handle.ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    input.wait_ready().await.unwrap();
+    ready.notified().await;
+    let poll = http.next().await;
+    let mut receipt = input
+        .admit(verified(event(10, "ping")))
+        .await
+        .receipt
+        .unwrap();
+    receipt.wait().await;
+    let mut altered = event(10, "ping");
+    altered.created_at = Some("2026-11-05T00:00:00Z".parse().unwrap());
+    send.send(altered).unwrap();
+    until(|| input.status().pending_conflicts == 1).await;
+    assert_eq!(input.conflicts()[0].incoming_source, IngressSource::Gateway);
+    poll.send(json!({"events":[event(10,"ping")],"last":10}))
+        .unwrap();
+    until(|| input.status().committed_cursor == 10).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        input.conflicts()[0].disposition,
+        ConflictDisposition::PollingConfirmed
+    );
+    handle.stop();
+    run.await.unwrap().unwrap();
+    server.abort();
+}
+
+#[tokio::test]
+async fn cancelled_conflict_publication_keeps_diagnostic_cause_and_completion_barrier() {
+    let mut http = Http::new(vec![]).await;
+    let store = Arc::new(Store::default());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let c = calls.clone();
+    let bot = builder(&http)
+        .shared_ingress(recover_config())
+        .ingress_store(store.clone())
+        .command("ping", "record", move |_| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .build();
+    let input = bot.handle().ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    input.wait_ready().await.unwrap();
+    let _poll = http.next().await;
+    let mut receipt = input
+        .admit(verified(event(10, "ping")))
+        .await
+        .receipt
+        .unwrap();
+    receipt.wait().await;
+    store.block_conflict.store(true, Ordering::SeqCst);
+    let admission_input = input.clone();
+    let admission = tokio::spawn(async move {
+        admission_input
+            .admit(verified(event(10, "different")))
+            .await
+    });
+    store.conflict_waiting.notified().await;
+    admission.abort();
+    let _ = admission.await;
+    let report = pipeline_report(run.await.unwrap().unwrap_err());
+    let error = YappinError::from(report.intake_error.unwrap());
+    assert_eq!(error.ingress_conflict().unwrap().event_id, 10);
+    assert_eq!(report.completed_uncommitted_events, [10]);
+    assert_eq!(report.committed_cursor, 0);
+    assert_eq!(receipt.status().stage, ReceiptStage::Completed);
+    assert_eq!(
+        store.data.lock().unwrap().records[0].status.stage,
+        ReceiptStage::Completed
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn stopping_during_confirmation_publication_reports_the_retained_conflict_barrier() {
+    let mut http = Http::new(vec![]).await;
+    let store = Arc::new(Store::default());
+    let bot = builder(&http)
+        .shared_ingress(recover_config())
+        .ingress_store(store.clone())
+        .command("ping", "record", |_| async { Ok(()) })
+        .build();
+    let handle = bot.handle();
+    let input = handle.ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    input.wait_ready().await.unwrap();
+    let poll = http.next().await;
+    let mut receipt = input
+        .admit(verified(event(10, "ping")))
+        .await
+        .receipt
+        .unwrap();
+    receipt.wait().await;
+    input
+        .admit(verified(event(10, "different")))
+        .await
+        .error
+        .unwrap();
+    store.block_conflict.store(true, Ordering::SeqCst);
+    poll.send(json!({"events":[event(10,"ping")],"last":10}))
+        .unwrap();
+    store.conflict_waiting.notified().await;
+    handle.stop();
+    let report = pipeline_report(run.await.unwrap().unwrap_err());
+    assert_eq!(
+        YappinError::from(report.intake_error.unwrap())
+            .ingress_conflict()
+            .unwrap()
+            .event_id,
+        10
+    );
+    assert_eq!(report.committed_cursor, 0);
+    assert_eq!(report.completed_uncommitted_events, [10]);
+    assert_eq!(receipt.status().stage, ReceiptStage::Completed);
+    assert_eq!(
+        store.data.lock().unwrap().records[0].status.stage,
+        ReceiptStage::Completed
+    );
+}
+
+#[tokio::test]
+async fn diagnostic_capacity_keeps_unresolved_evidence_and_reports_the_new_conflict() {
+    let mut http = Http::new(vec![]).await;
+    let mut config = recover_config();
+    config.max_conflict_reports = 1;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let c = calls.clone();
+    let bot = builder(&http)
+        .shared_ingress(config)
+        .command("ping", "record", move |_| {
+            let c = c.clone();
+            async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        })
+        .build();
+    let input = bot.handle().ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    input.wait_ready().await.unwrap();
+    let _poll = http.next().await;
+    for id in [10, 20] {
+        let mut receipt = input
+            .admit(verified(event(id, "ping")))
+            .await
+            .receipt
+            .unwrap();
+        receipt.wait().await;
+    }
+    input
+        .admit(verified(event(10, "different")))
+        .await
+        .error
+        .unwrap();
+    let error = input
+        .admit(verified(event(20, "different")))
+        .await
+        .error
+        .unwrap();
+    assert_eq!(error.ingress_conflict().unwrap().event_id, 20);
+    assert_eq!(input.conflicts().len(), 1);
+    assert_eq!(input.conflicts()[0].event_id, 10);
+    let report = pipeline_report(run.await.unwrap().unwrap_err());
+    assert_eq!(report.completed_uncommitted_events, [10, 20]);
+    assert_eq!(report.committed_cursor, 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }

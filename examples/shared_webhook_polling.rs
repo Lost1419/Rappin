@@ -11,7 +11,8 @@ use axum::{
 use rappin::{
     webhook::VerifiedEvent,
     webhook_middleware::{verify_middleware, WebhookConfig},
-    AdmissionStatus, Bot, EventIngress, IngressConfig, ReceiptStage, Result, YappinError,
+    AdmissionStatus, Bot, EventIngress, IngressConfig, IngressConflictPolicy, ReceiptStage, Result,
+    YappinError,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -45,6 +46,18 @@ async fn receive(
         AdmissionStatus::Full | AdmissionStatus::Stopped => StatusCode::SERVICE_UNAVAILABLE,
         _ => StatusCode::CONFLICT,
     };
+    if let Some(conflict) = admission
+        .error
+        .as_ref()
+        .and_then(YappinError::ingress_conflict)
+    {
+        // The bounded report contains sources, hashes and schema paths/types,
+        // never message text, interaction credentials or arbitrary payload values.
+        return (
+            status,
+            Json(json!({"admission":"conflict","conflict":conflict})),
+        );
+    }
     (status, Json(json!({"admission":"not_accepted"})))
 }
 fn required(name: &str) -> Result<String> {
@@ -60,8 +73,18 @@ async fn main() -> Result<()> {
     let secret = required("YAPIN_WEBHOOK_SECRET")?;
     let cursor =
         std::env::var("YAPIN_CURSOR_FILE").unwrap_or_else(|_| "shared-example-cursor.json".into());
+    let mut config = IngressConfig::default();
+    for arg in std::env::args().skip(1) {
+        if arg == "--retain-completed-and-poll" {
+            config.conflict_policy = IngressConflictPolicy::RetainCompletedAndPoll;
+        } else {
+            return Err(YappinError::Config(
+                "supported argument: --retain-completed-and-poll".into(),
+            ));
+        }
+    }
     let bot = Bot::builder(token)
-        .shared_ingress(IngressConfig::default())
+        .shared_ingress(config)
         .cursor_file(cursor)
         .command("ping", "Reply once across transports", |ctx| async move {
             ctx.reply("pong").await?;
@@ -85,7 +108,7 @@ async fn main() -> Result<()> {
             Arc::new(WebhookConfig::new(secret, bot_id)),
             verify_middleware,
         ))
-        .with_state(ingress);
+        .with_state(ingress.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
     let (shutdown, stopped) = oneshot::channel();
     let server = tokio::spawn(async move {
@@ -101,5 +124,8 @@ async fn main() -> Result<()> {
     };
     let _ = shutdown.send(());
     let _ = server.await;
+    for conflict in ingress.conflicts() {
+        eprintln!("{}", serde_json::to_string(&conflict)?);
+    }
     result
 }

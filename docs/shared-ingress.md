@@ -131,3 +131,141 @@ store. DNS/tunnels, hosting, storage engines and application command/approval
 policies are outside the SDK. Native ingress needs no optional feature; gateway
 delivery adds `gateway`, workers add `hot-reload`. Existing worker protocol versions
 and failure contracts remain compatible.
+
+## Payload conflicts and bounded recovery
+
+Yapin documents gateway `d` as exactly one `/events` item. The public event model
+contains `id`, `type`, `data` and outer `created_at`. The outer timestamp and a
+`data.created_at` value are distinct fields; the SDK does not substitute one for
+the other. A missing/null outer timestamp versus a supplied timestamp remains a
+conflict. No transport-specific requester, server, message, command or content
+change is accepted as equivalent.
+
+Fingerprints are SHA-256 of recursively key-sorted serialized `Event` JSON.
+Object property order is immaterial, even when a consumer enables serde_json's
+`preserve_order`. Existing typed outer timestamp parsing compares equivalent
+instants consistently. Array order, scalar values, missing versus null payload
+fields, and different event kinds or identities remain meaningful. Existing
+`Event` deserialization/legacy aliases are unchanged. Restoring an old receipt
+recomputes its evidence without rewriting the event or completion.
+
+`YappinError::IngressConflict { conflict }` has JSON `kind: ingress_conflict`.
+`YappinError::ingress_conflict()` recovers its report from native, remote and
+pipeline errors, including nested persistence failures. `IngressConflict` exposes:
+
+- `bot_id`, `event_id`, `existing_source`, `recovered_source`, `incoming_source`;
+- `existing_fingerprint`, `incoming_fingerprint`, `retained_stage`, `disposition`;
+- `differences` (JSON pointers and existing/incoming `PayloadType`s) and
+  `differences_truncated`.
+
+`IngressSource` distinguishes Webhook, Gateway, Polling and Recovery. Old stored
+records have unknown original provenance; reports say Recovery with no
+`recovered_source`, rather than inventing a transport. The original source is
+retained in new `IngressRecord::source: Option<IngressSource>` values.
+
+Reports contain no scalar values, source excerpts or arbitrary object keys.
+Unknown keys are rendered as `*`; array indices are retained. Evidence is bounded
+to 128 schema nodes and 16 levels per claim, with at most 32 reported differences.
+A truncated comparison explicitly says so; it never implies equality. The claim
+ledger retains bounded hashes/schema evidence rather than a second raw payload.
+
+`EventIngress::conflicts()` returns bounded reports, including resolved ones.
+`IngressStatus::{conflicts, pending_conflicts, conflict_reports_dropped}` exposes
+cumulative conflict count, currently fenced claims and retired diagnostic count.
+`IngressConfig::max_conflict_reports` defaults to 32 (1–1024); unresolved reports
+are not evicted. Exhaustion stops intake with an explicit error. Claims remain
+subject to their existing independent capacity bound.
+
+### Default and opt-in disposition
+
+The default `IngressConflictPolicy::Stop` rejects contradictory payloads and
+halts intake. Fast-path webhook conflicts now also signal this failure to the
+pipeline; older versions returned only the HTTP admission error on that path.
+A webhook error retains the original receipt in `Admission::receipt`. No policy
+runs a replacement handler, modifies the authenticated context, changes a
+completed receipt to failed, or marks an uncertain effect completed.
+
+For an already Completed claim, applications can explicitly configure:
+
+```rust,no_run
+use rappin::{Bot, IngressConfig, IngressConflictPolicy};
+use std::time::Duration;
+let mut config = IngressConfig::default();
+config.conflict_policy = IngressConflictPolicy::RetainCompletedAndPoll;
+config.conflict_recovery_timeout = Duration::from_secs(60);
+config.max_conflict_reports = 32;
+let bot = Bot::builder("read-token-from-your-private-configuration")
+    .shared_ingress(config)
+    .build();
+```
+
+A conflicting webhook/gateway delivery still receives an explicit conflict error
+and is recorded as `AwaitingPolling`. The original Completed receipt stays intact;
+no event effects are repeated. The checkpoint is fenced before that claim. The
+poll reader revisits the unresolved range, waiting one second between readbacks
+when necessary, until polling supplies the original canonical payload. That
+read is deduplicated against the existing completion, the disposition becomes
+`PollingConfirmed`, and ordinary ordered checkpoint persistence can proceed.
+If polling already established that exact payload, the completed claim can retain
+that proof without another read. Contradictory polling payloads always stop.
+
+An empty poll or a higher `last` does not prove payload equivalence. The polling
+watermark can advance while the committed cursor remains fenced. Readback never
+forces a cursor forward and never invokes a completed handler. The default
+recovery deadline is 60 seconds (greater than zero through 300 seconds); expiry
+records `TimedOut` and stops intake. Readbacks are cancellable; graceful stop
+drains accepted work, and in-flight persistence remains bounded by its configured
+timeout. Neither the process nor a handler is restarted or retried.
+Queued/Started/Failed/uncertain claims cannot use this completed-only policy.
+
+### Durable conflict storage
+
+Existing `IngressStore` implementations continue compiling. The additive hook is:
+
+```rust,ignore
+async fn record_conflict(&self, conflict: IngressConflict)
+    -> Result<AdmissionDurability>;
+```
+
+Its default returns Volatile and promises no storage. A durable ingress using
+completed-conflict recovery requires an implementation returning Durable **after**
+atomic persistence. It must load unresolved reports through the new
+`IngressRecovery::conflicts` field (Serde defaults to empty for legacy snapshots).
+Use bot/event ID, incoming source and the two fingerprints to identify a conflict;
+persist disposition updates atomically. Return consistent receipt/checkpoint/
+conflict snapshots. Resolved reports may be pruned once their checkpoint is durable.
+
+Conflict records are separate from `IngressRecord`; recording or resolving a
+conflict must preserve the original event, completion and mutation receipts.
+Persistence failure retains both the conflict and storage error under
+`FailureHandling`. An interrupted evidence write retains a failure barrier.
+A failed checkpoint retains completion/confirmation evidence for the next run.
+No failed store operation authorizes another handler or API mutation.
+
+On restart, the explicit recovery policy can reopen a stored non-polling conflict
+only when its fingerprint matches the retained Completed receipt. A matching
+polling payload is still required. Unresolved contradictory polling records,
+missing receipts, conflicting stored identities and uncertain effects remain
+blocked. Volatile mode provides no cross-process guarantee.
+
+### Generic receiver example
+
+The existing loopback receiver prints only bounded conflict reports on shutdown
+and returns structured conflict metadata without raw payloads. Run the default
+strict policy with the command above, or explicitly enable completed recovery:
+
+```sh
+cargo run --features webhook-middleware --example shared_webhook_polling -- \
+  --retain-completed-and-poll
+```
+
+It still advertises volatile admission. Supply an application-owned durable store
+with the hook/load contract above for persistent recovery. The core APIs require
+no optional feature; the Axum receiver uses `webhook-middleware`, gateway delivery
+uses `gateway`, and worker handlers use `hot-reload`. Worker protocols remain
+unchanged. Storage engines, hosting and application reconciliation decisions
+remain consumer-owned.
+
+See [the event contract reproduction](event-contract-conflicts.md) for the exact
+upstream guarantees needed when transports disagree. A missing live competing
+payload cannot be reconstructed from a legacy fingerprint-only error.

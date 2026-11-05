@@ -64,6 +64,10 @@ impl serde::Serialize for RemoteError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum YappinError {
+    #[error("conflicting event payload for event {event_id}", event_id = .conflict.event_id)]
+    IngressConflict {
+        conflict: Box<crate::IngressConflict>,
+    },
     /// Retains consumer metadata around an incomplete checked invocation without
     /// changing the original structured cause or enabling automatic replies.
     #[error("{source}")]
@@ -175,6 +179,27 @@ pub enum YappinError {
 }
 
 impl YappinError {
+    /// Recover bounded ingress diagnostics from native, remote, or pipeline errors.
+    pub fn ingress_conflict(&self) -> Option<crate::IngressConflict> {
+        fn find(value: &serde_json::Value, remaining: usize) -> Option<crate::IngressConflict> {
+            if remaining == 0 {
+                return None;
+            }
+            if let Some(value) = value.get("conflict") {
+                if let Ok(report) = serde_json::from_value::<crate::IngressConflict>(value.clone())
+                {
+                    return Some(report);
+                }
+            }
+            for key in ["source", "handling_error", "report", "intake_error"] {
+                if let Some(found) = value.get(key).and_then(|v| find(v, remaining - 1)) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        find(&self.to_json(), 16)
+    }
     pub fn availability_failure(&self) -> Option<crate::AvailabilityFailure> {
         match self {
             Self::IdentifiedInvocation { source, .. } => source.availability_failure(),
@@ -292,6 +317,9 @@ impl YappinError {
     /// Stable JSON representation for agents. Transport URLs are intentionally omitted.
     pub fn to_json(&self) -> serde_json::Value {
         match self {
+            Self::IngressConflict { conflict } => {
+                return serde_json::json!({"kind":"ingress_conflict","field":"ingress.payload","message":self.to_string(),"conflict":conflict,"outcome":"incomplete","retry_safety":"do_not_replay_workflow"});
+            }
             Self::IdentifiedInvocation {
                 operation_id,
                 source,

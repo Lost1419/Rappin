@@ -48,7 +48,7 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.24"
+rappin-rs = "0.1.25"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -121,7 +121,9 @@ cancellable recovery for transient startup and intake read failures.
 Use [shared ingress](docs/shared-ingress.md) to combine verified webhooks with
 polling recovery and optional gateway delivery. It deduplicates before event
 effects and exposes admission receipts; durable restart recovery uses a
-consumer-owned `IngressStore`.
+consumer-owned `IngressStore`. Bounded conflict reports identify competing sources
+and schema differences; optional recovery retains completed receipts while waiting
+for matching polling evidence.
 
 [Message gates and fallible listeners](docs/message-policy.md) support shared
 access policy before command dispatch and natural-language handlers. For composed

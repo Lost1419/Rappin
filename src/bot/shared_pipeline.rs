@@ -137,6 +137,7 @@ impl Bot {
                             crate::AvailabilityPhase::Intake,
                         )
                     });
+                    after = intake.recovery_after(after);
                     let response = loop {
                         let read =
                             bot.client()
@@ -186,27 +187,20 @@ impl Bot {
                             ));
                         }
                         let mut events = vec![];
-                        // Do not deduplicate payloads here: every duplicate is compared
-                        // against its shared claim before any effects.
-                        let mut unique = std::collections::BTreeMap::<u64, crate::Event>::new();
-                        for event in response.events {
-                            if let Some(prior) = unique.get(&event.id) {
-                                if prior != &event {
-                                    return Err(YappinError::validation(
-                                        "ingress.payload",
-                                        "conflicting payloads within polling batch",
-                                    ));
-                                }
-                            } else {
-                                unique.insert(event.id, event);
-                            }
-                        }
-                        for (_, event) in unique {
-                            events.push(intake.claim(event).await?.ok_or_else(|| {
-                                YappinError::Config(
+                        // Compare same-batch duplicates canonically before claiming
+                        // any event, so a contradiction precedes all intake effects.
+                        let unique = intake.polling_batch(response.events).await?;
+                        for event in unique {
+                            events.push(
+                                intake
+                                    .claim(event, super::IngressSource::Polling)
+                                    .await?
+                                    .ok_or_else(|| {
+                                        YappinError::Config(
                                     "shared ingress claim capacity exhausted during polling".into(),
                                 )
-                            })?);
+                                    })?,
+                            );
                         }
                         after = watermark;
                         intake.watermark(watermark);
@@ -239,6 +233,11 @@ impl Bot {
                     if failed {
                         break;
                     }
+                    if intake.recovery_after(after) < after {
+                        // Re-read only the authoritative unresolved range, bounded
+                        // by the conflict deadline. Never re-execute completed work.
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
                 }
             },
             supervised.clone(),
@@ -265,9 +264,10 @@ impl Bot {
                             for event in batch.events {
                                 if tx.capacity() == 0 { gateway.backpressure(); }
                                 let Ok(permit) = tx.reserve().await else { return; };
-                                let result = input.claim(event).await
+                                let result = input.claim(event, super::IngressSource::Gateway).await
                                     .and_then(|claim| claim.ok_or_else(|| YappinError::Config("shared ingress claim capacity exhausted during gateway delivery".into())))
                                     .map(|event| Batch { watermark: None, events: vec![event] });
+                                if result.as_ref().err().is_some_and(|error|input.recoverable_conflict(error)) {drop(permit);continue;}
                                 let failed = result.is_err();
                                 let owned: Vec<_> = result.as_ref().ok()
                                     .map(|batch| batch.events.iter().filter(|event| event.owner).map(|event| event.event.id).collect())

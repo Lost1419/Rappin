@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.25 — 2026-11-05
+
+- Return structured shared-ingress payload conflicts with transport/recovery sources, event IDs, canonical SHA-256 fingerprints and bounded schema differences. Keep payload values and arbitrary object keys out of diagnostics; compare JSON objects independently of key order, including when consumers enable serde_json `preserve_order`.
+- Add opt-in completed-receipt recovery that waits for the original payload through polling, with a fenced checkpoint, bounded deadline and readback interval. Preserve completed effects and reject contradictory polling payloads; an advanced watermark alone cannot resolve a conflict.
+- Add durable conflict records and optional receipt provenance to the consumer storage contract. Preserve source compatibility for existing stores; durable recovery requires explicit conflict persistence/load support. Keep original receipts and both conflict/storage causes when persistence fails.
+- Halt intake consistently on fast-path webhook conflicts under the default Stop policy; previously that path only returned an admission error. Existing non-conflicting delivery and worker protocols remain unchanged. Do not merge missing envelope timestamps with payload timestamps without a platform equivalence contract.
+
 ## 0.1.24 — 2026-11-05
 
 - Add bounded consumer operation IDs to checked command preparation and execution. Keep authenticated message identity unchanged; expose the ID to native checks/handlers and retain it in prepared plans, outcomes and structured incomplete-invocation errors.

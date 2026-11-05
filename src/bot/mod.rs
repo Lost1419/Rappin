@@ -6,8 +6,10 @@ mod ingress;
 mod invocation;
 mod shared_pipeline;
 pub use ingress::{
-    Admission, AdmissionDurability, AdmissionStatus, EventIngress, EventReceipt, IngressConfig,
-    IngressRecord, IngressRecovery, IngressStatus, IngressStore, ReceiptStage, ReceiptStatus,
+    Admission, AdmissionDurability, AdmissionStatus, ConflictDisposition, EventIngress,
+    EventReceipt, IngressConfig, IngressConflict, IngressConflictPolicy, IngressRecord,
+    IngressRecovery, IngressSource, IngressStatus, IngressStore, PayloadDifference, PayloadType,
+    ReceiptStage, ReceiptStatus,
 };
 mod message;
 pub use invocation::{

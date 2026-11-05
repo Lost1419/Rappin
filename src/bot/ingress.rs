@@ -1,10 +1,16 @@
 //! Opt-in shared admission and durable receipt contract.
+mod conflicts;
 use super::{BotHandle, EventProcessingFailure};
 use crate::{Event, RemoteError, Result, YappinError};
+use conflicts::{hex, Evidence};
+pub use conflicts::{
+    ConflictDisposition, IngressConflict, IngressConflictPolicy, IngressSource, PayloadDifference,
+    PayloadType,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -17,6 +23,9 @@ pub struct IngressConfig {
     pub max_claims: usize,
     pub max_event_bytes: usize,
     pub persistence_timeout: Duration,
+    pub conflict_policy: IngressConflictPolicy,
+    pub conflict_recovery_timeout: Duration,
+    pub max_conflict_reports: usize,
 }
 impl Default for IngressConfig {
     fn default() -> Self {
@@ -24,6 +33,9 @@ impl Default for IngressConfig {
             max_claims: 4096,
             max_event_bytes: 1024 * 1024,
             persistence_timeout: Duration::from_secs(2),
+            conflict_policy: IngressConflictPolicy::Stop,
+            conflict_recovery_timeout: Duration::from_secs(60),
+            max_conflict_reports: 32,
         }
     }
 }
@@ -112,17 +124,28 @@ pub struct IngressRecord {
     pub bot_id: Uuid,
     pub event: Event,
     pub status: ReceiptStatus,
+    #[serde(default)]
+    pub source: Option<IngressSource>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct IngressRecovery {
     pub polling_checkpoint: Option<u64>,
     pub records: Vec<IngressRecord>,
+    #[serde(default)]
+    pub conflicts: Vec<IngressConflict>,
 }
 #[async_trait::async_trait]
 pub trait IngressStore: Send + Sync + 'static {
     async fn load(&self, bot_id: Uuid) -> Result<IngressRecovery>;
     async fn record(&self, record: IngressRecord) -> Result<()>;
+    /// Persist a separate bounded, content-free conflict record. Return Durable
+    /// only after an atomic durable write. Recovery must load unresolved reports.
+    /// Existing stores retain compatibility; durable conflict recovery requires
+    /// overriding this hook rather than claiming the default is persistent.
+    async fn record_conflict(&self, _conflict: IngressConflict) -> Result<AdmissionDurability> {
+        Ok(AdmissionDurability::Volatile)
+    }
     /// Atomically persist an authoritative polling checkpoint. Pruning records
     /// at/below it is permitted only once this checkpoint is durable.
     async fn checkpoint(&self, bot_id: Uuid, cursor: u64) -> Result<()>;
@@ -140,9 +163,17 @@ pub struct IngressStatus {
     pub committed_cursor: u64,
     pub completed_uncommitted: usize,
     pub unresolved: usize,
+    pub pending_conflicts: usize,
+    pub conflict_reports_dropped: u64,
 }
 struct Claim {
     fingerprint: [u8; 32],
+    evidence: Evidence,
+    source: IngressSource,
+    recovered_source: Option<IngressSource>,
+    polling_verified: bool,
+    conflict: bool,
+    pending_since: Option<tokio::time::Instant>,
     status: watch::Sender<ReceiptStatus>,
 }
 struct State {
@@ -154,6 +185,7 @@ struct State {
     runtime: Option<(Arc<crate::Client>, Option<Duration>)>,
     status: IngressStatus,
     fatal: Option<RemoteError>,
+    conflicts: VecDeque<IngressConflict>,
 }
 struct Inner {
     config: IngressConfig,
@@ -190,6 +222,7 @@ impl EventIngress {
                 runtime: None,
                 status: Default::default(),
                 fatal: None,
+                conflicts: VecDeque::new(),
             }),
             changed: Notify::new(),
             checkpoint_fence: tokio::sync::Mutex::new(()),
@@ -202,6 +235,9 @@ impl EventIngress {
             || c.max_event_bytes > 16 * 1024 * 1024
             || c.persistence_timeout.is_zero()
             || c.persistence_timeout > Duration::from_secs(120)
+            || c.conflict_recovery_timeout.is_zero()
+            || c.conflict_recovery_timeout > Duration::from_secs(300)
+            || !(1..=1024).contains(&c.max_conflict_reports)
         {
             return Err(YappinError::validation(
                 "ingress.config",
@@ -223,6 +259,7 @@ impl EventIngress {
                 r.stage == ReceiptStage::Completed && !r.committed
             })
             .count();
+        result.pending_conflicts = s.claims.values().filter(|c| c.conflict).count();
         result.unresolved = s
             .claims
             .values()
@@ -264,7 +301,7 @@ impl EventIngress {
             s.sender.as_ref().unwrap().clone()
         };
         // Duplicates remain observable even when admission capacity is full.
-        match self.existing(&verified.event) {
+        match self.existing(&verified.event, IngressSource::Webhook).await {
             Ok(Some(receipt)) => {
                 return Admission {
                     status: AdmissionStatus::Duplicate,
@@ -275,7 +312,7 @@ impl EventIngress {
             Err(error) => {
                 return Admission {
                     status: AdmissionStatus::Error,
-                    receipt: None,
+                    receipt: self.receipt(verified.event.id),
                     error: Some(error),
                 }
             }
@@ -300,7 +337,7 @@ impl EventIngress {
                 .config
                 .persistence_timeout
                 .min(Duration::from_secs(2)),
-            super::failure::catch(self.claim(verified.event)),
+            super::failure::catch(self.claim(verified.event, IngressSource::Webhook)),
         )
         .await
         .unwrap_or_else(|_| {
@@ -338,7 +375,9 @@ impl EventIngress {
             }
             Ok(None) => Admission::simple(AdmissionStatus::Full),
             Err(error) => {
-                permit.send(Err(error.to_remote().into()));
+                if !self.recoverable_conflict(&error) {
+                    permit.send(Err(error.to_remote().into()));
+                }
                 Admission {
                     status: AdmissionStatus::Error,
                     receipt: self.receipt(event_id),
@@ -373,11 +412,298 @@ impl EventIngress {
     pub(super) async fn failure(&self) -> YappinError {
         loop {
             let changed = self.0.changed.notified();
-            if let Some(error) = self.0.state.lock().unwrap().fatal.take() {
-                return error.into();
+            let deadline = {
+                let mut state = self.0.state.lock().unwrap();
+                if let Some(error) = state.fatal.take() {
+                    return error.into();
+                }
+                state
+                    .claims
+                    .values()
+                    .filter_map(|c| c.pending_since)
+                    .min()
+                    .map(|start| start + self.0.config.conflict_recovery_timeout)
+            };
+            if let Some(deadline) = deadline {
+                tokio::select! {
+                    _=changed=>(),
+                    _=tokio::time::sleep_until(deadline)=>{
+                        let _fence = self.0.checkpoint_fence.lock().await;
+                        let expired = {
+                            let mut state = self.0.state.lock().unwrap();
+                            let id=state.claims.iter().find(|(_,c)|c.pending_since.is_some_and(|start|start+self.0.config.conflict_recovery_timeout<=tokio::time::Instant::now())).map(|(id,_)|*id);
+                            id.and_then(|id| {
+                                state.claims.get_mut(&id).unwrap().pending_since=None;
+                                state.conflicts.iter_mut().find(|r|r.event_id==id&&r.disposition==ConflictDisposition::AwaitingPolling).map(|r|{r.disposition=ConflictDisposition::TimedOut;r.clone()})
+                            })
+                        };
+                        if let Some(report)=expired {
+                            let mut guard=ConflictGuard{ingress:self.clone(),armed:true,conflict:Some(report.clone())};
+                            if let Err(error)=self.persist_conflict(&report).await {let error=YappinError::FailureHandling{source:Box::new(report.to_error()),handling_error:Box::new(error)};self.fatal(error.to_remote());guard.armed=false;return error;}
+                            guard.armed=false;return report.to_error();
+                        }
+                    }
+                }
+            } else {
+                changed.await;
             }
-            changed.await;
         }
+    }
+    /// Bounded content-free reports, including resolved conflicts. No event values
+    /// or arbitrary object keys are retained in these diagnostics.
+    pub fn conflicts(&self) -> Vec<IngressConflict> {
+        self.0
+            .state
+            .lock()
+            .unwrap()
+            .conflicts
+            .iter()
+            .cloned()
+            .collect()
+    }
+    pub(super) fn recoverable_conflict(&self, error: &YappinError) -> bool {
+        matches!(error, YappinError::IngressConflict{conflict} if matches!(conflict.disposition,ConflictDisposition::AwaitingPolling|ConflictDisposition::PollingConfirmed))
+    }
+    async fn persist_conflict(&self, report: &IngressConflict) -> Result<()> {
+        if let Some(store) = &self.0.store {
+            let durability = self
+                .persist("conflict", store.record_conflict(report.clone()))
+                .await?;
+            if report.disposition != ConflictDisposition::Stop
+                && self.0.config.conflict_policy == IngressConflictPolicy::RetainCompletedAndPoll
+                && durability != AdmissionDurability::Durable
+            {
+                return Err(YappinError::Config("durable conflict recovery requires IngressStore::record_conflict and load support".into()));
+            }
+        }
+        Ok(())
+    }
+    fn remember(&self, state: &mut State, report: IngressConflict) -> Result<()> {
+        if let Some(prior) = state.conflicts.iter_mut().find(|r| {
+            r.event_id == report.event_id
+                && r.incoming_source == report.incoming_source
+                && r.incoming_fingerprint == report.incoming_fingerprint
+                && r.existing_fingerprint == report.existing_fingerprint
+        }) {
+            *prior = report;
+            return Ok(());
+        }
+        if state.conflicts.len() == self.0.config.max_conflict_reports {
+            let retired = state
+                .conflicts
+                .iter()
+                .position(|r| r.disposition != ConflictDisposition::AwaitingPolling);
+            if let Some(index) = retired {
+                state.conflicts.remove(index);
+                state.status.conflict_reports_dropped =
+                    state.status.conflict_reports_dropped.saturating_add(1);
+            } else {
+                return Err(YappinError::validation(
+                    "ingress.conflicts",
+                    "unresolved conflict diagnostic capacity exhausted",
+                ));
+            }
+        }
+        state.conflicts.push_back(report);
+        Ok(())
+    }
+    async fn conflict(&self, event: &Event, source: IngressSource, hash: [u8; 32]) -> Result<()> {
+        let incoming = Evidence::new(event)?;
+        let report = {
+            let mut state = self.0.state.lock().unwrap();
+            let bot_id = state.bot_id.expect("authenticated ingress");
+            let claim = state.claims.get_mut(&event.id).expect("conflicting claim");
+            let stage = claim.status.borrow().stage;
+            let recover = self.0.config.conflict_policy
+                == IngressConflictPolicy::RetainCompletedAndPoll
+                && stage == ReceiptStage::Completed
+                && !(claim.conflict && claim.pending_since.is_none())
+                && matches!(source, IngressSource::Webhook | IngressSource::Gateway);
+            let disposition = if recover && claim.polling_verified {
+                ConflictDisposition::PollingConfirmed
+            } else if recover {
+                ConflictDisposition::AwaitingPolling
+            } else {
+                ConflictDisposition::Stop
+            };
+            claim.conflict = true;
+            if disposition == ConflictDisposition::AwaitingPolling {
+                claim
+                    .pending_since
+                    .get_or_insert_with(tokio::time::Instant::now);
+            }
+            let (differences, differences_truncated) = claim.evidence.differences(&incoming);
+            let report = IngressConflict {
+                bot_id,
+                event_id: event.id,
+                existing_source: claim.source,
+                recovered_source: claim.recovered_source,
+                incoming_source: source,
+                existing_fingerprint: hex(&claim.fingerprint),
+                incoming_fingerprint: hex(&hash),
+                retained_stage: Some(stage),
+                disposition,
+                differences,
+                differences_truncated,
+            };
+            state.status.conflicts = state.status.conflicts.saturating_add(1);
+            if let Err(error) = self.remember(&mut state, report.clone()) {
+                let error = YappinError::FailureHandling {
+                    source: Box::new(report.to_error()),
+                    handling_error: Box::new(error),
+                };
+                state.fatal.get_or_insert_with(|| error.to_remote());
+                self.0.changed.notify_one();
+                return Err(error);
+            }
+            report
+        };
+        // A cancelled HTTP admission must not make an unpersisted conflict safe.
+        let mut guard = ConflictGuard {
+            ingress: self.clone(),
+            armed: true,
+            conflict: Some(report.clone()),
+        };
+        if let Err(error) = self.persist_conflict(&report).await {
+            let error = YappinError::FailureHandling {
+                source: Box::new(report.to_error()),
+                handling_error: Box::new(error),
+            };
+            self.fatal(error.to_remote());
+            guard.armed = false;
+            return Err(error);
+        }
+        if report.disposition == ConflictDisposition::Stop {
+            self.fatal(report.to_error().to_remote());
+        } else if report.disposition == ConflictDisposition::PollingConfirmed {
+            let mut state = self.0.state.lock().unwrap();
+            let claim = state.claims.get_mut(&event.id).unwrap();
+            claim.conflict = false;
+        }
+        guard.armed = false;
+        self.0.changed.notify_one();
+        Err(report.to_error())
+    }
+    fn fatal(&self, error: RemoteError) {
+        let mut state = self.0.state.lock().unwrap();
+        state.fatal.get_or_insert(error);
+        drop(state);
+        self.0.changed.notify_one();
+    }
+    async fn confirm_polling(&self, id: u64) -> Result<()> {
+        let reports = {
+            let state = self.0.state.lock().unwrap();
+            if state
+                .claims
+                .get(&id)
+                .is_some_and(|c| c.conflict && c.pending_since.is_none())
+            {
+                if let Some(report) = state.conflicts.iter().find(|r| {
+                    r.event_id == id
+                        && matches!(
+                            r.disposition,
+                            ConflictDisposition::Stop | ConflictDisposition::TimedOut
+                        )
+                }) {
+                    return Err(report.to_error());
+                }
+            }
+            state
+                .conflicts
+                .iter()
+                .filter(|r| {
+                    r.event_id == id && r.disposition == ConflictDisposition::AwaitingPolling
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let mut guard = ConflictGuard {
+            ingress: self.clone(),
+            armed: true,
+            conflict: reports.first().cloned(),
+        };
+        for mut report in reports.iter().cloned() {
+            let pending = report.clone();
+            report.disposition = ConflictDisposition::PollingConfirmed;
+            if let Err(error) = self.persist_conflict(&report).await {
+                let error = YappinError::FailureHandling {
+                    source: Box::new(pending.to_error()),
+                    handling_error: Box::new(error),
+                };
+                self.fatal(error.to_remote());
+                guard.armed = false;
+                return Err(error);
+            }
+            let mut state = self.0.state.lock().unwrap();
+            self.remember(&mut state, report)?;
+        }
+        let mut state = self.0.state.lock().unwrap();
+        let claim = state.claims.get_mut(&id).unwrap();
+        claim.polling_verified = true;
+        if !reports.is_empty() {
+            claim.pending_since = None;
+            claim.conflict = false;
+        }
+        guard.armed = false;
+        drop(state);
+        self.0.changed.notify_one();
+        Ok(())
+    }
+    pub(super) async fn polling_batch(&self, events: Vec<Event>) -> Result<Vec<Event>> {
+        let mut unique = BTreeMap::<u64, (Event, [u8; 32])>::new();
+        for event in events {
+            let hash = self.fingerprint(&event)?;
+            if let Some((prior, prior_hash)) = unique.get(&event.id) {
+                if prior_hash != &hash {
+                    let _fence = self.0.checkpoint_fence.lock().await;
+                    let (differences, differences_truncated) =
+                        Evidence::new(prior)?.differences(&Evidence::new(&event)?);
+                    let report = {
+                        let mut state = self.0.state.lock().unwrap();
+                        let stage = state.claims.get_mut(&event.id).map(|claim| {
+                            claim.conflict = true;
+                            claim.pending_since = None;
+                            claim.status.borrow().stage
+                        });
+                        let report = IngressConflict {
+                            bot_id: state.bot_id.expect("authenticated ingress"),
+                            event_id: event.id,
+                            existing_source: IngressSource::Polling,
+                            recovered_source: None,
+                            incoming_source: IngressSource::Polling,
+                            existing_fingerprint: hex(prior_hash),
+                            incoming_fingerprint: hex(&hash),
+                            retained_stage: stage,
+                            disposition: ConflictDisposition::Stop,
+                            differences,
+                            differences_truncated,
+                        };
+                        state.status.conflicts = state.status.conflicts.saturating_add(1);
+                        self.remember(&mut state, report.clone())?;
+                        report
+                    };
+                    let mut guard = ConflictGuard {
+                        ingress: self.clone(),
+                        armed: true,
+                        conflict: Some(report.clone()),
+                    };
+                    if let Err(error) = self.persist_conflict(&report).await {
+                        let error = YappinError::FailureHandling {
+                            source: Box::new(report.to_error()),
+                            handling_error: Box::new(error),
+                        };
+                        self.fatal(error.to_remote());
+                        guard.armed = false;
+                        return Err(error);
+                    }
+                    guard.armed = false;
+                    return Err(report.to_error());
+                }
+            } else {
+                unique.insert(event.id, (event, hash));
+            }
+        }
+        Ok(unique.into_values().map(|(event, _)| event).collect())
     }
     fn full(&self) {
         let mut s = self.0.state.lock().unwrap();
@@ -390,7 +716,9 @@ impl EventIngress {
                 "must be nonzero",
             ));
         }
-        let bytes = serde_json::to_vec(event)?;
+        let mut canonical = serde_json::to_value(event)?;
+        conflicts::canonicalize(&mut canonical);
+        let bytes = serde_json::to_vec(&canonical)?;
         if bytes.len() > self.0.config.max_event_bytes {
             return Err(YappinError::validation(
                 "ingress.event",
@@ -399,17 +727,35 @@ impl EventIngress {
         }
         Ok(Sha256::digest(bytes).into())
     }
-    fn existing(&self, event: &Event) -> Result<Option<EventReceipt>> {
+    async fn existing(&self, event: &Event, source: IngressSource) -> Result<Option<EventReceipt>> {
         let hash = self.fingerprint(event)?;
+        let _fence = self.0.checkpoint_fence.lock().await;
+        self.existing_locked(event, source, hash).await
+    }
+    async fn existing_locked(
+        &self,
+        event: &Event,
+        source: IngressSource,
+        hash: [u8; 32],
+    ) -> Result<Option<EventReceipt>> {
+        let mismatch = self
+            .0
+            .state
+            .lock()
+            .unwrap()
+            .claims
+            .get(&event.id)
+            .is_some_and(|claim| claim.fingerprint != hash);
+        if mismatch {
+            self.conflict(event, source, hash).await?;
+        }
+        if source == IngressSource::Polling
+            && self.0.state.lock().unwrap().claims.contains_key(&event.id)
+        {
+            self.confirm_polling(event.id).await?;
+        }
         let mut s = self.0.state.lock().unwrap();
         if let Some(claim) = s.claims.get(&event.id) {
-            if claim.fingerprint != hash {
-                s.status.conflicts = s.status.conflicts.saturating_add(1);
-                return Err(YappinError::validation(
-                    "ingress.payload",
-                    "conflicting payload for the same bot/event ID",
-                ));
-            }
             let receipt = EventReceipt(claim.status.subscribe());
             s.status.duplicates = s.status.duplicates.saturating_add(1);
             return Ok(Some(receipt));
@@ -435,67 +781,47 @@ impl EventIngress {
         }
         Ok(None)
     }
-    pub(super) async fn claim(&self, event: Event) -> Result<Option<ClaimedEvent>> {
+    pub(super) async fn claim(
+        &self,
+        event: Event,
+        source: IngressSource,
+    ) -> Result<Option<ClaimedEvent>> {
         let hash = self.fingerprint(&event)?;
         let fence = self.0.checkpoint_fence.lock().await;
-        let (owner, mut receipt) = {
+        let existing = self.existing_locked(&event, source, hash).await?;
+        let (owner, mut receipt) = if let Some(receipt) = existing {
+            (false, receipt)
+        } else {
+            let evidence = Evidence::new(&event)?;
             let mut s = self.0.state.lock().unwrap();
-            if let Some(claim) = s.claims.get(&event.id) {
-                if claim.fingerprint != hash {
-                    s.status.conflicts = s.status.conflicts.saturating_add(1);
-                    return Err(YappinError::validation(
-                        "ingress.payload",
-                        "conflicting concurrent event payload",
-                    ));
-                }
-                let receipt = EventReceipt(claim.status.subscribe());
-                s.status.duplicates = s.status.duplicates.saturating_add(1);
-                (false, receipt)
-            } else if event.id <= s.status.committed_cursor {
-                s.status.duplicates = s.status.duplicates.saturating_add(1);
-                (
-                    false,
-                    EventReceipt(
-                        watch::channel(ReceiptStatus {
-                            event_id: event.id,
-                            stage: ReceiptStage::Completed,
-                            durability: if self.0.store.is_some() {
-                                AdmissionDurability::Durable
-                            } else {
-                                AdmissionDurability::Volatile
-                            },
-                            committed: true,
-                            payload_retained: false,
-                            queued_for_execution: true,
-                            error: None,
-                        })
-                        .1,
-                    ),
-                )
-            } else {
-                if s.claims.len() >= self.0.config.max_claims {
-                    s.status.full = s.status.full.saturating_add(1);
-                    return Ok(None);
-                }
-                let status = ReceiptStatus {
-                    event_id: event.id,
-                    stage: ReceiptStage::Admitting,
-                    durability: AdmissionDurability::Volatile,
-                    committed: false,
-                    payload_retained: true,
-                    queued_for_execution: false,
-                    error: None,
-                };
-                let (tx, rx) = watch::channel(status);
-                s.claims.insert(
-                    event.id,
-                    Claim {
-                        fingerprint: hash,
-                        status: tx,
-                    },
-                );
-                (true, EventReceipt(rx))
+            if s.claims.len() >= self.0.config.max_claims {
+                s.status.full = s.status.full.saturating_add(1);
+                return Ok(None);
             }
+            let status = ReceiptStatus {
+                event_id: event.id,
+                stage: ReceiptStage::Admitting,
+                durability: AdmissionDurability::Volatile,
+                committed: false,
+                payload_retained: true,
+                queued_for_execution: false,
+                error: None,
+            };
+            let (tx, rx) = watch::channel(status);
+            s.claims.insert(
+                event.id,
+                Claim {
+                    fingerprint: hash,
+                    evidence,
+                    source,
+                    recovered_source: None,
+                    polling_verified: source == IngressSource::Polling,
+                    conflict: false,
+                    pending_since: None,
+                    status: tx,
+                },
+            );
+            (true, EventReceipt(rx))
         };
         drop(fence);
         if !owner {
@@ -523,7 +849,9 @@ impl EventIngress {
         };
         self.transition(&event, ReceiptStage::Queued, None).await?;
         let preparation = async {
+            self.ensure_claim_active(event.id)?;
             self.transition(&event, ReceiptStage::Started, None).await?;
+            self.ensure_claim_active(event.id)?;
             self.prepare_owner(&event).await
         }
         .await;
@@ -546,6 +874,20 @@ impl EventIngress {
             receipt,
             prepared,
         }))
+    }
+    fn ensure_claim_active(&self, id: u64) -> Result<()> {
+        let state = self.0.state.lock().unwrap();
+        if state.claims.get(&id).is_some_and(|c| c.conflict) {
+            if let Some(report) = state.conflicts.iter().find(|r| r.event_id == id) {
+                return Err(report.to_error());
+            }
+        }
+        if state.stopped {
+            return Err(YappinError::Config(
+                "ingress stopped before event effects".into(),
+            ));
+        }
+        Ok(())
     }
     async fn persist<T>(
         &self,
@@ -576,7 +918,7 @@ impl EventIngress {
         stage: ReceiptStage,
         error: Option<RemoteError>,
     ) -> Result<()> {
-        let (bot_id, mut status) = {
+        let (bot_id, mut status, source) = {
             let s = self.0.state.lock().unwrap();
             let status = s
                 .claims
@@ -589,6 +931,13 @@ impl EventIngress {
                 s.bot_id
                     .ok_or_else(|| YappinError::Config("ingress identity unavailable".into()))?,
                 status,
+                s.claims.get(&event.id).and_then(|claim| {
+                    if claim.source == IngressSource::Recovery {
+                        claim.recovered_source
+                    } else {
+                        Some(claim.source)
+                    }
+                }),
             )
         };
         status.stage = stage;
@@ -601,6 +950,7 @@ impl EventIngress {
                     bot_id,
                     event: event.clone(),
                     status: status.clone(),
+                    source,
                 }),
             )
             .await?;
@@ -674,6 +1024,12 @@ impl EventIngress {
                 .await?;
             recovery.polling_checkpoint = Some(baseline);
         }
+        if recovery.conflicts.len() > self.0.config.max_conflict_reports {
+            return Err(YappinError::validation(
+                "ingress.recovery",
+                "stored conflict reports exceed configured bound",
+            ));
+        }
         if recovery.records.len() > self.0.config.max_claims {
             return Err(YappinError::validation(
                 "ingress.recovery",
@@ -716,6 +1072,25 @@ impl EventIngress {
             if owner {
                 status.stage = ReceiptStage::Queued;
             }
+            if self.0.state.lock().unwrap().claims.contains_key(&id) {
+                let _fence = self.0.checkpoint_fence.lock().await;
+                if self
+                    .0
+                    .state
+                    .lock()
+                    .unwrap()
+                    .claims
+                    .get(&id)
+                    .is_some_and(|c| c.fingerprint != hash)
+                {
+                    self.conflict(&record.event, IngressSource::Recovery, hash)
+                        .await?;
+                }
+                return Err(YappinError::validation(
+                    "ingress.recovery",
+                    "duplicate stored claim",
+                ));
+            }
             let (tx, rx) = watch::channel(status);
             let mut state = self.0.state.lock().unwrap();
             if state
@@ -724,6 +1099,12 @@ impl EventIngress {
                     id,
                     Claim {
                         fingerprint: hash,
+                        evidence: Evidence::new(&record.event)?,
+                        source: IngressSource::Recovery,
+                        recovered_source: record.source,
+                        polling_verified: false,
+                        conflict: false,
+                        pending_since: None,
                         status: tx,
                     },
                 )
@@ -744,6 +1125,45 @@ impl EventIngress {
             }
         }
         let mut state = self.0.state.lock().unwrap();
+        for mut conflict in recovery.conflicts {
+            if !conflict.validate() || conflict.bot_id != bot {
+                return Err(YappinError::validation(
+                    "ingress.recovery",
+                    "invalid stored conflict diagnostics",
+                ));
+            }
+            if conflict.disposition == ConflictDisposition::PollingConfirmed {
+                self.remember(&mut state, conflict)?;
+                continue;
+            }
+            let claim = state.claims.get_mut(&conflict.event_id).ok_or_else(|| {
+                YappinError::validation(
+                    "ingress.recovery",
+                    "conflict requires its retained receipt",
+                )
+            })?;
+            if hex(&claim.fingerprint) != conflict.existing_fingerprint
+                || claim.status.borrow().stage != ReceiptStage::Completed
+            {
+                return Err(YappinError::validation(
+                    "ingress.recovery",
+                    "conflict does not match a completed retained receipt",
+                ));
+            }
+            claim.conflict = true;
+            if self.0.config.conflict_policy == IngressConflictPolicy::RetainCompletedAndPoll
+                && matches!(
+                    conflict.incoming_source,
+                    IngressSource::Webhook | IngressSource::Gateway
+                )
+            {
+                claim.pending_since = Some(tokio::time::Instant::now());
+                conflict.disposition = ConflictDisposition::AwaitingPolling;
+            } else {
+                return Err(conflict.to_error());
+            }
+            self.remember(&mut state, conflict)?;
+        }
         state.recovery = pending;
         if let Some(cursor) = recovery.polling_checkpoint {
             state.status.committed_cursor = cursor;
@@ -831,6 +1251,15 @@ impl EventIngress {
         drop(s);
         self.0.changed.notify_waiters();
     }
+    pub(super) fn recovery_after(&self, after: u64) -> u64 {
+        let state = self.0.state.lock().unwrap();
+        state
+            .claims
+            .iter()
+            .find(|(_, c)| c.conflict)
+            .map_or(after, |(id, _)| after.min(id.saturating_sub(1)))
+            .max(state.status.committed_cursor)
+    }
     pub(super) fn watermark(&self, last: u64) {
         let mut s = self.0.state.lock().unwrap();
         s.status.polling_watermark = s.status.polling_watermark.max(last);
@@ -848,7 +1277,7 @@ impl EventIngress {
             let first = s
                 .claims
                 .range(..=candidate)
-                .find(|(_, c)| c.status.borrow().stage != ReceiptStage::Completed)
+                .find(|(_, c)| c.status.borrow().stage != ReceiptStage::Completed || c.conflict)
                 .map(|(id, _)| *id);
             (
                 first
@@ -909,6 +1338,9 @@ impl EventIngress {
     }
     pub(super) fn add_evidence(&self, report: &mut EventProcessingFailure) {
         let s = self.0.state.lock().unwrap();
+        if let Some(error) = &s.fatal {
+            report.intake_error.get_or_insert_with(|| error.clone());
+        }
         for (&id, claim) in &s.claims {
             let status = claim.status.borrow();
             match status.stage {
@@ -949,5 +1381,24 @@ impl Drop for ClaimGuard {
 impl BotHandle {
     pub fn ingress(&self) -> Option<EventIngress> {
         self.inner.ingress.clone()
+    }
+}
+
+struct ConflictGuard {
+    ingress: EventIngress,
+    armed: bool,
+    conflict: Option<IngressConflict>,
+}
+impl Drop for ConflictGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.ingress.fatal(
+                YappinError::HandlerInterrupted {
+                    reason: "conflict evidence persistence was interrupted; retained receipts require reconciliation".into(),
+                    source: self.conflict.as_ref().map(|report| Box::new(report.to_error())),
+                }
+                .to_remote(),
+            );
+        }
     }
 }
