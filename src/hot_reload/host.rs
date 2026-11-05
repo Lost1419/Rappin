@@ -368,6 +368,7 @@ impl Drop for DirectoryCleanup {
     }
 }
 struct Generation {
+    protocol: u32,
     manifest: Manifest,
     io: Mutex<Io>,
     directory: PathBuf,
@@ -455,16 +456,17 @@ impl Generation {
                     return Err(YappinError::HotReload { failure: Box::new(failure) });
                 }
             };
-            let manifest = match ready {
+            let (version, manifest) = match ready {
                 Wire::Ready {
                     protocol: version,
                     manifest,
                 } if (1..=protocol::VERSION).contains(&version)
-                    && (version >= 5 || !manifest.listeners.contains(&Listener::ServerMessage)) => manifest,
+                    && (version >= 5 || !manifest.listeners.contains(&Listener::ServerMessage)) => (version, manifest),
                 _ => return Err(error(Protocol, "candidate ready frame has an unsupported protocol", None, true, false, None)),
             };
             manifest.validate().map_err(|cause| error(Registration, "candidate manifest is invalid", Some(&cause), true, false, None))?;
             Ok(Arc::new(Self {
+                protocol: version,
                 manifest,
                 io: Mutex::new(Io {
                     child: Some(child),
@@ -491,6 +493,20 @@ impl Generation {
         event: CogEvent,
         client: &Client,
     ) -> Result<crate::MessageDisposition> {
+        self.invoke_message_identified(event, client, None).await
+    }
+    async fn invoke_message_identified(
+        &self,
+        event: CogEvent,
+        client: &Client,
+        operation_id: Option<crate::OperationId>,
+    ) -> Result<crate::MessageDisposition> {
+        if operation_id.is_some() && self.protocol < 8 {
+            return Err(YappinError::validation(
+                "invocation.operation_id",
+                "worker requires protocol v8 operation identity support",
+            ));
+        }
         let expects_disposition = matches!(&event, CogEvent::Message { .. })
             && self.manifest.listeners.contains(&Listener::ServerMessage);
         let completed = std::sync::atomic::AtomicBool::new(false);
@@ -507,6 +523,7 @@ impl Generation {
                 io.input.as_mut().ok_or_else(protocol::protocol_error)?,
                 &Wire::Invoke {
                     event: Box::new(event),
+                    operation_id,
                 },
             )
             .await?;
@@ -991,8 +1008,9 @@ impl ProcessCog {
                     let generation = generation.clone();
                     let command = name.clone();
                     async move {
+                        let operation_id = ctx.operation_id();
                         generation
-                            .invoke(
+                            .invoke_message_identified(
                                 CogEvent::Command {
                                     command,
                                     args: ctx.args,
@@ -1000,8 +1018,10 @@ impl ProcessCog {
                                     message: ctx.event,
                                 },
                                 &ctx.client,
+                                operation_id,
                             )
                             .await
+                            .map(|_| ())
                     }
                 })
             })
@@ -1116,6 +1136,7 @@ impl HotReload {
                 generation: generation.clone(),
             },
             false,
+            generation.protocol >= 8,
         )
         .await?;
         Ok(Self {
@@ -1185,6 +1206,7 @@ impl HotReload {
                 generation: generation.clone(),
             },
             true,
+            generation.protocol >= 8,
         )
         .await?;
         *self.inner.current.write().await = Some(generation);

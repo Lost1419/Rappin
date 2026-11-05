@@ -64,6 +64,14 @@ impl serde::Serialize for RemoteError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum YappinError {
+    /// Retains consumer metadata around an incomplete checked invocation without
+    /// changing the original structured cause or enabling automatic replies.
+    #[error("{source}")]
+    IdentifiedInvocation {
+        operation_id: crate::OperationId,
+        #[source]
+        source: Box<YappinError>,
+    },
     /// An explicitly invoked command did not complete. The outer handler owns
     /// reconciliation; this wrapper never triggers typed-rejection auto-replies.
     #[error("command invocation {command} did not complete ({status:?})")]
@@ -169,6 +177,7 @@ pub enum YappinError {
 impl YappinError {
     pub fn availability_failure(&self) -> Option<crate::AvailabilityFailure> {
         match self {
+            Self::IdentifiedInvocation { source, .. } => source.availability_failure(),
             Self::Invocation { source, .. } => source.as_ref()?.availability_failure(),
             Self::Remote(error) => error.availability_failure(),
             Self::EventProcessing { report } => report.primary()?.availability_failure(),
@@ -181,6 +190,7 @@ impl YappinError {
     /// Returns the HTTP status code associated with this error, if available.
     pub fn status_code(&self) -> Option<u16> {
         match self {
+            Self::IdentifiedInvocation { source, .. } => source.status_code(),
             Self::Invocation { source, .. } => source.as_ref().and_then(|e| e.status_code()),
             Self::RetryWaitExceeded { source, .. } => source.status_code(),
             Self::HotReload { failure } => failure.source.as_ref().and_then(|e| e.status),
@@ -229,6 +239,7 @@ impl YappinError {
     /// Returns the suggested retry wait duration if this error was caused by a rate limit.
     pub fn retry_after(&self) -> Option<std::time::Duration> {
         match self {
+            Self::IdentifiedInvocation { source, .. } => return source.retry_after(),
             Self::Invocation { source, .. } => {
                 return source.as_ref().and_then(|e| e.retry_after())
             }
@@ -281,6 +292,14 @@ impl YappinError {
     /// Stable JSON representation for agents. Transport URLs are intentionally omitted.
     pub fn to_json(&self) -> serde_json::Value {
         match self {
+            Self::IdentifiedInvocation {
+                operation_id,
+                source,
+            } => {
+                let mut value = source.to_json();
+                value["operation_id"] = serde_json::json!(operation_id);
+                return value;
+            }
             Self::Invocation {
                 command,
                 status,
@@ -407,6 +426,7 @@ impl YappinError {
     /// Does not classify a failed candidate as a completed command.
     pub fn hot_reload_failure(&self) -> Option<crate::HotReloadFailure> {
         match self {
+            Self::IdentifiedInvocation { source, .. } => source.hot_reload_failure(),
             Self::Invocation { source, .. } => source.as_ref()?.hot_reload_failure(),
             Self::HotReload { failure } => Some((**failure).clone()),
             Self::Remote(error) => error.hot_reload_failure(),

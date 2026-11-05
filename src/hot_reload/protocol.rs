@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub(super) const VERSION: u32 = 7;
+pub(super) const VERSION: u32 = 8;
 const MAX_FRAME: u64 = 1024 * 1024;
 
 /// Optional listeners implemented by a worker in addition to commands and buttons.
@@ -240,6 +240,8 @@ pub(super) enum Wire {
     },
     Invoke {
         event: Box<CogEvent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operation_id: Option<crate::OperationId>,
     },
     Api {
         method: String,
@@ -412,5 +414,40 @@ mod upload_tests {
                 .await
                 .is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod operation_identity_tests {
+    use super::*;
+    #[test]
+    fn invocation_envelope_retains_metadata_and_legacy_event_shape() {
+        let event = CogEvent::Command {
+            command: "record".into(), args: "alice".into(), argv: vec!["alice".into()],
+            message: serde_json::from_value(serde_json::json!({
+                "id":uuid::Uuid::nil(), "channel_id":uuid::Uuid::nil(), "author_id":uuid::Uuid::nil()
+            })).unwrap(),
+        };
+        let legacy = serde_json::to_value(Wire::Invoke {
+            event: Box::new(event.clone()),
+            operation_id: None,
+        })
+        .unwrap();
+        assert!(legacy.get("operation_id").is_none());
+        assert!(legacy["event"].get("operation_id").is_none());
+        let mut identified = legacy.clone();
+        identified["operation_id"] = serde_json::json!("step/one");
+        match serde_json::from_value::<Wire>(identified.clone()).unwrap() {
+            Wire::Invoke {
+                event: received,
+                operation_id: Some(key),
+            } => {
+                assert_eq!(key.as_str(), "step/one");
+                assert_eq!(serde_json::to_value(received).unwrap(), legacy["event"]);
+            }
+            _ => panic!("lost operation metadata"),
+        }
+        identified["operation_id"] = serde_json::json!("x".repeat(129));
+        assert!(serde_json::from_value::<Wire>(identified).is_err());
     }
 }

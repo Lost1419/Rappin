@@ -34,8 +34,14 @@ pub struct WorkerContext {
     pub event: CogEvent,
     connection: Arc<Mutex<Connection>>,
     active: Arc<AtomicBool>,
+    operation_id: Option<crate::OperationId>,
 }
 impl WorkerContext {
+    /// Consumer operation key supplied by the parent, separate from CogEvent identity.
+    pub fn operation_id(&self) -> Option<&crate::OperationId> {
+        self.operation_id.as_ref()
+    }
+
     pub fn parse<A: crate::commands::FromArgs>(&self) -> Result<A> {
         let mut args = crate::commands::Arguments::new(self.args())?;
         let value = A::parse(&mut args)?;
@@ -364,6 +370,7 @@ pub struct WorkerCog {
     listeners: HashMap<Listener, Handler>,
     single_attempt_api: bool,
     ui_api: bool,
+    operation_identity: bool,
 }
 impl WorkerCog {
     pub fn command_typed<A, F, Fut>(
@@ -408,6 +415,7 @@ impl WorkerCog {
             listeners: HashMap::new(),
             single_attempt_api: false,
             ui_api: false,
+            operation_identity: false,
         }
     }
     /// Runtime argument schemas on workers use the same parser as native commands.
@@ -530,6 +538,12 @@ impl WorkerCog {
         self.single_attempt_api = true;
         self
     }
+    /// Opt into protocol v8 operation metadata. Upgrade the parent first.
+    /// This does not enable single-attempt API or UI helpers implicitly.
+    pub fn operation_identity(mut self) -> Self {
+        self.operation_identity = true;
+        self
+    }
     pub async fn run(self) -> Result<()> {
         self.manifest.validate()?;
         let connection = Arc::new(Mutex::new(Connection {
@@ -544,10 +558,11 @@ impl WorkerCog {
             &Wire::Ready {
                 // Existing handlers retain protocol v4 compatibility. Opting into
                 // message outcomes requires a parent that understands protocol v5.
-                protocol: if self.ui_api
-                    || self.manifest.listeners.contains(&Listener::UiInteraction)
-                {
+                protocol: if self.operation_identity {
                     protocol::VERSION
+                } else if self.ui_api || self.manifest.listeners.contains(&Listener::UiInteraction)
+                {
+                    7
                 } else if self.single_attempt_api {
                     6
                 } else if self.manifest.listeners.contains(&Listener::ServerMessage) {
@@ -560,11 +575,20 @@ impl WorkerCog {
         )
         .await?;
         loop {
-            let event = match protocol::read(&mut connection.lock().await.input).await? {
-                Wire::Invoke { event } => *event,
-                Wire::Shutdown => return Ok(()),
-                _ => return Err(protocol::protocol_error()),
-            };
+            let (event, operation_id) =
+                match protocol::read(&mut connection.lock().await.input).await? {
+                    Wire::Invoke {
+                        event,
+                        operation_id,
+                    } => (*event, operation_id),
+                    Wire::Shutdown => return Ok(()),
+                    _ => return Err(protocol::protocol_error()),
+                };
+            if operation_id.is_some()
+                && (!self.operation_identity || !matches!(&event, CogEvent::Command { .. }))
+            {
+                return Err(protocol::protocol_error());
+            }
             let handler = match &event {
                 CogEvent::Command { command, .. } => self.commands.get(command),
                 CogEvent::Button { prefix, .. } => self.buttons.get(prefix),
@@ -589,6 +613,7 @@ impl WorkerCog {
                         event,
                         connection: connection.clone(),
                         active: active.clone(),
+                        operation_id,
                     })
                     .await
                 }

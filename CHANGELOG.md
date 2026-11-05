@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.24 — 2026-11-05
+
+- Add bounded consumer operation IDs to checked command preparation and execution. Keep authenticated message identity unchanged; expose the ID to native checks/handlers and retain it in prepared plans, outcomes and structured incomplete-invocation errors.
+- Propagate IDs through opt-in worker protocol v8 without changing public command-event layouts. Reject identified calls to older workers before handler execution; existing worker modes and explicit-command defaults remain compatible. Nested calls inherit the current ID unless explicitly overridden.
+- Document consumer-owned argument binding, stable-key journals and uncertain-effect reconciliation, with a runnable two-step example. Operation IDs grant no permission, suppress no handlers and never enable automatic replay.
+
 ## 0.1.23 — 2026-11-05
 
 - Normalize native Windows compiler spans to project-relative paths while continuing to omit outside-project and traversal paths. Recognize the platform cursor-lock contention code so competing CLI/MCP consumers receive the correct error.

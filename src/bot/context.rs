@@ -24,6 +24,12 @@ pub struct MessageContext {
 }
 
 impl MessageContext {
+    /// Active consumer operation key. None for legacy explicit dispatch and
+    /// outside the authenticated task. This is metadata, never permission proof.
+    pub fn operation_id(&self) -> Option<super::OperationId> {
+        super::invocation::operation_id(self)
+    }
+
     /// Register before posting a question, then await the returned collector after sending it.
     pub fn replies(&self) -> crate::collectors::CollectorBuilder<MessageEvent> {
         self.client

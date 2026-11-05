@@ -11,7 +11,59 @@ struct Origin {
     event: Arc<MessageEvent>,
     depth: usize,
     gate_running: bool,
+    operation_id: Option<OperationId>,
 }
+/// Consumer-owned durable operation key, separate from authenticated identity.
+/// Values are 1..=128 UTF-8 bytes with no control characters. No normalization,
+/// uniqueness, deduplication, permission grant or replay policy is implied.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct OperationId(String);
+impl OperationId {
+    pub const MAX_BYTES: usize = 128;
+    pub fn new(value: impl Into<String>) -> Result<Self> {
+        let value = value.into();
+        if value.is_empty() || value.len() > Self::MAX_BYTES || value.chars().any(char::is_control)
+        {
+            return Err(YappinError::validation(
+                "invocation.operation_id",
+                "requires 1 to 128 UTF-8 bytes without control characters",
+            ));
+        }
+        Ok(Self(value))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+impl TryFrom<String> for OperationId {
+    type Error = YappinError;
+    fn try_from(value: String) -> Result<Self> {
+        Self::new(value)
+    }
+}
+impl From<OperationId> for String {
+    fn from(value: OperationId) -> Self {
+        value.0
+    }
+}
+
+pub(super) fn operation_id(ctx: &MessageContext) -> Option<OperationId> {
+    ORIGIN
+        .try_with(|origin| {
+            (Arc::ptr_eq(&ctx.client, &origin.bot.inner.client)
+                && ctx
+                    .bot
+                    .as_ref()
+                    .is_some_and(|bot| Arc::ptr_eq(&bot.inner, &origin.bot.inner))
+                && &ctx.event == origin.event.as_ref())
+            .then(|| origin.operation_id.clone())
+            .flatten()
+        })
+        .ok()
+        .flatten()
+}
+
 /// Maximum number of command bodies/check chains active in one invocation lineage.
 pub const MAX_INVOCATION_DEPTH: usize = 8;
 
@@ -27,6 +79,7 @@ pub(super) async fn with_origin<T>(
                 event: Arc::new(event.clone()),
                 depth: 0,
                 gate_running: false,
+                operation_id: None,
             },
             future,
         )
@@ -54,19 +107,35 @@ pub struct InvocationOutcome {
     /// Conservative: arbitrary cog/check/handler code or the message gate ran.
     pub effects_possible: bool,
     pub error: Option<YappinError>,
+    operation_id: Option<OperationId>,
 }
 impl InvocationOutcome {
+    /// Consumer operation key, including for rejected/stale/incomplete calls.
+    pub fn operation_id(&self) -> Option<&OperationId> {
+        self.operation_id.as_ref()
+    }
+    fn with_operation_id(mut self, id: Option<OperationId>) -> Self {
+        self.operation_id = id;
+        self
+    }
     /// Propagate an incomplete invocation without the normal typed-rejection
     /// auto-reply. The outer failure policy owns reconciliation and checkpointing.
     pub fn into_result(self) -> Result<()> {
         if self.status == InvocationStatus::Completed {
             return Ok(());
         }
-        Err(YappinError::Invocation {
+        let error = YappinError::Invocation {
             command: self.command,
             status: self.status,
             effects_possible: self.effects_possible,
             source: self.error.map(Box::new),
+        };
+        Err(match self.operation_id {
+            Some(operation_id) => YappinError::IdentifiedInvocation {
+                operation_id,
+                source: Box::new(error),
+            },
+            None => error,
         })
     }
     fn failed(command: &str, error: YappinError, effects_possible: bool) -> Self {
@@ -79,6 +148,7 @@ impl InvocationOutcome {
             command: command.into(),
             effects_possible,
             error: Some(error),
+            operation_id: None,
         }
     }
 }
@@ -99,6 +169,7 @@ pub struct PreparedInvocation {
     arguments: String,
     snapshot: InvocationSnapshot,
     report: PreparationReport,
+    operation_id: Option<OperationId>,
 }
 impl std::fmt::Debug for PreparedInvocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -109,6 +180,9 @@ impl std::fmt::Debug for PreparedInvocation {
     }
 }
 impl PreparedInvocation {
+    pub fn operation_id(&self) -> Option<&OperationId> {
+        self.operation_id.as_ref()
+    }
     pub fn report(&self) -> &PreparationReport {
         &self.report
     }
@@ -204,59 +278,94 @@ impl BotHandle {
         name: &str,
         arguments: &str,
     ) -> Result<PreparedInvocation> {
-        self.invocation_origin(ctx)?;
-        let (path, args) = self
-            .resolve_invocation(name, arguments)
+        self.prepare_invocation_inner(ctx, name, arguments, ctx.operation_id())
             .await
-            .ok_or_else(|| YappinError::validation("invocation.command", "command not found"))?;
-        let snapshot = self
-            .invocation_snapshot(&path)
+    }
+    /// Prepare with an explicit consumer operation key before any handler runs.
+    /// This key supplies no authentication, authorization or deduplication.
+    pub async fn prepare_invocation_with_operation_id(
+        &self,
+        ctx: &MessageContext,
+        name: &str,
+        arguments: &str,
+        operation_id: OperationId,
+    ) -> Result<PreparedInvocation> {
+        self.prepare_invocation_inner(ctx, name, arguments, Some(operation_id))
             .await
-            .ok_or_else(|| YappinError::validation("invocation.command", "command was unloaded"))?;
-        let mut context = ctx.clone();
-        context.command = Some(path);
-        context.args = args;
-        context.argv = crate::commands::tokenize(&context.args)?
-            .into_iter()
-            .map(|t| t.value)
-            .collect();
-        let mut report = PreparationReport::default();
-        if self.inner.message_gate.is_some() {
-            report.deferred.push("message gate".into());
-        }
-        if snapshot.cog.is_some() {
-            report.deferred.push("cog check".into());
-        }
-        if let Some(recipe) = &snapshot.def.preparation {
-            if let Some(schema) = &recipe.schema {
-                schema.parse(&context.args)?;
-                report.assessed.push("dynamic argument schema".into());
-            } else {
-                report.deferred.push("typed argument parser".into());
-            }
-            for (index, check) in recipe.checks.iter().enumerate() {
-                if let Some(future) = check.prepare(&context) {
-                    failure::catch(future).await?;
-                    report.assessed.push(format!("registered check {index}"));
-                } else {
-                    report.deferred.push(format!("registered check {index}"));
+    }
+    async fn prepare_invocation_inner(
+        &self,
+        ctx: &MessageContext,
+        name: &str,
+        arguments: &str,
+        operation_id: Option<OperationId>,
+    ) -> Result<PreparedInvocation> {
+        let mut origin = self.invocation_origin(ctx)?;
+        origin.operation_id = operation_id.clone();
+        ORIGIN
+            .scope(origin, async {
+                let (path, args) =
+                    self.resolve_invocation(name, arguments)
+                        .await
+                        .ok_or_else(|| {
+                            YappinError::validation("invocation.command", "command not found")
+                        })?;
+                let snapshot = self.invocation_snapshot(&path).await.ok_or_else(|| {
+                    YappinError::validation("invocation.command", "command was unloaded")
+                })?;
+                if operation_id.is_some() && !snapshot.def.operation_identity_supported {
+                    return Err(YappinError::validation(
+                        "invocation.operation_id",
+                        "worker requires protocol v8 operation identity support",
+                    ));
                 }
-            }
-        } else {
-            report
-                .deferred
-                .push("opaque native/worker parsing, checks and cooldowns".into());
-        }
-        report
-            .deferred
-            .push("handler-owned validation and effects".into());
-        Ok(PreparedInvocation {
-            context,
-            requested: name.into(),
-            arguments: arguments.into(),
-            snapshot,
-            report,
-        })
+                let mut context = ctx.clone();
+                context.command = Some(path);
+                context.args = args;
+                context.argv = crate::commands::tokenize(&context.args)?
+                    .into_iter()
+                    .map(|t| t.value)
+                    .collect();
+                let mut report = PreparationReport::default();
+                if self.inner.message_gate.is_some() {
+                    report.deferred.push("message gate".into());
+                }
+                if snapshot.cog.is_some() {
+                    report.deferred.push("cog check".into());
+                }
+                if let Some(recipe) = &snapshot.def.preparation {
+                    if let Some(schema) = &recipe.schema {
+                        schema.parse(&context.args)?;
+                        report.assessed.push("dynamic argument schema".into());
+                    } else {
+                        report.deferred.push("typed argument parser".into());
+                    }
+                    for (index, check) in recipe.checks.iter().enumerate() {
+                        if let Some(future) = check.prepare(&context) {
+                            failure::catch(future).await?;
+                            report.assessed.push(format!("registered check {index}"));
+                        } else {
+                            report.deferred.push(format!("registered check {index}"));
+                        }
+                    }
+                } else {
+                    report
+                        .deferred
+                        .push("opaque native/worker parsing, checks and cooldowns".into());
+                }
+                report
+                    .deferred
+                    .push("handler-owned validation and effects".into());
+                Ok(PreparedInvocation {
+                    context,
+                    requested: name.into(),
+                    arguments: arguments.into(),
+                    snapshot,
+                    report,
+                    operation_id,
+                })
+            })
+            .await
     }
     /// Invoke with fresh normal execution checks. Does not redispatch an event,
     /// run listeners, advance a cursor, retry, or send framework error replies.
@@ -265,6 +374,38 @@ impl BotHandle {
         ctx: &MessageContext,
         name: &str,
         arguments: &str,
+    ) -> InvocationOutcome {
+        self.invoke_command_inner(ctx, name, arguments, ctx.operation_id())
+            .await
+    }
+    /// Invoke with a consumer-owned operation key; all normal checks still run.
+    pub async fn invoke_command_with_operation_id(
+        &self,
+        ctx: &MessageContext,
+        name: &str,
+        arguments: &str,
+        operation_id: OperationId,
+    ) -> InvocationOutcome {
+        self.invoke_command_inner(ctx, name, arguments, Some(operation_id))
+            .await
+    }
+    async fn invoke_command_inner(
+        &self,
+        ctx: &MessageContext,
+        name: &str,
+        arguments: &str,
+        operation_id: Option<OperationId>,
+    ) -> InvocationOutcome {
+        self.invoke_command_unlabelled(ctx, name, arguments, operation_id.clone())
+            .await
+            .with_operation_id(operation_id)
+    }
+    async fn invoke_command_unlabelled(
+        &self,
+        ctx: &MessageContext,
+        name: &str,
+        arguments: &str,
+        operation_id: Option<OperationId>,
     ) -> InvocationOutcome {
         if let Err(error) = self.invocation_origin(ctx) {
             return InvocationOutcome::failed(name, error, false);
@@ -275,6 +416,7 @@ impl BotHandle {
                 command: name.into(),
                 effects_possible: false,
                 error: None,
+                operation_id: None,
             };
         };
         let Some(snapshot) = self.invocation_snapshot(&path).await else {
@@ -283,6 +425,7 @@ impl BotHandle {
                 command: path,
                 effects_possible: false,
                 error: None,
+                operation_id: None,
             };
         };
         let context = MessageContext::new(
@@ -292,10 +435,17 @@ impl BotHandle {
             args,
             ctx.bot.clone(),
         );
-        self.execute_checked_invocation(context, snapshot).await
+        self.execute_checked_invocation(context, snapshot, operation_id)
+            .await
     }
     /// Execute a single-use plan; reject stale bindings and recheck authorization.
     pub async fn invoke_prepared(&self, plan: PreparedInvocation) -> InvocationOutcome {
+        let operation_id = plan.operation_id.clone();
+        self.invoke_prepared_inner(plan)
+            .await
+            .with_operation_id(operation_id)
+    }
+    async fn invoke_prepared_inner(&self, plan: PreparedInvocation) -> InvocationOutcome {
         let name = plan.command().to_owned();
         if let Err(error) = self.invocation_origin(&plan.context) {
             return InvocationOutcome::failed(&name, error, false);
@@ -315,7 +465,7 @@ impl BotHandle {
                         _ => false,
                     } =>
             {
-                self.execute_checked_invocation(plan.context, snapshot)
+                self.execute_checked_invocation(plan.context, snapshot, plan.operation_id)
                     .await
             }
             _ => InvocationOutcome::failed(
@@ -329,6 +479,28 @@ impl BotHandle {
         }
     }
     async fn execute_checked_invocation(
+        &self,
+        ctx: MessageContext,
+        snapshot: InvocationSnapshot,
+        operation_id: Option<OperationId>,
+    ) -> InvocationOutcome {
+        if operation_id.is_some() && !snapshot.def.operation_identity_supported {
+            return InvocationOutcome::failed(
+                ctx.command.as_deref().unwrap_or_default(),
+                YappinError::validation(
+                    "invocation.operation_id",
+                    "worker requires protocol v8 operation identity support",
+                ),
+                false,
+            );
+        }
+        let mut origin = ORIGIN.with(Clone::clone);
+        origin.operation_id = operation_id;
+        ORIGIN
+            .scope(origin, self.execute_checked_invocation_inner(ctx, snapshot))
+            .await
+    }
+    async fn execute_checked_invocation_inner(
         &self,
         ctx: MessageContext,
         snapshot: InvocationSnapshot,
@@ -429,12 +601,14 @@ impl BotHandle {
                         command: name,
                         effects_possible: true,
                         error: None,
+                        operation_id: None,
                     },
                     Ok(false) => InvocationOutcome {
                         status: InvocationStatus::Denied,
                         command: name,
                         effects_possible: true,
                         error: None,
+                        operation_id: None,
                     },
                     Err(error) => InvocationOutcome::failed(&name, error, true),
                 }

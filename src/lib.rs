@@ -134,7 +134,7 @@ pub use bot::{
     HandlerKind, MessageDisposition, MessageFailure, MessageStage,
 };
 pub use bot::{
-    InvocationOutcome, InvocationStatus, PreparationReport, PreparedInvocation,
+    InvocationOutcome, InvocationStatus, OperationId, PreparationReport, PreparedInvocation,
     MAX_INVOCATION_DEPTH,
 };
 #[cfg(feature = "metrics")]

@@ -106,7 +106,14 @@ async fn preparation_never_grants_access_and_revocation_runs_zero_handlers() {
             let a = a.clone();
             async move {
                 let bot = ctx.bot.as_ref().unwrap();
-                let plan = bot.prepare_invocation(&ctx, "private", "").await?;
+                let plan = bot
+                    .prepare_invocation_with_operation_id(
+                        &ctx,
+                        "private",
+                        "",
+                        OperationId::new("assessed-step")?,
+                    )
+                    .await?;
                 assert!(plan.report().assessed.iter().any(|s| s.contains("check")));
                 a.store(false, Ordering::SeqCst);
                 assert_eq!(
@@ -114,12 +121,24 @@ async fn preparation_never_grants_access_and_revocation_runs_zero_handlers() {
                     InvocationStatus::Denied
                 );
                 assert!(bot
-                    .prepare_invocation(&ctx, "private", "")
+                    .prepare_invocation_with_operation_id(
+                        &ctx,
+                        "private",
+                        "",
+                        OperationId::new("assessed-step")?
+                    )
                     .await
                     .unwrap_err()
                     .is_command_rejection());
                 assert_eq!(
-                    bot.invoke_command(&ctx, "private", "").await.status,
+                    bot.invoke_command_with_operation_id(
+                        &ctx,
+                        "private",
+                        "",
+                        OperationId::new("denied-step")?
+                    )
+                    .await
+                    .status,
                     InvocationStatus::Denied
                 );
                 Ok(())
@@ -176,9 +195,23 @@ async fn preparation_defers_arbitrary_parsers_checks_and_cooldowns() {
                 }
                 assert_eq!(PARSED.load(Ordering::SeqCst), 0);
                 assert_eq!(checked.load(Ordering::SeqCst), 0);
-                bot.invoke_command(&ctx, "opaque", "").await.into_result()?;
+                bot.invoke_command_with_operation_id(
+                    &ctx,
+                    "opaque",
+                    "",
+                    OperationId::new("distinct-step")?,
+                )
+                .await
+                .into_result()?;
                 assert_eq!(
-                    bot.invoke_command(&ctx, "opaque", "").await.status,
+                    bot.invoke_command_with_operation_id(
+                        &ctx,
+                        "opaque",
+                        "",
+                        OperationId::new("another-step")?
+                    )
+                    .await
+                    .status,
                     InvocationStatus::Denied
                 );
                 assert!(cool.check(&ctx).await.is_some());
@@ -198,7 +231,14 @@ async fn plans_reject_replacement_and_unload_without_registry_locking_handlers()
         .log(false)
         .command("outer", "invoke", |ctx| async move {
             let bot = ctx.bot.as_ref().unwrap();
-            let plan = bot.prepare_invocation(&ctx, "target", "").await?;
+            let plan = bot
+                .prepare_invocation_with_operation_id(
+                    &ctx,
+                    "target",
+                    "",
+                    OperationId::new("planned-step")?,
+                )
+                .await?;
             bot.reload_cog(
                 CogBuilder::new("target-cog")
                     .command("target", "new", |_| async { Err(deny()) })
@@ -206,13 +246,21 @@ async fn plans_reject_replacement_and_unload_without_registry_locking_handlers()
             )
             .await?;
             let stale = bot.invoke_prepared(plan).await;
+            assert_eq!(stale.operation_id().unwrap().as_str(), "planned-step");
             assert_eq!(stale.status, InvocationStatus::Failed);
             assert!(!stale.effects_possible);
             assert_eq!(
                 bot.invoke_command(&ctx, "target", "").await.status,
                 InvocationStatus::Denied
             );
-            let plan = bot.prepare_invocation(&ctx, "target", "").await?;
+            let plan = bot
+                .prepare_invocation_with_operation_id(
+                    &ctx,
+                    "target",
+                    "",
+                    OperationId::new("planned-step")?,
+                )
+                .await?;
             bot.remove_cog("target-cog").await?;
             assert_eq!(
                 bot.invoke_prepared(plan).await.status,

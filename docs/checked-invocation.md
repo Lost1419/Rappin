@@ -89,3 +89,107 @@ in the parent, not a worker-to-parent nested invocation RPC.
 
 See [the runnable example](../examples/checked_invocation.rs):
 `cargo run --example checked_invocation` with `YAPIN_BOT_TOKEN` configured.
+
+## Consumer operation identity
+
+`OperationId` is consumer-supplied metadata for a logical operation or durable plan
+step. It is separate from the original requester, server, channel and message ID.
+It grants no permission, does not alter reply targets, and does not deduplicate,
+authorize or replay anything. Two calls with the same ID still execute the normal
+checks and handler twice. Consumers own stable key generation, storage, approval,
+argument binding, receipts and reconciliation.
+
+Public APIs (no optional feature for native commands):
+
+```rust,ignore
+OperationId::new(value: impl Into<String>) -> Result<OperationId>
+OperationId::MAX_BYTES // 128
+OperationId::as_str(&self) -> &str
+BotHandle::prepare_invocation_with_operation_id(
+    &self, ctx: &MessageContext, name: &str, arguments: &str, operation_id: OperationId,
+) -> Result<PreparedInvocation>
+BotHandle::invoke_command_with_operation_id(
+    &self, ctx: &MessageContext, name: &str, arguments: &str, operation_id: OperationId,
+) -> InvocationOutcome
+MessageContext::operation_id(&self) -> Option<OperationId>
+PreparedInvocation::operation_id(&self) -> Option<&OperationId>
+InvocationOutcome::operation_id(&self) -> Option<&OperationId>
+```
+
+Values are 1–128 UTF-8 bytes with no control characters. Serde deserialization
+applies the same validation. Values are case-sensitive and not normalized; avoid
+putting secrets in keys. Preparation attaches the ID before read-only check
+assessment and retains it in the single-use plan through `invoke_prepared`.
+Prepare every step and inspect all assessed/deferred checks before starting the
+first handler. A plan is still advisory, not a transaction or permission grant.
+Execution rechecks the message gate, owning cog, registered parsing/checks,
+cooldowns and handler-owned authorization against the unchanged authenticated
+context. Existing replacement/unload protection and recursion bounds still apply.
+
+Ordinary explicit commands and listeners have no operation ID. Existing
+`prepare_invocation` and `invoke_command` inherit the active operation ID when
+nested; the explicit-ID methods override it for that call and its descendants.
+Returning from a nested call restores the caller's ID. A wrapper can therefore
+retain one logical operation; distinct child mutations need distinct consumer
+step keys. MessageContext reads are task-scoped: cloned contexts used outside the
+authenticated task return None, and detached execution remains rejected.
+Preparing a different step does not change the caller's current ID.
+
+Outcomes retain their ID even for missing commands, denial, stale bindings and
+incomplete effects. `into_result()` wraps identified incomplete invocations in
+`YappinError::IdentifiedInvocation { operation_id, source }` around the existing
+`Invocation` cause. Native source chains remain available; structured remote and
+failure-callback JSON keep `kind: command_invocation`, `operation_id`, status,
+retry hints, original partial receipts and unknown outcomes. This wrapper never
+triggers another typed-rejection reply or changes checkpoint/replay policy.
+Cancellation still has no returned outcome: the consumer must already have
+persisted a Pending claim before starting an effect.
+
+A safe consumer journal binds its scoped operation key to the installed command
+and normalized arguments (and any relevant definition/approval version). Reusing
+a completed key with matching arguments can return its saved result; different
+arguments must be rejected. Pending/Unknown requires reconciliation, including
+when a write may have succeeded before the error. These decisions belong in the
+consumer and must not bypass fresh authorization. Merely supplying a stable ID
+makes no API request idempotent and does not make a payment safe to resend.
+
+### Workers and compatibility
+
+Workers require `hot-reload` and explicit `WorkerCog::operation_identity()`, which
+advertises **protocol v8**. Upgrade the parent first. Existing worker modes v4–v7
+and ordinary explicit calls remain unchanged. `single_attempt_api()` and `ui_api()`
+keep their independent opt-ins; operation identity does not enable either helper.
+
+```rust,no_run
+use rappin::{hot_reload::WorkerCog, Result};
+async fn worker() -> Result<()> {
+    WorkerCog::new("records").operation_identity()
+        .command("record", "Record a recipient", |ctx| async move {
+            let operation = ctx.operation_id(); // Option<&OperationId>
+            let message = ctx.event.message().expect("command message");
+            // Apply consumer authorization and durable journal policy here.
+            // operation is metadata; message still carries the original identity.
+            let _ = (operation, message, ctx.args());
+            Ok(())
+        }).run().await
+}
+```
+
+The ID travels in the private parent invocation envelope; the public
+`CogEvent::Command` layout is unchanged. `WorkerContext::operation_id()` reads an
+invocation snapshot. A v8 worker accepts it only on command frames. Preparation
+and direct invocation reject identified calls to older workers before executing
+a worker handler; IDs are never silently dropped. Prepared plans cannot bypass
+this check by reloading to an older worker. Parent-side checked invocation can
+target workers; there is still no worker-to-parent nested invocation RPC.
+
+Run the standalone native consumer example with:
+
+```sh
+cargo run --example operation_identity
+```
+
+Set `YAPIN_BOT_TOKEN`, then send `!record-plan`. The example uses an explicitly
+volatile in-memory journal for a local record mutation. Replace that journal with
+consumer-owned durable storage for restart safety and external effects; model
+planning and application approval policies remain outside the SDK.

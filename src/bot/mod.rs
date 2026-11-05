@@ -11,7 +11,7 @@ pub use ingress::{
 };
 mod message;
 pub use invocation::{
-    InvocationOutcome, InvocationStatus, PreparationReport, PreparedInvocation,
+    InvocationOutcome, InvocationStatus, OperationId, PreparationReport, PreparedInvocation,
     MAX_INVOCATION_DEPTH,
 };
 mod pipeline;
@@ -49,6 +49,7 @@ struct CommandDef {
     handler: CommandHandlerFn,
     info: Option<crate::commands::CommandInfo>,
     preparation: Option<crate::commands::CommandPreparation>,
+    operation_identity_supported: bool,
 }
 
 #[derive(Clone)]
@@ -160,6 +161,7 @@ fn insert_registered(
                 handler: command.handler.clone(),
                 info: Some(command.info.clone()),
                 preparation: command.preparation.clone(),
+                operation_identity_supported: true,
             },
         );
     }
@@ -388,7 +390,7 @@ impl BotHandle {
 
     /// Install a cog without removing its current version until preparation succeeds.
     pub async fn add_cog<C: Cog>(&self, cog: C) -> Result<()> {
-        self.install_cog(Arc::new(cog), true, None).await
+        self.install_cog(Arc::new(cog), true, None, true).await
     }
 
     /// Validate runtime definitions and ownership before an application action
@@ -452,6 +454,7 @@ impl BotHandle {
         cog: Arc<dyn Cog>,
         synchronize: bool,
         expected: Option<bool>,
+        operation_identity_supported: bool,
     ) -> Result<()> {
         let name = cog.name().to_owned();
         if name.is_empty() {
@@ -477,11 +480,15 @@ impl BotHandle {
                         handler: command.handler,
                         info: None,
                         preparation: None,
+                        operation_identity_supported: true,
                     },
                 );
             }
             for command in cog.registered_commands() {
                 insert_registered(&mut commands, command, Some(name.clone()))?;
+            }
+            for command in commands.values_mut() {
+                command.operation_identity_supported = operation_identity_supported;
             }
             let buttons = cog.buttons();
             let _update = self.inner.registry_update.lock().await;
@@ -568,23 +575,33 @@ impl BotHandle {
     }
 
     #[cfg(feature = "hot-reload")]
-    pub(crate) async fn install_worker<C: Cog>(&self, cog: C, replacing: bool) -> Result<()> {
-        self.install_cog(Arc::new(cog), true, Some(replacing))
-            .await
-            .map_err(|cause| {
-                if matches!(cause, YappinError::HotReload { .. }) {
-                    cause
-                } else {
-                    crate::hot_reload::diagnostics::error(
-                        crate::ReloadPhase::Registration,
-                        "candidate registration failed",
-                        Some(&cause),
-                        true,
-                        false,
-                        Some(self.client()),
-                    )
-                }
-            })
+    pub(crate) async fn install_worker<C: Cog>(
+        &self,
+        cog: C,
+        replacing: bool,
+        operation_identity_supported: bool,
+    ) -> Result<()> {
+        self.install_cog(
+            Arc::new(cog),
+            true,
+            Some(replacing),
+            operation_identity_supported,
+        )
+        .await
+        .map_err(|cause| {
+            if matches!(cause, YappinError::HotReload { .. }) {
+                cause
+            } else {
+                crate::hot_reload::diagnostics::error(
+                    crate::ReloadPhase::Registration,
+                    "candidate registration failed",
+                    Some(&cause),
+                    true,
+                    false,
+                    Some(self.client()),
+                )
+            }
+        })
     }
 
     /// Remove routing atomically. Existing handler snapshots may finish in flight.
@@ -621,7 +638,7 @@ impl BotHandle {
     /// Replace an instance built from code already linked into this executable.
     /// For edited Rust source, use the optional hot_reload module.
     pub async fn reload_cog<C: Cog>(&self, cog: C) -> Result<()> {
-        self.install_cog(Arc::new(cog), true, None).await
+        self.install_cog(Arc::new(cog), true, None, true).await
     }
 
     /// Recreate a linked cog through its factory; this does not compile source files.
@@ -643,7 +660,7 @@ impl BotHandle {
                 "factory returned a different cog name",
             ));
         }
-        self.install_cog(cog, true, None).await
+        self.install_cog(cog, true, None, true).await
     }
 
     async fn publish_commands(&self, commands: &[Command]) -> Result<Vec<Command>> {
@@ -852,6 +869,7 @@ impl BotBuilder {
                 handler: wrapped_handler,
                 info: None,
                 preparation: None,
+                operation_identity_supported: true,
             },
         );
         self
@@ -902,6 +920,7 @@ impl BotBuilder {
                 handler: wrapped_handler,
                 info: None,
                 preparation: None,
+                operation_identity_supported: true,
             },
         );
         self
@@ -1410,7 +1429,9 @@ impl Bot {
 
         // Initial cogs use the same validated, atomic registration path.
         for cog in self.initial_cogs.drain(..) {
-            self.handle.install_cog(Arc::from(cog), false, None).await?;
+            self.handle
+                .install_cog(Arc::from(cog), false, None, true)
+                .await?;
         }
 
         // 3. Register slash commands if enabled
