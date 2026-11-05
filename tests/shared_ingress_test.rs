@@ -2025,14 +2025,24 @@ async fn timestamp_approval_rejects_stale_preparation_expiry_and_ineligible_rece
     let (store, incoming, _) = legacy_fixture(&mut http).await;
     let mut options = TimestampReconciliationOptions::default();
     options.approval_ttl = Duration::from_millis(1);
-    let prepared = prepare_fixture(&mut http, store.clone(), &incoming, options)
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(3)).await;
-    assert!(prepared
-        .approve(OperationId::new("expired").unwrap())
-        .await
-        .is_err());
+    // A busy runner may expire this deliberately tiny lifetime during
+    // preparation itself. Either phase must reject specifically for expiry.
+    let expired = match prepare_fixture(&mut http, store.clone(), &incoming, options).await {
+        Ok(prepared) => {
+            tokio::time::sleep(Duration::from_millis(3)).await;
+            prepared
+                .approve(OperationId::new("expired").unwrap())
+                .await
+                .unwrap_err()
+        }
+        Err(error) => error,
+    }
+    .to_remote();
+    assert_eq!(expired.kind, "timestamp_reconciliation");
+    assert!(matches!(
+        expired.details.get("reason").and_then(Value::as_str),
+        Some("expired_preparation" | "stale_preparation")
+    ));
     let prepared = prepare_fixture(&mut http, store.clone(), &incoming, Default::default())
         .await
         .unwrap();
