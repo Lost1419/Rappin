@@ -258,6 +258,32 @@ fn environment(command: &mut Process, build: bool) {
                 command.env(key, value);
             }
         }
+        // Rust/cc discover MSVC through these standard installation variables.
+        // They belong to compilation, never to the runtime worker environment.
+        #[cfg(windows)]
+        for key in [
+            "ProgramFiles",
+            "ProgramFiles(x86)",
+            "ProgramW6432",
+            "ProgramData",
+            "VSINSTALLDIR",
+            "VCINSTALLDIR",
+            "VCToolsInstallDir",
+            "VSCMD_ARG_TGT_ARCH",
+            "VSCMD_ARG_HOST_ARCH",
+            "WindowsSdkDir",
+            "WindowsSDKVersion",
+            "WindowsSDKLibVersion",
+            "UniversalCRTSdkDir",
+            "UCRTVersion",
+            "INCLUDE",
+            "LIB",
+            "LIBPATH",
+        ] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
     }
 }
 
