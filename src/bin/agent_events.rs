@@ -31,7 +31,11 @@ fn lock(cursor: &Path) -> Result<std::fs::File> {
     }
     let file = options.open(path)?;
     file.try_lock_exclusive().map_err(|error| {
-        if error.kind() == std::io::ErrorKind::WouldBlock {
+        if error.kind() == std::io::ErrorKind::WouldBlock
+            || error
+                .raw_os_error()
+                .is_some_and(|code| fs2::lock_contended_error().raw_os_error() == Some(code))
+        {
             YappinError::Config("event cursor is in use by another consumer".into())
         } else {
             error.into()

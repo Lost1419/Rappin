@@ -2,7 +2,7 @@
 
 ## 0.1.23 — 2026-11-05
 
-- Normalize native Windows compiler spans to project-relative paths while continuing to omit outside-project and traversal paths.
+- Normalize native Windows compiler spans to project-relative paths while continuing to omit outside-project and traversal paths. Recognize the platform cursor-lock contention code so competing CLI/MCP consumers receive the correct error.
 - Add opt-in shared ingress for verified webhooks, polling and gateway events. Deduplicate before collector/ack/handler effects, fence authoritative polling checkpoints around unfinished claims, and expose bounded admission receipts plus an application-owned durable store contract. Retain completed and uncertain outcomes across restart instead of replaying handlers.
 - Add opt-in gateway JSON API requests when `ready.requests` advertises support. Correlate out-of-order responses, enforce eight in-flight requests and 100 frames per ten seconds, and share existing validation/rate-limit budgets with HTTPS. Preserve single-attempt worker calls and uncertain disconnect/timeout outcomes without HTTP fallback or mutation replay.
 
