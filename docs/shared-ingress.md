@@ -124,7 +124,7 @@ and graceful shutdown. Run:
 cargo run --features webhook-middleware --example shared_webhook_polling
 ```
 
-Set `YAPIN_BOT_TOKEN`, `YAPIN_BOT_ID`, `YAPIN_WEBHOOK_SECRET` and optionally
+Set `YAPPER_BOT_TOKEN`, `YAPIN_BOT_ID`, `YAPIN_WEBHOOK_SECRET` and optionally
 `YAPIN_CURSOR_FILE`. It listens on `127.0.0.1:8080/webhook` and explicitly reports
 volatile acceptance. For production restart protection, supply your own durable
 store. DNS/tunnels, hosting, storage engines and application command/approval

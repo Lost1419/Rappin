@@ -88,7 +88,7 @@ restrictions on group/alias registration still apply. This API is on `BotHandle`
 in the parent, not a worker-to-parent nested invocation RPC.
 
 See [the runnable example](../examples/checked_invocation.rs):
-`cargo run --example checked_invocation` with `YAPIN_BOT_TOKEN` configured.
+`cargo run --example checked_invocation` with `YAPPER_BOT_TOKEN` configured.
 
 ## Consumer operation identity
 
@@ -189,7 +189,7 @@ Run the standalone native consumer example with:
 cargo run --example operation_identity
 ```
 
-Set `YAPIN_BOT_TOKEN`, then send `!record-plan`. The example uses an explicitly
+Set `YAPPER_BOT_TOKEN`, then send `!record-plan`. The example uses an explicitly
 volatile in-memory journal for a local record mutation. Replace that journal with
 consumer-owned durable storage for restart safety and external effects; model
 planning and application approval policies remain outside the SDK.

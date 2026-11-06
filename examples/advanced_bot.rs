@@ -5,7 +5,8 @@ use std::time::Duration;
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
-    let token = std::env::var("YAPPER_BOT_TOKEN").unwrap_or_else(|_| "yb_sample_token".to_string());
+    let token = std::env::var("YAPPER_BOT_TOKEN")
+        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
 
     let bot = Bot::builder(token)
         .prefix("!")

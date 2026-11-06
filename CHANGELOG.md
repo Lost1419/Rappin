@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Standardize runnable examples and guides on `YAPPER_BOT_TOKEN`; missing credentials now fail with a setup error instead of passing a placeholder token to the API.
+- Add a minimal gateway-events example and document its `gateway` feature, polling fallback, and separation from the optional gateway API-request transport.
+- Make CLI installation examples and `make install-local` enable only `cli` by default; gateway transport and voice playback remain explicit additions.
+
 ## 0.1.28 — 2026-11-06
 
 - Keep gateway API responses and heartbeats alive after event intake stops, so admitted native/worker handlers can finish during draining. Event-queue backpressure pauses delivery instead of aborting submitted calls; disconnects and deadlines retain distinct structured causes.

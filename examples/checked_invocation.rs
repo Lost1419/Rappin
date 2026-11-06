@@ -1,10 +1,10 @@
-//! Run with YAPIN_BOT_TOKEN set; send !plan in a server channel.
+//! Run with YAPPER_BOT_TOKEN set; send !plan in a server channel.
 use rappin::{Bot, Check, CommandSpec, Result};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let token = std::env::var("YAPIN_BOT_TOKEN")
-        .map_err(|_| rappin::YappinError::Config("set YAPIN_BOT_TOKEN".into()))?;
+    let token = std::env::var("YAPPER_BOT_TOKEN")
+        .map_err(|_| rappin::YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
     Bot::builder(token)
         .command_spec(
             CommandSpec::<()>::new("greet", "Send a greeting").check(Check::server_only()),

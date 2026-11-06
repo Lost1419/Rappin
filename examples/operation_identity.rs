@@ -1,4 +1,4 @@
-//! Run with YAPIN_BOT_TOKEN set; send !record-plan in a server channel.
+//! Run with YAPPER_BOT_TOKEN set; send !record-plan in a server channel.
 //! The in-memory journal is illustrative and does NOT provide restart safety.
 use rappin::{Bot, Check, CommandError, CommandSpec, OperationId, Result};
 use std::{collections::HashMap, sync::Arc};
@@ -21,8 +21,8 @@ impl rappin::FromArgs for Recipient {
 type Journal = Arc<Mutex<HashMap<(Uuid, Uuid, OperationId), String>>>;
 #[tokio::main]
 async fn main() -> Result<()> {
-    let token = std::env::var("YAPIN_BOT_TOKEN")
-        .map_err(|_| rappin::YappinError::Config("set YAPIN_BOT_TOKEN".into()))?;
+    let token = std::env::var("YAPPER_BOT_TOKEN")
+        .map_err(|_| rappin::YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
     let journal: Journal = Arc::default();
     Bot::builder(token)
         .command_spec(

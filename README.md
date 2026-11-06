@@ -103,11 +103,11 @@ prefixes are `/` and `!`; add your own with `.prefix(...)`, or use
 ## Events and state
 
 Bots use long polling by default, so they can run on a laptop without a public
-HTTP endpoint. Enable the `gateway` feature and add
-`.gateway(rappin::gateway::DEFAULT_GATEWAY)` to receive events over WebSocket,
-with heartbeats, resume, and polling fallback when the gateway is unavailable.
-JSON API calls use HTTPS by default; [gateway API requests](docs/gateway-requests.md)
-can use the same connection when the platform advertises support.
+HTTP endpoint. To prefer WebSocket events, enable the `gateway` feature and add
+`.gateway(rappin::gateway::DEFAULT_GATEWAY)`; Rappin handles heartbeats, resume,
+and polling fallback. Follow the [gateway quickstart](docs/rust-bots.md#gateway-events)
+for a complete runnable example. JSON API calls still use HTTPS by default;
+[gateway API requests](docs/gateway-requests.md) are a separate opt-in.
 
 Configure `.cursor_file("./state/events.json")` for restart checkpoints and
 `.handler_concurrency(8)` to bound concurrent handlers. Checkpoints advance after
@@ -161,7 +161,7 @@ See the [hot-reloading guide](docs/hot-reloading.md) for setup and operating lim
 Install the optional CLI from crates.io:
 
 ```sh
-cargo install rappin-rs --features cli,gateway
+cargo install rappin-rs --features cli
 export YAPPER_BOT_TOKEN="yb_your_token"
 rappin doctor
 rappin servers list
@@ -216,9 +216,8 @@ The default library build needs neither Node nor the CLI dependencies.
 - [Changelog](CHANGELOG.md): release history and migration notes.
 
 Run these examples from a checkout. Set `YAPPER_BOT_TOKEN` for the bot, client,
-and form examples below. The invocation, operation identity, gateway request and
-shared webhook examples use `YAPIN_BOT_TOKEN`. The shared webhook example also
-requires `YAPIN_BOT_ID` and `YAPIN_WEBHOOK_SECRET`.
+and form examples below. The shared webhook example also requires
+`YAPIN_BOT_ID` and `YAPIN_WEBHOOK_SECRET`.
 
 | Command | Demonstrates |
 |---|---|
@@ -226,6 +225,7 @@ requires `YAPIN_BOT_ID` and `YAPIN_WEBHOOK_SECRET`.
 | `cargo run --example typed_bot` | Typed arguments, aliases, checks, and help |
 | `cargo run --example cogs_bot` | Modular native cogs |
 | `cargo run --features hot-reload --example hot_reload_bot` | Rust source hot reloading |
+| `cargo run --features gateway --example gateway_bot` | WebSocket events with polling fallback |
 | `cargo run --example advanced_bot` | Cooldowns, cache, pagination, and confirmations |
 | `cargo run --example embeds_and_buttons` | Embeds and Components V2 layouts |
 | `cargo run --example api_client` | Standalone REST client |

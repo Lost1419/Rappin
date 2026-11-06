@@ -18,7 +18,7 @@ mod consumer {
     pub async fn run() -> Result<()> {
         let args: Vec<_> = std::env::args().skip(1).collect();
         if args.len() == 1 && args[0] == "--help" {
-            println!("YAPIN_BOT_TOKEN=... cargo run --example reconcile_event_timestamp -- JOURNAL BOT_UUID EVENT_ID RETAINED_SHA256 POLLING_SHA256 [--approve AUDIT_ID]\nWithout --approve, only fresh GET /me, GET /events and journal reads occur. Hold the same exclusive lease as the stopped consumer. Journal format: {{\"ingress\": <IngressRecovery>, \"audit\": []}}. No source of truth is created or rewritten from an export.");
+            println!("YAPPER_BOT_TOKEN=... cargo run --example reconcile_event_timestamp -- JOURNAL BOT_UUID EVENT_ID RETAINED_SHA256 POLLING_SHA256 [--approve AUDIT_ID]\nWithout --approve, only fresh GET /me, GET /events and journal reads occur. Hold the same exclusive lease as the stopped consumer. Journal format: {{\"ingress\": <IngressRecovery>, \"audit\": []}}. No source of truth is created or rewritten from an export.");
             return Ok(());
         }
         if !(args.len() == 5 || args.len() == 7 && args[5] == "--approve") {
@@ -30,8 +30,8 @@ mod consumer {
         let event = args[2]
             .parse()
             .map_err(|_| YappinError::Config("invalid event ID".into()))?;
-        let token = std::env::var("YAPIN_BOT_TOKEN")
-            .map_err(|_| YappinError::Config("set YAPIN_BOT_TOKEN".into()))?;
+        let token = std::env::var("YAPPER_BOT_TOKEN")
+            .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
         let store = Arc::new(Journal::open(PathBuf::from(&args[0]))?);
         let prepared = prepare_timestamp_reconciliation(
             &Client::new(token),

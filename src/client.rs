@@ -247,10 +247,11 @@ impl Client {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```rust,no_run
     /// use rappin::Client;
     ///
-    /// let client = Client::new("yb_sample_token");
+    /// let token = std::env::var("YAPPER_BOT_TOKEN").expect("set YAPPER_BOT_TOKEN");
+    /// let client = Client::new(token);
     /// assert_eq!(client.base_url(), rappin::DEFAULT_API_BASE);
     /// ```
     pub fn new(token: impl Into<String>) -> Self {
@@ -261,10 +262,11 @@ impl Client {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```rust,no_run
     /// use rappin::Client;
     ///
-    /// let client = Client::builder("yb_sample_token")
+    /// let token = std::env::var("YAPPER_BOT_TOKEN").expect("set YAPPER_BOT_TOKEN");
+    /// let client = Client::builder(token)
     ///     .max_retries(5)
     ///     .build();
     /// assert_eq!(client.base_url(), rappin::DEFAULT_API_BASE);

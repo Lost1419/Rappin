@@ -14,7 +14,7 @@ async fn main() -> rappin::Result<()> {
     use std::{path::PathBuf, sync::Arc};
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     if args.len() == 1 && args[0] == "--help" {
-        println!("YAPIN_BOT_TOKEN=... cargo run --example reconcile_event_retirement -- JOURNAL BOT_UUID EVENT_ID ORIGINAL_SHA256 POLLING_SHA256|retained-execution [--approve AUDIT_ID --assessment accept-unknown|attested-applied|attested-not-applied --evidence EVIDENCE_ID]\nDefault: read-only preparation. Hold the stopped consumer's exclusive lease. Approval retires this execution without replay; it never rewrites its original Started/Failed receipt or infers remote success. Resume with the same atomic journal adapter and polling authority.");
+        println!("YAPPER_BOT_TOKEN=... cargo run --example reconcile_event_retirement -- JOURNAL BOT_UUID EVENT_ID ORIGINAL_SHA256 POLLING_SHA256|retained-execution [--approve AUDIT_ID --assessment accept-unknown|attested-applied|attested-not-applied --evidence EVIDENCE_ID]\nDefault: read-only preparation. Hold the stopped consumer's exclusive lease. Approval retires this execution without replay; it never rewrites its original Started/Failed receipt or infers remote success. Resume with the same atomic journal adapter and polling authority.");
         return Ok(());
     }
     if !(args.len() == 5
@@ -31,8 +31,8 @@ async fn main() -> rappin::Result<()> {
     let event = args[2]
         .parse()
         .map_err(|_| YappinError::Config("invalid event ID".into()))?;
-    let token = std::env::var("YAPIN_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPIN_BOT_TOKEN".into()))?;
+    let token = std::env::var("YAPPER_BOT_TOKEN")
+        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
     let store = Arc::new(journal::Journal::open(PathBuf::from(&args[0]))?);
     let request = if args[4] == "retained-execution" {
         EventRetirementRequest::retained_execution(bot, event, &args[3])

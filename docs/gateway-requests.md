@@ -62,7 +62,7 @@ and original message identity remain in their existing layers.
 
 Run [the example](../examples/gateway_api_requests.rs):
 `cargo run --features gateway --example gateway_api_requests`, with
-`YAPIN_BOT_TOKEN` configured. If the platform does not advertise the capability,
+`YAPPER_BOT_TOKEN` configured. If the platform does not advertise the capability,
 its replies continue over HTTPS. Hosting and application recovery policies remain
 consumer-owned. This transport follows the request/response frames in the
 [public OpenAPI](https://www.yapin.gg/openapi.json).

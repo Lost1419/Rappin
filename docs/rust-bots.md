@@ -155,6 +155,41 @@ from command handlers or tasks that outlive that callback.
 
 ## Transport and REST diagnostics
 
+### Gateway events
+
+Polling is the default and needs no public HTTP endpoint. To prefer WebSocket
+delivery, enable the `gateway` feature and select the default gateway:
+
+```toml
+rappin-rs = { version = "0.1.28", features = ["gateway"] }
+```
+
+```rust,no_run
+use rappin::prelude::*;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let token = std::env::var("YAPPER_BOT_TOKEN")
+        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+    let bot = Bot::builder(token)
+        .gateway(rappin::gateway::DEFAULT_GATEWAY)
+        .command("ping", "Check the bot", |ctx| async move {
+            ctx.reply("pong").await?;
+            Ok(())
+        })
+        .build();
+    bot.run().await
+}
+```
+
+Run the same flow with `cargo run --features gateway --example gateway_bot`.
+`.gateway(url)` selects preferred mode: Rappin resumes WebSocket delivery and
+falls back to polling when needed. Use `.gateway_only(url)` only when polling
+fallback is unsuitable. You do not need to configure gateway API requests to
+receive events; JSON API calls remain on HTTPS unless that separate option is
+enabled. `BotHandle::transport_status()` reports the active transport and
+fallback reason.
+
 `BotHandle::transport_status()`/`subscribe_transport()` expose configured mode,
 active transport, fallback reason, heartbeat RTT, received/committed cursors, and
 active batch count. `Gateway::status()` offers the same transport view for direct

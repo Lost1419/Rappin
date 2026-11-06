@@ -11,8 +11,8 @@ use std::env;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let token =
-        env::var("YAPPER_BOT_TOKEN").unwrap_or_else(|_| "PASTE_YOUR_BOT_TOKEN_HERE".to_string());
+    let token = env::var("YAPPER_BOT_TOKEN")
+        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
 
     let bot = Bot::builder(token)
         .command("card", "Send a rich embed card", |ctx| async move {

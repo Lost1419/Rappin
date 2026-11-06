@@ -21,14 +21,16 @@ binary. Skill updates do not require changing an application's SDK dependency.
 Install a binary from this checkout:
 
 ```sh
-cargo install --path . --features cli,gateway,voice
+cargo install --path . --features cli
 # Alternative: make install-local (add ~/.local/bin to PATH)
 rappin --json doctor --offline
 ```
 
-The library has no default optional features. `cli` adds the command and MCP server;
-`gateway` adds WebSocket transport; `voice` adds the Node playback bridge. No Node
-runtime is needed for REST, CLI, MCP, polling, or gateway use.
+The library has no default optional features. `cli` adds the command and MCP server.
+Add `voice` only if the CLI needs local voice playback, or `gateway` when the
+application itself needs WebSocket event transport. The CLI does not need either
+feature for ordinary API or MCP work. No Node runtime is needed for REST, CLI,
+MCP, polling, or gateway events.
 
 For Rust bot development, optional `hot-reload` rebuilds and swaps edited Rust
 worker cogs while the parent bot stays running. Start with

@@ -93,5 +93,9 @@ name = "gateway_api_requests"
 required-features = ["gateway"]
 
 [[example]]
+name = "gateway_bot"
+required-features = ["gateway"]
+
+[[example]]
 name = "shared_webhook_polling"
 required-features = ["webhook-middleware"]

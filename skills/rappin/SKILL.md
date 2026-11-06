@@ -6,7 +6,7 @@ description: "Operate Yapin with Rappin CLI/MCP: resolve servers/channels/member
 Use an available Rappin MCP connection or installed `rappin` from any directory.
 For CLI setup, inspect `rappin --version`, `rappin capabilities` and
 `rappin doctor --offline`. Install with
-`cargo install rappin-rs --features cli,gateway` if needed. Preserve existing
+`cargo install rappin-rs --features cli` if needed. Preserve existing
 configuration and compiled feature choices. Authentication uses `YAPPER_BOT_TOKEN`
 or `~/.config/rappin/config.toml`; never put credentials in command arguments or
 print configuration contents. Run live `rappin doctor` when auth/reachability

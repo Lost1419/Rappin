@@ -1,5 +1,5 @@
 .PHONY: check install-local voice-setup hot-demo
-FEATURES ?= cli,gateway,voice
+FEATURES ?= cli
 PREFIX ?= $(HOME)/.local
 check:
 	cargo fmt --check

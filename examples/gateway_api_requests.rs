@@ -1,9 +1,9 @@
-//! YAPIN_BOT_TOKEN=... cargo run --features gateway --example gateway_api_requests
+//! YAPPER_BOT_TOKEN=... cargo run --features gateway --example gateway_api_requests
 use rappin::{gateway::GatewayRequestConfig, Bot, Result, YappinError};
 #[tokio::main]
 async fn main() -> Result<()> {
-    let token = std::env::var("YAPIN_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPIN_BOT_TOKEN".into()))?;
+    let token = std::env::var("YAPPER_BOT_TOKEN")
+        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
     let bot = Bot::builder(token)
         .gateway(rappin::gateway::DEFAULT_GATEWAY)
         .command(

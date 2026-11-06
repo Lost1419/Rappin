@@ -1,5 +1,5 @@
 //! Loopback receiver with volatile admission and polling/cursor recovery.
-//! Set YAPIN_BOT_TOKEN, YAPIN_BOT_ID and YAPIN_WEBHOOK_SECRET.
+//! Set YAPPER_BOT_TOKEN, YAPIN_BOT_ID and YAPIN_WEBHOOK_SECRET.
 //! cargo run --features webhook-middleware --example shared_webhook_polling
 use axum::{
     extract::{Extension, State},
@@ -71,7 +71,7 @@ fn required(name: &str) -> Result<String> {
 }
 #[tokio::main]
 async fn main() -> Result<()> {
-    let token = required("YAPIN_BOT_TOKEN")?;
+    let token = required("YAPPER_BOT_TOKEN")?;
     let bot_id = required("YAPIN_BOT_ID")?;
     bot_id
         .parse::<uuid::Uuid>()
