@@ -6,18 +6,22 @@ mod ingress;
 mod invocation;
 mod shared_pipeline;
 pub use ingress::{
-    prepare_timestamp_reconciliation, Admission, AdmissionDurability, AdmissionStatus,
-    ConflictDisposition, EventIngress, EventReceipt, IngressConfig, IngressConflict,
-    IngressConflictPolicy, IngressRecord, IngressRecovery, IngressSource, IngressStatus,
-    IngressStore, PayloadDifference, PayloadType, PreparedTimestampReconciliation, ReceiptStage,
-    ReceiptStatus, TimestampReconciliation, TimestampReconciliationOptions,
-    TimestampReconciliationRequest, TimestampReconciliationState,
+    canonical_event_fingerprint, prepare_event_retirement, prepare_timestamp_reconciliation,
+    Admission, AdmissionDurability, AdmissionStatus, ConflictDisposition, EventIngress,
+    EventReceipt, EventRetirement, EventRetirementAssessment, EventRetirementEvidence,
+    EventRetirementOptions, EventRetirementRequest, EventRetirementState, IngressAdmissionPolicy,
+    IngressConfig, IngressConflict, IngressConflictPolicy, IngressRecord, IngressRecovery,
+    IngressSource, IngressStatus, IngressStore, PayloadDifference, PayloadType,
+    PreparedEventRetirement, PreparedTimestampReconciliation, ReceiptStage, ReceiptStatus,
+    TimestampReconciliation, TimestampReconciliationOptions, TimestampReconciliationRequest,
+    TimestampReconciliationState,
 };
 mod message;
 pub use invocation::{
     InvocationOutcome, InvocationStatus, OperationId, PreparationReport, PreparedInvocation,
     MAX_INVOCATION_DEPTH,
 };
+mod drain;
 mod pipeline;
 pub use failure::{
     EventFailure, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,
@@ -267,6 +271,7 @@ pub(crate) struct BotState {
     ui_handlers: HashMap<String, UiHandler>,
     handler_concurrency: usize,
     pending_batches: usize,
+    drain_timeout: Option<Duration>,
     auto_ack_after: Option<Duration>,
     ingress: Option<EventIngress>,
     telemetry: crate::diagnostics::Telemetry,
@@ -275,6 +280,7 @@ pub(crate) struct BotState {
     gateway_url: Option<String>,
     registry_update: tokio::sync::Mutex<()>,
     pub(crate) running: AtomicBool,
+    draining: AtomicBool,
     pub(crate) stopped: tokio::sync::Notify,
 }
 
@@ -360,6 +366,10 @@ impl BotHandle {
         }
     }
     /// Returns a reference to the bot's REST client.
+    /// True after intake closes and while the running pipeline drains accepted work.
+    pub fn is_draining(&self) -> bool {
+        self.inner.draining.load(Ordering::SeqCst)
+    }
     pub fn client(&self) -> &Client {
         &self.inner.client
     }
@@ -524,20 +534,22 @@ impl BotHandle {
             // Do not hold dispatch locks while waiting for the API. Old code stays available.
             if synchronize && self.inner.sync_commands && self.inner.running.load(Ordering::SeqCst)
             {
-                if let Err(cause) = self.publish_commands(&planned).await {
-                    #[cfg(feature = "hot-reload")]
+                let publication = self.publish_commands(&planned).await;
+                #[cfg(feature = "hot-reload")]
+                let publication = publication.map_err(|cause| {
                     if expected.is_some() {
-                        return Err(crate::hot_reload::diagnostics::error(
+                        return crate::hot_reload::diagnostics::error(
                             crate::ReloadPhase::Publication,
                             "remote command publication failed; local routes were not replaced",
                             Some(&cause),
                             true,
                             true,
                             Some(self.client()),
-                        ));
+                        );
                     }
-                    return Err(cause);
-                }
+                    cause
+                });
+                publication?;
             }
             // Acquire all routing locks before mutation; no await occurs during publication.
             let mut current = self.inner.commands.write().await;
@@ -721,6 +733,7 @@ pub struct BotBuilder {
     ui_handlers: HashMap<String, UiHandler>,
     handler_concurrency: usize,
     pending_batches: usize,
+    drain_timeout: Option<Duration>,
     auto_ack_after: Option<Duration>,
     ingress_config: Option<IngressConfig>,
     ingress_store: Option<Arc<dyn IngressStore>>,
@@ -763,6 +776,7 @@ impl BotBuilder {
             ui_handlers: HashMap::new(),
             handler_concurrency: 8,
             pending_batches: 4,
+            drain_timeout: None,
             auto_ack_after: None,
             ingress_config: None,
             ingress_store: None,
@@ -1143,7 +1157,6 @@ impl BotBuilder {
         self.handler_concurrency = limit.clamp(1, 100);
         self
     }
-    /// Bounds both prefetched and active event batches (each API batch has at most 100 events).
     /// Enable bounded shared webhook/polling admission. Existing intake remains
     /// unchanged unless explicitly enabled. GatewayOnly requires polling recovery
     /// and is therefore rejected with shared ingress.
@@ -1158,6 +1171,20 @@ impl BotBuilder {
         self
     }
 
+    /// Bound shutdown draining of already admitted handlers. Intake stops first;
+    /// gateway API responses/heartbeats stay alive until completion or this limit.
+    /// None (the default) preserves legacy unbounded draining. Hard task abort is
+    /// cancellation, not graceful draining; uncertain effects must be reconciled.
+    pub fn drain_timeout(mut self, timeout: Option<Duration>) -> Self {
+        if timeout.is_some_and(|value| value.is_zero() || value > Duration::from_secs(3600)) {
+            self.definition_error =
+                Some("drain timeout must be greater than zero and at most one hour".into());
+        }
+        self.drain_timeout = timeout;
+        self
+    }
+    /// Bounds prepared intake and active batches. Shared polling may hold one
+    /// additional raw response while awaiting admission, before any intake effects.
     pub fn pending_batches(mut self, limit: usize) -> Self {
         self.pending_batches = limit.clamp(1, 32);
         self
@@ -1246,6 +1273,7 @@ impl BotBuilder {
             ui_handlers: self.ui_handlers,
             handler_concurrency: self.handler_concurrency,
             pending_batches: self.pending_batches,
+            drain_timeout: self.drain_timeout,
             auto_ack_after: self.auto_ack_after,
             ingress: self
                 .ingress_config
@@ -1256,6 +1284,7 @@ impl BotBuilder {
             gateway_url: self.gateway_url,
             registry_update: tokio::sync::Mutex::new(()),
             running: AtomicBool::new(false),
+            draining: AtomicBool::new(false),
             stopped: tokio::sync::Notify::new(),
         });
 

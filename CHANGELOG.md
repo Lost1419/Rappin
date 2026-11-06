@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.28 — 2026-11-06
+
+- Keep gateway API responses and heartbeats alive after event intake stops, so admitted native/worker handlers can finish during draining. Event-queue backpressure pauses delivery instead of aborting submitted calls; disconnects and deadlines retain distinct structured causes.
+- Add optional handler drain deadlines and `BotHandle::is_draining`. Forced cancellation preserves failed/uncertain evidence and cursor barriers. Shared long polls no longer reserve the sole admission slot while waiting for the network.
+- Add opt-in polling-only admission without cross-transport timestamp normalization. Strict matching remains the default; existing conflicts and incomplete receipts still require assessment.
+- Add a separate atomic operator-retirement API for Started/Failed work. It preserves original errors, partial receipts and audit, requires an explicit consumer assessment, and advances only through normal polling/checkpoint processing. Unavailable historical events require an explicit AcceptUnknown coverage decision; no handler replay or success inference occurs.
+- Share the maintenance examples' atomic journal adapter and audit/archive implementation. Keep worker protocols, HTTPS retry behavior and the narrow Completed timestamp API compatible.
+- Fix Prometheus snapshot counters double-counting cumulative totals, apply exporter namespace labels/buckets, and clear stale state gauges. Export cumulative durations as totals rather than latency samples; fallback snapshots use a current-state gauge instead of a fabricated transition counter. Remove unreachable disabled-feature stubs.
+- Reuse canonical polling fingerprints during claim/retirement validation and remove a redundant event sort. Share checked-invocation binding comparison and maintenance-option validation.
+
 ## 0.1.27 — 2026-11-05
 
 - Default timestamp-reconciliation preparation to a one-second polling wait. Zero-wait snapshots can omit historical events that remain available; `TimestampReconciliationOptions::polling_wait` lets callers select 0–25 seconds without rewriting API URLs.

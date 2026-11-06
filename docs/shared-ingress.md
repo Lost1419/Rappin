@@ -277,3 +277,11 @@ fingerprint through the separate [timestamp reconciliation API](timestamp-reconc
 This requires atomic consumer storage and explicit approval. It preserves original
 events/completions, waits for matching normal polling, and never replays handlers
 or forces cursors. Other payload/identity conflicts remain terminal.
+
+### Admission authority and failed-work assessment
+
+[Draining and operator retirement](draining-and-retirement.md) documents
+`IngressAdmissionPolicy::PollingOnly`, response-pump lifetime, explicit shutdown
+bounds and the separate failed/uncertain-work operator API. The Completed timestamp
+API remains narrow; neither a source-policy change nor an empty poll silently
+reconciles a failed mutation.

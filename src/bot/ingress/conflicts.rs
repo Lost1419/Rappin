@@ -36,6 +36,9 @@ pub enum ConflictDisposition {
     AwaitingReconciliationPolling,
     /// Fingerprint-bound timestamp exception confirmed by normal polling.
     Reconciled,
+    AwaitingRetirementPolling,
+    /// Consumer assessed and retired the original execution; not a success claim.
+    Retired,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

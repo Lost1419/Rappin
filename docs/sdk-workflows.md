@@ -144,6 +144,25 @@ loss. Routes remain sanitized templates, never raw credentials or query strings.
 The existing `subscribe_requests()` watch API remains **latest-value only**;
 do not count notifications from it to derive traffic totals.
 
+With `metrics`, publish `record_request_metrics(&client.request_metrics())`
+periodically for one client or an application-aggregated series. Absolute counters
+make repeated snapshots safe; do not pass independent clients into the same series
+without aggregating them. Cumulative duration gauges are
+`rappin_request_duration_seconds_total` and `rappin_rate_limit_wait_seconds_total`.
+They are totals, not latency distributions. `record_request_observation` accepts
+one final observation per request; intermediate retry observations contain
+cumulative attempts/time and must not be counted again as whole requests.
+
+`record_transport_status` publishes current one-hot mode/transport/fallback gauges
+and clears old states. `rappin_transport_fallback{reason=...}` replaces the former
+misleading `rappin_transport_fallback_total` snapshot counter; consumers needing
+transition counts must count transitions explicitly. Availability snapshot totals
+also use absolute counters. Snapshot duration histograms from older releases were
+cumulative samples and should not be used as request latency distributions.
+`install_prometheus_with_config(namespace, buckets)` applies a global `namespace`
+label (empty omits it) and finite, nonnegative, strictly increasing second-based
+histogram bounds. Function signatures and optional-feature requirements are unchanged.
+
 ## Bounded lookups
 
 `search_members(server, name, max_pages)` and `search_channels(server, name)`

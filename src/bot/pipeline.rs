@@ -21,6 +21,7 @@ struct Intake(
     tokio::task::JoinHandle<()>,
     crate::Client,
     crate::diagnostics::Telemetry,
+    #[cfg(feature = "gateway")] crate::gateway::requests::ResponseLease,
 );
 struct PreparedBatch {
     last: u64,
@@ -59,6 +60,8 @@ impl ExecutionGate {
 }
 impl Drop for Intake {
     fn drop(&mut self) {
+        #[cfg(feature = "gateway")]
+        self.3.shutdown("run_cancelled");
         self.0.abort();
         self.1.events().close();
         self.1.cancel_auto_ack();
@@ -97,6 +100,10 @@ impl Bot {
             s.received_cursor = last;
             s.committed_cursor = last;
         });
+        #[cfg(feature = "gateway")]
+        let responses = crate::gateway::requests::ResponseLease::default();
+        #[cfg(feature = "gateway")]
+        let response_lease = responses.downgrade();
         let mut intake = Intake(
             tokio::spawn(async move {
                 let mut received = last;
@@ -107,6 +114,7 @@ impl Bot {
                 } else {
                     let gateway = crate::gateway::Gateway::new(client.clone())
                         .url(gateway_url)
+                        .response_lease(response_lease)
                         .max_age(max_age)
                         .telemetry(telemetry.clone());
                     Some(if mode == TransportMode::GatewayOnly {
@@ -116,8 +124,8 @@ impl Bot {
                     })
                 };
                 loop {
-                    // Drop a full gateway connection instead of leaving its heartbeat unattended.
-                    // Resume from the last received cursor once bounded queue capacity returns.
+                    // Pause event admission at capacity. The independent request
+                    // pump keeps responses and heartbeat alive for accepted work.
                     #[cfg(feature = "gateway")]
                     if sender.capacity() == 0 {
                         if let Some(gateway) = &mut gateway {
@@ -248,6 +256,8 @@ impl Bot {
             }),
             self.client().clone(),
             self.handle.inner.telemetry.clone(),
+            #[cfg(feature = "gateway")]
+            responses,
         );
         let gate = Arc::new(ExecutionGate {
             limit: self.handle.inner.handler_concurrency,
@@ -259,6 +269,9 @@ impl Bot {
         let mut batches: FuturesOrdered<BoxFuture<'_, CompletedBatch>> = FuturesOrdered::new();
         let mut stopping = !self.handle.inner.running.load(Ordering::SeqCst);
         let mut barrier = false;
+        let mut drain_deadline = None;
+        let _draining = super::drain::Guard(self.handle.clone());
+        let ledger = Arc::new(super::drain::Ledger::default());
         let mut report = super::EventProcessingFailure {
             committed_cursor: last,
             received_cursor: last,
@@ -270,6 +283,14 @@ impl Bot {
         };
         loop {
             if stopping {
+                self.handle.inner.draining.store(true, Ordering::SeqCst);
+                if drain_deadline.is_none() {
+                    drain_deadline = self
+                        .handle
+                        .inner
+                        .drain_timeout
+                        .map(|limit| tokio::time::Instant::now() + limit);
+                }
                 intake.0.abort();
                 receiver.close();
                 self.client().events().close();
@@ -278,13 +299,21 @@ impl Bot {
                 }
             }
             tokio::select! {
+                _=async {if let Some(deadline)=drain_deadline {tokio::time::sleep_until(deadline).await;} else {std::future::pending::<()>().await;}}, if stopping=>{
+                    let cause=super::drain::timeout(self.handle.inner.drain_timeout.expect("drain deadline"));
+                    ledger.evidence(&mut report,&cause.to_remote());super::drain::attach(&mut report,cause);
+                    self.client().cancel_auto_ack();
+                    #[cfg(feature="gateway")] intake.3.shutdown("drain_timeout");
+                    drop(std::mem::take(&mut batches));break;
+                },
                 _=tokio::signal::ctrl_c(), if !stopping => {self.stop();stopping=true;},
                 _=self.handle.inner.stopped.notified(), if !stopping => {stopping=true;},
                 _=gate.failed.notified(), if !stopping => {stopping=true;},
                 next=receiver.recv(), if !stopping && batches.len()<capacity => {
                     match next {
                         Some(Ok(batch))=>{
-                            batches.push_back(Box::pin(self.dispatch_batch(batch,me,gate.clone())));
+                            ledger.queue(batch.events.iter().map(|(event,_)|event.id));
+                            batches.push_back(Box::pin(self.dispatch_batch(batch,me,gate.clone(),ledger.clone())));
                             self.handle.inner.telemetry.update(|s|s.pending_batches=batches.len());
                         }
                         Some(Err(failure))=>{
@@ -303,12 +332,16 @@ impl Bot {
                 completed=batches.next(), if !batches.is_empty()=>{
                     if let Some(batch)=completed {
                         stopping|=self.checkpoint_batch(batch,&mut report,&mut barrier,&gate).await;
+                        ledger.prune(report.committed_cursor);
                         self.handle.inner.telemetry.update(|s|s.pending_batches=batches.len());
                     }
                     if !self.handle.inner.running.load(Ordering::SeqCst){stopping=true;}
                 }
             }
         }
+        self.client().cancel_auto_ack();
+        #[cfg(feature = "gateway")]
+        intake.3.shutdown("pipeline_shutdown");
         // These batches were prefetched but never accepted by the executor.
         intake.0.abort();
         let _ = (&mut intake.0).await;
@@ -352,6 +385,7 @@ impl Bot {
         batch: PreparedBatch,
         me: &BotProfile,
         gate: Arc<ExecutionGate>,
+        ledger: Arc<super::drain::Ledger>,
     ) -> CompletedBatch {
         let _ordered = if gate.limit == 1 {
             Some(gate.serial.lock().await)
@@ -361,6 +395,7 @@ impl Bot {
         let mut outcomes = stream::iter(batch.events)
             .map(|(event, prepared)| {
                 let gate = gate.clone();
+                let ledger = ledger.clone();
                 async move {
                     let id = event.id;
                     if gate.halted() {
@@ -372,10 +407,12 @@ impl Bot {
                     }
                     let result = match permit {
                         Ok(_permit) => {
+                            ledger.start(id);
                             super::failure::catch(self.dispatch_event(event, me, prepared)).await
                         }
                         Err(_) => Err(YappinError::Config("handler executor closed".into())),
                     };
+                    ledger.finish(id, &result, self);
                     if result.is_err() {
                         gate.halt();
                     }

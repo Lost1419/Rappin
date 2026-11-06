@@ -23,8 +23,9 @@ are included. Existing request observations and cumulative metrics still apply.
 The pump allows eight admitted requests total and 100 submitted frames per rolling
 ten seconds per connection. Correlation IDs include a random connection ID and a
 monotonic counter. Out-of-order replies are matched independently; unknown/duplicate
-IDs only increment a counter. The event queue holds 64 frames; overflow closes the
-connection so intake can recover from its checkpoint. Request frames and received
+IDs only increment a counter. The event queue holds 64 frames; overflow pauses event
+admission while preserving API responses and heartbeats. Intake recovers coverage
+from polling or reconnects only after admitted requests have settled. Request frames and received
 messages are capped at 1 MiB when the request transport is enabled.
 
 `GatewayRequestConfig::timeout` defaults to 15 seconds (valid range: greater than
@@ -65,3 +66,7 @@ Run [the example](../examples/gateway_api_requests.rs):
 its replies continue over HTTPS. Hosting and application recovery policies remain
 consumer-owned. This transport follows the request/response frames in the
 [public OpenAPI](https://www.yapin.gg/openapi.json).
+
+See [draining and operator retirement](draining-and-retirement.md) for bounded
+shutdown, structured disconnect causes, polling-only admission and explicit
+assessment of retained failed/uncertain work.

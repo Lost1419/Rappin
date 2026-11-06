@@ -18,6 +18,7 @@ pub struct Gateway {
     url: String,
     socket: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     pump: Option<requests::Pump>,
+    response_lease: Option<requests::WeakResponseLease>,
     deliver_duplicates: bool,
     interval: Duration,
     heartbeat: Instant,
@@ -36,6 +37,7 @@ impl Gateway {
             url: DEFAULT_GATEWAY.into(),
             socket: None,
             pump: None,
+            response_lease: None,
             deliver_duplicates: false,
             interval: Duration::from_secs(30),
             heartbeat: Instant::now(),
@@ -85,9 +87,16 @@ impl Gateway {
         self.telemetry = telemetry;
         self
     }
+    pub(crate) fn response_lease(mut self, lease: requests::WeakResponseLease) -> Self {
+        self.response_lease = Some(lease);
+        self
+    }
     pub(crate) fn backpressure(&mut self) {
-        self.socket = None;
-        self.pump = None;
+        if let Some(pump) = &self.pump {
+            pump.pause();
+        } else {
+            self.socket = None;
+        }
         self.telemetry.update(|s| {
             s.active = None;
             s.heartbeat_rtt = None;
@@ -191,7 +200,7 @@ impl Gateway {
                                     self.client.inner_gateway_router().capability(capability);
                                     if capability && self.client.inner_gateway_router().enabled() {
                                         let socket=self.socket.take().ok_or_else(transport)?;
-                                        self.pump=Some(requests::Pump::start(socket,self.client.inner_gateway_router().clone(),self.interval,self.telemetry.clone()));
+                                        self.pump=Some(requests::Pump::start(socket,self.client.inner_gateway_router().clone(),self.interval,self.telemetry.clone(),self.response_lease.as_ref()));
                                         if after!=0 {return self.pump.as_mut().expect("request pump").poll(after, self.deliver_duplicates).await;}
                                     }
                                     if after==0{return Ok(EventsResponse{events:vec![],last:v["seq"].as_u64().unwrap_or(0)});}
@@ -208,13 +217,45 @@ impl Gateway {
     /// Reconnect on the next call using the last *handled* ID. Beta denial falls back for 5 min.
     pub async fn poll(&mut self, after: u64) -> Result<EventsResponse> {
         crate::security::endpoint(&self.url, true)?;
-        let result = if self.fallback_until.is_some_and(|t| t > Instant::now()) {
+        if self
+            .pump
+            .as_ref()
+            .is_some_and(|p| p.paused() && p.retire_if_idle())
+        {
+            self.pump = None;
+            self.socket = None;
+        }
+        let paused = self.pump.as_ref().is_some_and(|p| p.paused());
+        let result = if paused {
+            if !self.allow_fallback {
+                return Err(requests::event_backpressure());
+            }
+            self.telemetry.update(|s| {
+                s.active = Some(EventTransport::Polling);
+                s.fallback = Some(FallbackReason::Backpressure);
+            });
+            self.client
+                .get_events(Some(after), Some(25), self.max_age)
+                .await
+        } else if self.fallback_until.is_some_and(|t| t > Instant::now()) {
             self.client
                 .get_events(Some(after), Some(25), self.max_age)
                 .await
         } else {
             match self.receive(after).await {
                 Ok(batch) => Ok(batch),
+                Err(e) if self.pump.as_ref().is_some_and(|p| p.paused()) => {
+                    if !self.allow_fallback {
+                        return Err(e);
+                    }
+                    self.telemetry.update(|s| {
+                        s.active = Some(EventTransport::Polling);
+                        s.fallback = Some(FallbackReason::Backpressure);
+                    });
+                    self.client
+                        .get_events(Some(after), Some(25), self.max_age)
+                        .await
+                }
                 Err(e) => {
                     self.socket = None;
                     self.pump = None;

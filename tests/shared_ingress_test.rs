@@ -275,6 +275,9 @@ struct Store {
     conflict_waiting: Notify,
     release_conflict: Notify,
     fail_reconciliation: AtomicUsize,
+    fail_retirement: AtomicUsize,
+    retirement_writes: AtomicUsize,
+    retirement_audit: Mutex<Vec<(EventRetirement, IngressRecord)>>,
     reconciliation_writes: AtomicUsize,
     block_confirmation: AtomicBool,
     confirmation_waiting: Notify,
@@ -356,6 +359,40 @@ impl IngressStore for Store {
         }
         Ok(())
     }
+    async fn commit_event_retirement(&self, decision: EventRetirement) -> Result<()> {
+        self.retirement_writes.fetch_add(1, Ordering::SeqCst);
+        let mut data = self.data.lock().unwrap();
+        decision.validate_write(&data)?;
+        let fail = self.fail_retirement.load(Ordering::SeqCst);
+        if fail == 1 || fail == 3 && decision.state == EventRetirementState::PollingConfirmed {
+            return Err(YappinError::Api {
+                status: 503,
+                message: "fixture retirement transaction rollback".into(),
+                retry_after: Some(0.2),
+            });
+        }
+        let original = data
+            .records
+            .iter()
+            .find(|r| r.event.id == decision.event_id)
+            .unwrap()
+            .clone();
+        data.event_retirements
+            .retain(|r| r.event_id != decision.event_id);
+        data.event_retirements.push(decision.clone());
+        self.retirement_audit
+            .lock()
+            .unwrap()
+            .push((decision.clone(), original));
+        if fail == 2 || fail == 4 && decision.state == EventRetirementState::PollingConfirmed {
+            return Err(YappinError::Api {
+                status: 503,
+                message: "fixture retirement commit response lost".into(),
+                retry_after: Some(0.2),
+            });
+        }
+        Ok(())
+    }
     async fn checkpoint(&self, _: Uuid, cursor: u64) -> Result<()> {
         if cursor > 0 && self.fail_checkpoint.load(Ordering::SeqCst) > 0 {
             return Err(YappinError::Config(
@@ -371,6 +408,14 @@ impl IngressStore for Store {
             .filter(|r| r.event_id <= cursor)
             .map(|r| r.event_id)
             .collect::<Vec<_>>();
+        let mut retired = retired;
+        retired.extend(
+            data.event_retirements
+                .iter()
+                .filter(|r| r.event_id <= cursor)
+                .map(|r| r.event_id),
+        );
+        data.event_retirements.retain(|r| r.event_id > cursor);
         data.conflicts.retain(|r| !retired.contains(&r.event_id));
         data.timestamp_reconciliations
             .retain(|r| r.event_id > cursor);
@@ -2509,5 +2554,601 @@ async fn timestamp_probe_rejects_invalid_wait_and_total_deadline_before_io() {
         .unwrap()
         .to_remote();
         assert_eq!(error.details["reason"], "invalid_request_or_bounds");
+    }
+}
+
+#[cfg(feature = "gateway")]
+#[path = "support/gateway_drain.rs"]
+mod draining;
+
+async fn failed_retirement_fixture(
+    http: &mut Http,
+    started: bool,
+) -> (Arc<Store>, Event, Arc<AtomicUsize>) {
+    let (store, canonical, calls) = legacy_fixture(http).await;
+    {
+        let mut data = store.data.lock().unwrap();
+        let original_hash = event_hash(&canonical);
+        let rejected_hash = event_hash(&data.records[0].event);
+        let record = &mut data.records[0];
+        record.event = canonical.clone();
+        record.source = Some(IngressSource::Gateway);
+        record.status.stage = if started {
+            ReceiptStage::Started
+        } else {
+            ReceiptStage::Failed
+        };
+        record.status.error = if started {
+            None
+        } else {
+            Some(
+                YappinError::PartialWrite {
+                    completed: vec![json!({"receipt_id":"fixture-confirmed-first-step"})],
+                    failed_step: 2,
+                    source: Box::new(YappinError::Remote(RemoteError {
+                        kind: "gateway_request".into(),
+                        message: "fixture submitted response unknown".into(),
+                        status: None,
+                        retry_after: None,
+                        details: std::collections::BTreeMap::from([
+                            ("submitted".into(), true.into()),
+                            ("outcome".into(), "unknown".into()),
+                        ]),
+                    })),
+                }
+                .to_remote(),
+            )
+        };
+        data.polling_checkpoint = Some(90);
+        let conflict = &mut data.conflicts[0];
+        conflict.existing_fingerprint = original_hash;
+        conflict.incoming_fingerprint = rejected_hash;
+        conflict.retained_stage = Some(ReceiptStage::Started);
+        conflict.existing_source = IngressSource::Gateway;
+        conflict.incoming_source = IngressSource::Webhook;
+        conflict.differences[0].existing_type = PayloadType::String;
+        conflict.differences[0].incoming_type = PayloadType::Null;
+    }
+    (store, canonical, calls)
+}
+async fn prepare_retirement_fixture(
+    http: &mut Http,
+    store: Arc<Store>,
+    incoming: &Event,
+) -> Result<PreparedEventRetirement> {
+    let retained_hash = event_hash(&store.data.lock().unwrap().records[0].event);
+    let request = EventRetirementRequest::new(bot_id(), 100, retained_hash, event_hash(incoming));
+    let client = Client::builder("fixture").base_url(&http.url).build();
+    let task = tokio::spawn(async move {
+        prepare_event_retirement(&client, store, request, Default::default()).await
+    });
+    http.next()
+        .await
+        .send(json!({"events":[incoming],"last":100}))
+        .unwrap();
+    task.await.unwrap()
+}
+#[tokio::test]
+async fn explicit_failed_retirement_preserves_original_error_and_unknown_assessment_across_restart()
+{
+    for started in [false, true] {
+        let mut http = Http::new(vec![]).await;
+        let (store, canonical, calls) = failed_retirement_fixture(&mut http, started).await;
+        let original = serde_json::to_value(&store.data.lock().unwrap().records[0]).unwrap();
+        let prepared = prepare_retirement_fixture(&mut http, store.clone(), &canonical)
+            .await
+            .unwrap();
+        assert_eq!(prepared.evidence().state, EventRetirementState::Prepared);
+        assert!(prepared.evidence().assessment.is_none());
+        assert_eq!(store.retirement_writes.load(Ordering::SeqCst), 0);
+        let approved = prepared
+            .approve(
+                OperationId::new("fixture/explicit-approval").unwrap(),
+                EventRetirementAssessment::AcceptUnknown,
+                OperationId::new("fixture/retained-error-and-receipts").unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(approved.state, EventRetirementState::Approved);
+        assert_eq!(
+            serde_json::to_value(&store.data.lock().unwrap().records[0]).unwrap(),
+            original
+        );
+        let mut config = IngressConfig::default();
+        config.admission_policy = IngressAdmissionPolicy::PollingOnly;
+        let bot = builder(&http)
+            .shared_ingress(config)
+            .ingress_store(store.clone())
+            .command("ping", "must not replay", |_| async {
+                panic!("retired handler replayed")
+            })
+            .build();
+        let handle = bot.handle();
+        let input = handle.ingress().unwrap();
+        let run = tokio::spawn(bot.run());
+        input.wait_ready().await.unwrap();
+        assert_eq!(
+            input.admit(verified(canonical.clone())).await.status,
+            AdmissionStatus::PollingRequired
+        );
+        let first = http.next().await;
+        let receipt = input.receipt(100).unwrap();
+        first.send(json!({"events":[],"last":100})).unwrap();
+        let poll = http.next().await;
+        assert!(input.status().committed_cursor < 100);
+        assert_eq!(input.retirements()[0].state, EventRetirementState::Approved);
+        poll.send(json!({"events":[canonical],"last":100})).unwrap();
+        until(|| input.status().committed_cursor == 100).await;
+        assert_eq!(
+            receipt.status().stage,
+            if started {
+                ReceiptStage::Started
+            } else {
+                ReceiptStage::Failed
+            }
+        );
+        assert!(receipt.status().committed);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(http.posts.load(Ordering::SeqCst), 0);
+        for (decision, retained) in store.retirement_audit.lock().unwrap().iter() {
+            assert_eq!(serde_json::to_value(retained).unwrap(), original);
+            assert_eq!(
+                decision.assessment,
+                Some(EventRetirementAssessment::AcceptUnknown)
+            );
+        }
+        assert_eq!(store.retirement_audit.lock().unwrap().len(), 2);
+        handle.stop();
+        run.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn operator_retirement_atomic_failures_and_stale_evidence_never_replay() {
+    for failure in [1, 2, 3, 4] {
+        let mut http = Http::new(vec![]).await;
+        let (store, canonical, calls) = failed_retirement_fixture(&mut http, false).await;
+        let original = serde_json::to_value(&store.data.lock().unwrap().records[0]).unwrap();
+        let prepared = prepare_retirement_fixture(&mut http, store.clone(), &canonical)
+            .await
+            .unwrap();
+        store.fail_retirement.store(failure, Ordering::SeqCst);
+        let result = prepared
+            .approve(
+                OperationId::new("fixture/approved").unwrap(),
+                EventRetirementAssessment::AcceptUnknown,
+                OperationId::new("fixture/assessment").unwrap(),
+            )
+            .await;
+        if failure < 3 {
+            let error = result.unwrap_err();
+            assert_eq!(error.status_code(), Some(503));
+            assert_eq!(error.retry_after(), Some(Duration::from_secs_f64(0.2)));
+            assert_eq!(
+                store.data.lock().unwrap().event_retirements.is_empty(),
+                failure == 1
+            );
+        } else {
+            result.unwrap();
+        }
+        assert_eq!(
+            serde_json::to_value(&store.data.lock().unwrap().records[0]).unwrap(),
+            original
+        );
+        if failure == 1 {
+            let bot = builder(&http).ingress_store(store.clone()).build();
+            assert!(bot.run().await.is_err());
+            continue;
+        }
+        if failure == 2 {
+            store.fail_retirement.store(0, Ordering::SeqCst);
+        }
+        let bot = builder(&http)
+            .ingress_store(store.clone())
+            .command("ping", "no replay", |_| async {
+                panic!("replayed failed work")
+            })
+            .build();
+        let handle = bot.handle();
+        let input = handle.ingress().unwrap();
+        let run = tokio::spawn(bot.run());
+        input.wait_ready().await.unwrap();
+        http.next()
+            .await
+            .send(json!({"events":[canonical.clone()],"last":100}))
+            .unwrap();
+        if failure >= 3 {
+            let error = tokio::time::timeout(Duration::from_secs(3), run)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err();
+            assert_eq!(error.status_code(), Some(503));
+            {
+                let snapshot = store.data.lock().unwrap();
+                assert_eq!(snapshot.polling_checkpoint, Some(90));
+                assert_eq!(
+                    serde_json::to_value(&snapshot.records[0]).unwrap(),
+                    original
+                );
+                assert_eq!(
+                    snapshot.event_retirements[0].state,
+                    if failure == 3 {
+                        EventRetirementState::Approved
+                    } else {
+                        EventRetirementState::PollingConfirmed
+                    }
+                );
+            }
+            store.fail_retirement.store(0, Ordering::SeqCst);
+            let bot = builder(&http)
+                .ingress_store(store.clone())
+                .command("ping", "no replay", |_| async { panic!("replayed") })
+                .build();
+            let handle = bot.handle();
+            let input = handle.ingress().unwrap();
+            let run = tokio::spawn(bot.run());
+            input.wait_ready().await.unwrap();
+            http.next()
+                .await
+                .send(json!({"events":[canonical],"last":100}))
+                .unwrap();
+            until(|| input.status().committed_cursor == 100).await;
+            handle.stop();
+            run.await.unwrap().unwrap();
+        } else {
+            until(|| input.status().committed_cursor == 100).await;
+            handle.stop();
+            run.await.unwrap().unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(http.posts.load(Ordering::SeqCst), 0);
+        for (_, record) in store.retirement_audit.lock().unwrap().iter() {
+            assert_eq!(serde_json::to_value(record).unwrap(), original);
+        }
+    }
+    let mut http = Http::new(vec![]).await;
+    let (store, canonical, _) = failed_retirement_fixture(&mut http, false).await;
+    let prepared = prepare_retirement_fixture(&mut http, store.clone(), &canonical)
+        .await
+        .unwrap();
+    store.data.lock().unwrap().records[0].status.error =
+        Some(YappinError::Config("changed failure facts".into()).to_remote());
+    assert!(prepared
+        .approve(
+            OperationId::new("stale").unwrap(),
+            EventRetirementAssessment::AttestedNotApplied,
+            OperationId::new("proof").unwrap()
+        )
+        .await
+        .is_err());
+    assert_eq!(store.retirement_writes.load(Ordering::SeqCst), 0);
+}
+#[tokio::test]
+async fn operator_retirement_refuses_changed_payload_and_completed_timestamp_api_remains_narrow() {
+    let mut http = Http::new(vec![]).await;
+    let (store, canonical, _) = failed_retirement_fixture(&mut http, false).await;
+    let client = Client::builder("fixture").base_url(&http.url).build();
+    let request = TimestampReconciliationRequest::new(
+        bot_id(),
+        100,
+        event_hash(&canonical),
+        event_hash(&canonical),
+    );
+    assert!(
+        prepare_timestamp_reconciliation(&client, store.clone(), request, Default::default())
+            .await
+            .is_err()
+    );
+    for field in ["author_id", "server_id", "channel_id", "id", "content"] {
+        let mut changed = canonical.clone();
+        changed.data[field] = json!("different");
+        assert!(
+            prepare_retirement_fixture(&mut http, store.clone(), &changed)
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(store.retirement_writes.load(Ordering::SeqCst), 0);
+    assert!(store.data.lock().unwrap().event_retirements.is_empty());
+}
+#[tokio::test]
+async fn polling_only_admission_ignores_both_webhook_timestamp_representations() {
+    for supplied_timestamp in [false, true] {
+        let mut http = Http::new(vec![]).await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let called = calls.clone();
+        let mut policy = IngressConfig::default();
+        policy.admission_policy = IngressAdmissionPolicy::PollingOnly;
+        let bot = builder(&http)
+            .shared_ingress(policy)
+            .command("ping", "canonical", move |_| {
+                let called = called.clone();
+                async move {
+                    called.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .build();
+        let handle = bot.handle();
+        let input = handle.ingress().unwrap();
+        let run = tokio::spawn(bot.run());
+        input.wait_ready().await.unwrap();
+        let poll = http.next().await;
+        let mut canonical = event(10, "ping");
+        canonical.created_at = Some("2026-01-01T00:00:00Z".parse().unwrap());
+        let first = if supplied_timestamp {
+            canonical.clone()
+        } else {
+            event(10, "ping")
+        };
+        assert_eq!(
+            input.admit(verified(first)).await.status,
+            AdmissionStatus::PollingRequired
+        );
+        assert!(input.receipt(10).is_none());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        poll.send(json!({"events":[canonical],"last":10})).unwrap();
+        until(|| input.status().committed_cursor == 10).await;
+        assert_eq!(
+            input
+                .admit(verified(event(10, "changed-content")))
+                .await
+                .status,
+            AdmissionStatus::PollingRequired
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(input.status().conflicts, 0);
+        handle.stop();
+        run.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn retained_execution_requires_explicit_unknown_acceptance_and_normal_polling_coverage() {
+    let mut http = Http::new(vec![]).await;
+    let (store, canonical, calls) = failed_retirement_fixture(&mut http, false).await;
+    let original = serde_json::to_value(&store.data.lock().unwrap().records[0]).unwrap();
+    async fn prepare_missing(
+        http: &mut Http,
+        store: Arc<Store>,
+        canonical: &Event,
+    ) -> PreparedEventRetirement {
+        let client = Client::builder("fixture").base_url(&http.url).build();
+        let request =
+            EventRetirementRequest::retained_execution(bot_id(), 100, event_hash(canonical));
+        let task = tokio::spawn(async move {
+            prepare_event_retirement(&client, store, request, Default::default()).await
+        });
+        http.next()
+            .await
+            .send(json!({"events":[],"last":110}))
+            .unwrap();
+        task.await.unwrap().unwrap()
+    }
+    let prepared = prepare_missing(&mut http, store.clone(), &canonical).await;
+    assert!(!prepared.evidence().target_observed);
+    assert_eq!(
+        prepared.evidence().evidence,
+        EventRetirementEvidence::RetainedExecutionCoverage
+    );
+    assert!(prepared
+        .approve(
+            OperationId::new("unproven-success").unwrap(),
+            EventRetirementAssessment::AttestedApplied,
+            OperationId::new("fixture").unwrap()
+        )
+        .await
+        .is_err());
+    assert_eq!(store.retirement_writes.load(Ordering::SeqCst), 0);
+    let prepared = prepare_missing(&mut http, store.clone(), &canonical).await;
+    prepared
+        .approve(
+            OperationId::new("accept-original-unknown").unwrap(),
+            EventRetirementAssessment::AcceptUnknown,
+            OperationId::new("operator-reviewed-original-error-and-partial-receipts").unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.data.lock().unwrap().polling_checkpoint, Some(90));
+    assert_eq!(
+        serde_json::to_value(&store.data.lock().unwrap().records[0]).unwrap(),
+        original
+    );
+    let mut config = IngressConfig::default();
+    config.admission_policy = IngressAdmissionPolicy::PollingOnly;
+    let bot = builder(&http)
+        .shared_ingress(config)
+        .ingress_store(store.clone())
+        .command("ping", "must not replay", |_| async {
+            panic!("replayed unknown work")
+        })
+        .build();
+    let handle = bot.handle();
+    let input = handle.ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    input.wait_ready().await.unwrap();
+    let receipt = input.receipt(100).unwrap();
+    http.next()
+        .await
+        .send(json!({"events":[],"last":99}))
+        .unwrap();
+    let second = http.next().await;
+    assert!(input.status().committed_cursor < 100);
+    assert_eq!(input.retirements()[0].state, EventRetirementState::Approved);
+    second.send(json!({"events":[],"last":110})).unwrap();
+    until(|| input.status().committed_cursor == 110).await;
+    assert_eq!(receipt.status().stage, ReceiptStage::Failed);
+    assert!(receipt.status().committed);
+    assert_eq!(
+        receipt.status().error.as_ref().unwrap().to_json(),
+        original["status"]["error"]
+    );
+    {
+        let audit = store.retirement_audit.lock().unwrap();
+        let decision = &audit.last().unwrap().0;
+        assert_eq!(
+            decision.assessment,
+            Some(EventRetirementAssessment::AcceptUnknown)
+        );
+        assert_eq!(decision.target_observed_at_confirmation, Some(false));
+        assert_eq!(decision.confirmation_watermark, Some(110));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(http.posts.load(Ordering::SeqCst), 0);
+    handle.stop();
+    run.await.unwrap().unwrap();
+}
+#[tokio::test]
+async fn retained_execution_does_not_accept_a_changed_returned_event_or_unproved_range() {
+    for invalid in ["content", "range"] {
+        let mut http = Http::new(vec![]).await;
+        let (store, canonical, _) = failed_retirement_fixture(&mut http, false).await;
+        let request =
+            EventRetirementRequest::retained_execution(bot_id(), 100, event_hash(&canonical));
+        let client = Client::builder("fixture").base_url(&http.url).build();
+        let s = store.clone();
+        let task = tokio::spawn(async move {
+            prepare_event_retirement(&client, s, request, Default::default()).await
+        });
+        let mut changed = canonical;
+        changed.data["author_id"] = json!(Uuid::from_u128(999));
+        http.next()
+            .await
+            .send(if invalid == "content" {
+                json!({"events":[changed],"last":110})
+            } else {
+                json!({"events":[],"last":99})
+            })
+            .unwrap();
+        assert!(task.await.unwrap().is_err());
+        assert_eq!(store.retirement_writes.load(Ordering::SeqCst), 0);
+        assert_eq!(store.data.lock().unwrap().polling_checkpoint, Some(90));
+    }
+}
+
+#[tokio::test]
+async fn retirement_preparation_unavailable_identity_mismatch_and_cancellation_write_nothing() {
+    let mut http = Http::new(vec![]).await;
+    let (store, canonical, calls) = failed_retirement_fixture(&mut http, false).await;
+    let original = serde_json::to_value(store.data.lock().unwrap().clone()).unwrap();
+    let request = EventRetirementRequest::new(
+        bot_id(),
+        100,
+        event_hash(&canonical),
+        event_hash(&canonical),
+    );
+    let client = Client::builder("fixture").base_url(&http.url).build();
+    let mut wrong = request.clone();
+    wrong.bot_id = Uuid::new_v4();
+    assert_eq!(
+        prepare_event_retirement(&client, store.clone(), wrong, Default::default())
+            .await
+            .err()
+            .unwrap()
+            .to_json()["reason"],
+        "authenticated_bot_mismatch"
+    );
+    let s = store.clone();
+    let c = client.clone();
+    let r = request.clone();
+    let missing =
+        tokio::spawn(async move { prepare_event_retirement(&c, s, r, Default::default()).await });
+    http.next()
+        .await
+        .send(json!({"events":[],"last":120}))
+        .unwrap();
+    assert_eq!(
+        missing.await.unwrap().err().unwrap().to_json()["reason"],
+        "authoritative_event_unavailable"
+    );
+    let s = store.clone();
+    let c = client.clone();
+    let cancelled =
+        tokio::spawn(
+            async move { prepare_event_retirement(&c, s, request, Default::default()).await },
+        );
+    let _pending_poll = http.next().await;
+    cancelled.abort();
+    assert!(matches!(cancelled.await, Err(error) if error.is_cancelled()));
+    assert_eq!(store.retirement_writes.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        serde_json::to_value(store.data.lock().unwrap().clone()).unwrap(),
+        original
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(http.posts.load(Ordering::SeqCst), 0);
+}
+#[tokio::test]
+async fn retirement_without_conflict_reports_times_out_or_retains_failed_checkpoint_for_restart() {
+    for missing_confirmation in [false, true] {
+        let mut http = Http::new(vec![]).await;
+        let (store, canonical, calls) = failed_retirement_fixture(&mut http, false).await;
+        store.data.lock().unwrap().conflicts.clear();
+        let original = serde_json::to_value(&store.data.lock().unwrap().records[0]).unwrap();
+        prepare_retirement_fixture(&mut http, store.clone(), &canonical)
+            .await
+            .unwrap()
+            .approve(
+                OperationId::new("operator/test").unwrap(),
+                EventRetirementAssessment::AcceptUnknown,
+                OperationId::new("operator/evidence").unwrap(),
+            )
+            .await
+            .unwrap();
+        let mut config = IngressConfig::default();
+        config.conflict_recovery_timeout = Duration::from_millis(100);
+        let bot = builder(&http)
+            .shared_ingress(config)
+            .ingress_store(store.clone())
+            .build();
+        let input = bot.handle().ingress().unwrap();
+        let run = tokio::spawn(bot.run());
+        input.wait_ready().await.unwrap();
+        let poll = http.next().await;
+        if !missing_confirmation {
+            store.fail_checkpoint.store(1, Ordering::SeqCst);
+            poll.send(json!({"events":[canonical.clone()],"last":100}))
+                .unwrap();
+        }
+        let report = pipeline_report(
+            tokio::time::timeout(Duration::from_secs(3), run)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap_err(),
+        );
+        assert_eq!(report.committed_cursor, 90);
+        assert_eq!(
+            serde_json::to_value(&store.data.lock().unwrap().records[0]).unwrap(),
+            original
+        );
+        if missing_confirmation {
+            let error = report.intake_error.unwrap();
+            assert_eq!(error.kind, "event_retirement");
+            assert_eq!(error.details["reason"], "polling_confirmation_timeout");
+            assert_eq!(store.retirement_writes.load(Ordering::SeqCst), 1);
+        } else {
+            assert!(report.cursor_error.is_some());
+            assert_eq!(
+                store.data.lock().unwrap().event_retirements[0].state,
+                EventRetirementState::PollingConfirmed
+            );
+            store.fail_checkpoint.store(0, Ordering::SeqCst);
+            let bot = builder(&http).ingress_store(store.clone()).build();
+            let handle = bot.handle();
+            let input = handle.ingress().unwrap();
+            let run = tokio::spawn(bot.run());
+            input.wait_ready().await.unwrap();
+            http.next()
+                .await
+                .send(json!({"events":[],"last":100}))
+                .unwrap();
+            until(|| input.status().committed_cursor == 100).await;
+            handle.stop();
+            run.await.unwrap().unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(http.posts.load(Ordering::SeqCst), 0);
     }
 }

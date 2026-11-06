@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         Arc, Mutex,
     },
 };
@@ -44,6 +44,8 @@ pub struct GatewayRequestStatus {
     pub unknown_responses: u64,
     pub uncertain_completions: u64,
     pub response_time: Duration,
+    /// Last connection termination, separate from a request response deadline.
+    pub last_disconnect: Option<crate::RemoteError>,
 }
 impl Default for GatewayRequestStatus {
     fn default() -> Self {
@@ -59,6 +61,7 @@ impl Default for GatewayRequestStatus {
             unknown_responses: 0,
             uncertain_completions: 0,
             response_time: Duration::ZERO,
+            last_disconnect: None,
         }
     }
 }
@@ -68,6 +71,7 @@ pub(crate) struct RequestRouter(Arc<Mutex<RouterState>>);
 struct RouterState {
     config: Option<GatewayRequestConfig>,
     active: Option<Channel>,
+    epoch: Option<uuid::Uuid>,
     status: GatewayRequestStatus,
 }
 #[derive(Clone)]
@@ -75,6 +79,7 @@ struct Channel {
     epoch: uuid::Uuid,
     sender: mpsc::Sender<Request>,
     slots: Arc<Semaphore>,
+    terminal: Arc<Mutex<Option<crate::RemoteError>>>,
 }
 struct Request {
     method: String,
@@ -121,8 +126,43 @@ fn failure(submitted: bool, reason: &str) -> YappinError {
             ),
             ("retry_safety".into(), "do_not_replay_workflow".into()),
             ("submitted".into(), submitted.into()),
+            (
+                "reason".into(),
+                match reason {
+                    "gateway request capacity is full" => "capacity",
+                    "gateway request connection is closed or full" => "admission_closed",
+                    "gateway request expired before submission" => "queue_timeout",
+                    "gateway request expired after possible submission" => "response_timeout",
+                    _ => "invalid_response",
+                }
+                .into(),
+            ),
         ]),
     })
+}
+fn interrupted(submitted: bool, reason: &str, cause: Option<&crate::RemoteError>) -> YappinError {
+    let mut error = failure(
+        submitted,
+        "gateway request did not receive a confirmed response",
+    )
+    .to_remote();
+    error.details.insert("reason".into(), reason.into());
+    if let Some(cause) = cause {
+        error.status = cause.status;
+        error.retry_after = cause.retry_after;
+        error.details.insert("source".into(), cause.to_json());
+    }
+    error.into()
+}
+fn termination(reason: &str, source: Option<&YappinError>) -> crate::RemoteError {
+    let mut error = disconnected().to_remote();
+    error.details.insert("reason".into(), reason.into());
+    if let Some(source) = source {
+        error.status = source.status_code();
+        error.retry_after = source.retry_after().map(|d| d.as_secs_f64());
+        error.details.insert("source".into(), source.to_json());
+    }
+    error
 }
 // Pump tasks do not inherit the caller's availability task-local context.
 // Keep transient I/O distinguishable from terminal protocol/configuration errors.
@@ -138,12 +178,20 @@ fn disconnected() -> YappinError {
 fn socket_error(error: tokio_tungstenite::tungstenite::Error) -> YappinError {
     use tokio_tungstenite::tungstenite::Error;
     match error {
-        Error::Io(_) | Error::Tls(_) | Error::ConnectionClosed | Error::AlreadyClosed => {
-            disconnected()
+        Error::Io(error) => {
+            let mut cause = termination("io_error", None);
+            cause
+                .details
+                .insert("io_kind".into(), format!("{:?}", error.kind()).into());
+            cause.into()
+        }
+        Error::Tls(_) => termination("tls_error", None).into(),
+        Error::ConnectionClosed | Error::AlreadyClosed => {
+            termination("peer_disconnected", None).into()
         }
         Error::Protocol(
             tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
-        ) => disconnected(),
+        ) => termination("connection_reset", None).into(),
         _ => YappinError::Config("gateway returned an invalid protocol frame".into()),
     }
 }
@@ -178,8 +226,11 @@ impl RequestRouter {
         state.status.connected = false;
         state.status.capability = capability;
     }
-    fn disconnect(&self, epoch: uuid::Uuid) {
+    fn disconnect(&self, epoch: uuid::Uuid, cause: crate::RemoteError) {
         let mut s = self.0.lock().unwrap();
+        if s.epoch == Some(epoch) {
+            s.status.last_disconnect = Some(cause);
+        }
         if s.active.as_ref().is_some_and(|c| c.epoch == epoch) {
             s.active = None;
             s.status.connected = false;
@@ -260,15 +311,22 @@ impl RequestRouter {
         };
         let result = match timeout(duration, receipt).await {
             Ok(Ok(result)) => result,
-            _ => {
+            failed => {
                 let submitted = state
                     .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
                     .is_err()
                     && state.load(Ordering::SeqCst) == 1;
-                Err(failure(
-                    submitted,
-                    "gateway request timed out or disconnected",
-                ))
+                let cause = channel.terminal.lock().unwrap().clone();
+                let reason = if failed.is_err() {
+                    "request_timeout"
+                } else {
+                    cause
+                        .as_ref()
+                        .and_then(|e| e.details.get("reason"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("response_channel_closed")
+                };
+                Err(interrupted(submitted, reason, cause.as_ref()))
             }
         };
         cancel.finished = true;
@@ -282,17 +340,106 @@ impl RequestRouter {
         Some(result)
     }
 }
-pub(super) struct Pump {
-    receiver: mpsc::Receiver<Result<crate::Event>>,
-    task: tokio::task::JoinHandle<()>,
+/// Pipeline-owned response lifetimes; gateway admission tasks retain only a weak
+/// reference. Dropping event intake never disconnects handlers being drained.
+#[derive(Default)]
+pub(crate) struct ResponseLease(Arc<Mutex<LeaseState>>);
+#[derive(Clone)]
+pub(crate) struct WeakResponseLease(std::sync::Weak<Mutex<LeaseState>>);
+#[derive(Default)]
+struct LeaseState {
+    owners: Vec<Arc<PumpOwner>>,
+    closed: Option<String>,
+}
+impl ResponseLease {
+    pub(crate) fn downgrade(&self) -> WeakResponseLease {
+        WeakResponseLease(Arc::downgrade(&self.0))
+    }
+    pub(crate) fn shutdown(&self, reason: &str) {
+        let (owners, reason) = {
+            let mut lease = self.0.lock().unwrap();
+            let reason = lease.closed.get_or_insert_with(|| reason.into()).clone();
+            (std::mem::take(&mut lease.owners), reason)
+        };
+        for owner in owners {
+            owner.shutdown(&reason);
+        }
+    }
+}
+impl WeakResponseLease {
+    fn retain(&self, owner: &Arc<PumpOwner>) {
+        let reason = match self.0.upgrade() {
+            Some(lease) => {
+                let mut lease = lease.lock().unwrap();
+                if let Some(reason) = &lease.closed {
+                    Some(reason.clone())
+                } else {
+                    lease.owners.retain(|owner| !owner.task.is_finished());
+                    lease.owners.push(owner.clone());
+                    None
+                }
+            }
+            None => Some("run_cancelled".into()),
+        };
+        // A concurrent handshake may finish after admission has stopped. Never
+        // resurrect a closed lease or hold its mutex while aborting a pump.
+        if let Some(reason) = reason {
+            owner.shutdown(&reason);
+        }
+    }
+}
+impl Drop for ResponseLease {
+    fn drop(&mut self) {
+        self.shutdown("run_cancelled");
+    }
+}
+struct PumpOwner {
+    task: tokio::task::AbortHandle,
     router: RequestRouter,
     epoch: uuid::Uuid,
+    terminal: Arc<Mutex<Option<crate::RemoteError>>>,
+    slots: Arc<Semaphore>,
 }
-impl Drop for Pump {
-    fn drop(&mut self) {
-        self.router.disconnect(self.epoch);
+impl PumpOwner {
+    fn shutdown(&self, reason: &str) {
+        let cause = {
+            let mut terminal = self.terminal.lock().unwrap();
+            terminal
+                .get_or_insert_with(|| termination(reason, None))
+                .clone()
+        };
+        self.router.disconnect(self.epoch, cause);
         self.task.abort();
     }
+}
+impl Drop for PumpOwner {
+    fn drop(&mut self) {
+        self.shutdown("gateway_dropped");
+    }
+}
+#[derive(Default)]
+struct EventDelivery {
+    paused: AtomicBool,
+    error: Mutex<Option<crate::RemoteError>>,
+    changed: tokio::sync::Notify,
+}
+impl EventDelivery {
+    fn pause(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+        self.error
+            .lock()
+            .unwrap()
+            .get_or_insert_with(|| termination("event_backpressure", None));
+        self.changed.notify_waiters();
+    }
+}
+pub(super) struct Pump {
+    receiver: mpsc::Receiver<Result<crate::Event>>,
+    owner: Arc<PumpOwner>,
+    delivery: Arc<EventDelivery>,
+}
+pub(super) fn event_backpressure() -> YappinError {
+    termination("event_backpressure", None).into()
 }
 impl Pump {
     pub(super) fn start(
@@ -300,21 +447,29 @@ impl Pump {
         router: RequestRouter,
         interval: Duration,
         telemetry: Telemetry,
+        lease: Option<&WeakResponseLease>,
     ) -> Self {
         let epoch = uuid::Uuid::new_v4();
         let (sender, mut requests) = mpsc::channel::<Request>(8);
         let (events, receiver) = mpsc::channel(64);
+        let terminal = Arc::new(Mutex::new(None));
+        let delivery = Arc::new(EventDelivery::default());
+        let event_delivery = delivery.clone();
+        let slots = Arc::new(Semaphore::new(8));
         {
             let mut state = router.0.lock().unwrap();
             state.active = Some(Channel {
                 epoch,
                 sender,
-                slots: Arc::new(Semaphore::new(8)),
+                slots: slots.clone(),
+                terminal: terminal.clone(),
             });
+            state.epoch = Some(epoch);
             state.status.connected = true;
             state.status.capability = true;
         }
         let route = router.clone();
+        let ended = terminal.clone();
         let task = tokio::spawn(async move {
             let mut pending: HashMap<String, Pending> = HashMap::new();
             let mut sent: VecDeque<Instant> = VecDeque::new();
@@ -327,7 +482,7 @@ impl Pump {
                 loop {
                     tokio::select! {
                         _ = tokio::time::sleep_until(heartbeat) => {
-                            if awaiting.is_some() { return Err(disconnected()); }
+                            if awaiting.is_some() { return Err(termination("heartbeat_timeout",None).into()); }
                             send_frame(&mut socket, Message::Text("{\"op\":\"heartbeat\"}".into())).await?;
                             awaiting = Some(Instant::now());
                             heartbeat = Instant::now() + interval;
@@ -346,7 +501,11 @@ impl Pump {
                                         },
                                         Some("event") => {
                                             let event = serde_json::from_value(value["d"].clone())?;
-                                            if events.try_send(Ok(event)).is_err() { return Err(disconnected()); }
+                                            if !event_delivery.paused.load(Ordering::SeqCst) && events.try_send(Ok(event)).is_err() {
+                                                // Preserve response correlations and heartbeat. Lost
+                                                // event coverage is explicit; never checkpoint it.
+                                                event_delivery.pause();
+                                            }
                                         },
                                         Some("response") => {
                                             let id = value["id"].as_str().unwrap_or_default();
@@ -408,12 +567,34 @@ impl Pump {
                     }
                 }
             }.await;
-            route.disconnect(epoch);
+            let final_cause = match &result {
+                Err(error) => {
+                    let reason = if error.status_code().is_some() {
+                        "peer_closed".to_owned()
+                    } else {
+                        error
+                            .to_remote()
+                            .details
+                            .get("reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or("transport_failure")
+                            .to_owned()
+                    };
+                    termination(&reason, Some(error))
+                }
+                Ok(()) => termination("request_channel_closed", None),
+            };
+            let final_cause = ended.lock().unwrap().get_or_insert(final_cause).clone();
+            route.disconnect(epoch, final_cause.clone());
             if let Err(error) = result {
                 let cause = error.to_json();
                 for (_, pending) in pending {
-                    let mut failure =
-                        failure(true, "gateway disconnected after possible submission").to_remote();
+                    let reason = final_cause
+                        .details
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("transport_failure");
+                    let mut failure = interrupted(true, reason, Some(&final_cause)).to_remote();
                     failure.status = error.status_code();
                     failure.retry_after = error.retry_after().map(|d| d.as_secs_f64());
                     failure.details.insert("source".into(), cause.clone());
@@ -423,12 +604,47 @@ impl Pump {
             }
             drop(requests);
         });
-        Self {
-            receiver,
-            task,
+        let owner = Arc::new(PumpOwner {
+            task: task.abort_handle(),
             router,
             epoch,
+            terminal,
+            slots,
+        });
+        if let Some(lease) = lease {
+            lease.retain(&owner);
         }
+        // The task is independently owned by its abort handle; it has no strong
+        // reference to PumpOwner, so this cannot create a reference cycle.
+        drop(task);
+        Self {
+            receiver,
+            owner,
+            delivery,
+        }
+    }
+    pub(super) fn pause(&self) {
+        self.delivery.pause();
+    }
+    pub(super) fn paused(&self) -> bool {
+        self.delivery.paused.load(Ordering::SeqCst)
+    }
+    pub(super) fn retire_if_idle(&self) -> bool {
+        let mut state = self.owner.router.0.lock().unwrap();
+        if self.owner.slots.available_permits() != 8 && !self.owner.task.is_finished() {
+            return false;
+        }
+        if state
+            .active
+            .as_ref()
+            .is_some_and(|c| c.epoch == self.owner.epoch)
+        {
+            state.active = None;
+            state.status.connected = false;
+        }
+        drop(state);
+        self.owner.shutdown("event_backpressure");
+        true
     }
     pub(super) async fn poll(
         &mut self,
@@ -437,7 +653,15 @@ impl Pump {
     ) -> Result<EventsResponse> {
         let deadline = Instant::now() + Duration::from_secs(25);
         loop {
-            match tokio::time::timeout_at(deadline, self.receiver.recv()).await {
+            let changed = self.delivery.changed.notified();
+            if let Some(error) = self.delivery.error.lock().unwrap().clone() {
+                return Err(error.into());
+            }
+            let received = tokio::select! {
+                value=tokio::time::timeout_at(deadline,self.receiver.recv())=>value,
+                _=changed=>continue,
+            };
+            match received {
                 Err(_) => {
                     return Ok(EventsResponse {
                         events: vec![],
@@ -463,7 +687,7 @@ async fn send_frame(
 ) -> Result<()> {
     timeout(Duration::from_secs(1), socket.send(frame))
         .await
-        .map_err(|_| disconnected())?
+        .map_err(|_| YappinError::from(termination("send_timeout", None)))?
         .map_err(socket_error)
 }
 fn response(value: &Value) -> Result<reqwest::Response> {
@@ -492,6 +716,78 @@ fn response(value: &Value) -> Result<reqwest::Response> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn response_lease_closes_late_handshakes_and_preserves_the_first_reason() {
+        for late in [false, true] {
+            let lease = ResponseLease::default();
+            let weak = lease.downgrade();
+            let router = RequestRouter::default();
+            let task = tokio::spawn(std::future::pending::<()>());
+            let owner = Arc::new(PumpOwner {
+                task: task.abort_handle(),
+                router: router.clone(),
+                epoch: uuid::Uuid::new_v4(),
+                terminal: Default::default(),
+                slots: Arc::new(Semaphore::new(8)),
+            });
+            router.0.lock().unwrap().epoch = Some(owner.epoch);
+            if !late {
+                weak.retain(&owner);
+            }
+            lease.shutdown("drain_timeout");
+            lease.shutdown("pipeline_shutdown");
+            if late {
+                weak.retain(&owner);
+            }
+            assert!(task.await.unwrap_err().is_cancelled());
+            assert_eq!(
+                owner.terminal.lock().unwrap().as_ref().unwrap().details["reason"],
+                "drain_timeout"
+            );
+            assert!(lease.0.lock().unwrap().owners.is_empty());
+            drop(owner);
+            assert_eq!(
+                router.status().last_disconnect.unwrap().details["reason"],
+                "drain_timeout"
+            );
+        }
+        let weak = ResponseLease::default().downgrade();
+        let task = tokio::spawn(std::future::pending::<()>());
+        let owner = Arc::new(PumpOwner {
+            task: task.abort_handle(),
+            router: Default::default(),
+            epoch: uuid::Uuid::new_v4(),
+            terminal: Default::default(),
+            slots: Arc::new(Semaphore::new(8)),
+        });
+        weak.retain(&owner);
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(
+            owner.terminal.lock().unwrap().as_ref().unwrap().details["reason"],
+            "run_cancelled"
+        );
+    }
+    #[tokio::test]
+    async fn retired_pump_cannot_replace_a_new_connections_disconnect_cause() {
+        let router = RequestRouter::default();
+        let task = tokio::spawn(std::future::pending::<()>());
+        let owner = PumpOwner {
+            task: task.abort_handle(),
+            router: router.clone(),
+            epoch: uuid::Uuid::new_v4(),
+            terminal: Default::default(),
+            slots: Arc::new(Semaphore::new(8)),
+        };
+        let latest = uuid::Uuid::new_v4();
+        router.0.lock().unwrap().epoch = Some(latest);
+        router.disconnect(latest, termination("peer_closed", None));
+        drop(owner);
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(
+            router.status().last_disconnect.unwrap().details["reason"],
+            "peer_closed"
+        );
+    }
     fn queued_router(timeout: Duration) -> (RequestRouter, mpsc::Receiver<Request>) {
         let router = RequestRouter::default();
         let config = GatewayRequestConfig { timeout };
@@ -501,6 +797,7 @@ mod tests {
             epoch: uuid::Uuid::new_v4(),
             sender,
             slots: Arc::new(Semaphore::new(8)),
+            terminal: Arc::new(Mutex::new(None)),
         });
         (router, receiver)
     }

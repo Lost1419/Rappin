@@ -19,9 +19,13 @@ struct RunGuard {
     ingress: EventIngress,
     handle: BotHandle,
     tasks: Vec<tokio::task::JoinHandle<()>>,
+    #[cfg(feature = "gateway")]
+    responses: crate::gateway::requests::ResponseLease,
 }
 impl Drop for RunGuard {
     fn drop(&mut self) {
+        #[cfg(feature = "gateway")]
+        self.responses.shutdown("run_cancelled");
         self.ingress.close();
         self.ingress.abort_unfinished();
         for task in &self.tasks {
@@ -86,6 +90,8 @@ impl Bot {
             ingress: ingress.clone(),
             handle: self.handle.clone(),
             tasks: vec![],
+            #[cfg(feature = "gateway")]
+            responses: Default::default(),
         };
         let mut recovery = ingress.open(
             sender.clone(),
@@ -127,9 +133,9 @@ impl Bot {
                 let mut after = last;
                 let mut failures = 0u32;
                 loop {
-                    let Ok(permit) = poll_sender.reserve().await else {
+                    if poll_sender.is_closed() {
                         break;
-                    };
+                    }
                     let mut episode = bot.inner.availability_policy.as_ref().map(|policy| {
                         crate::availability::Episode::new(
                             bot.clone(),
@@ -172,13 +178,33 @@ impl Bot {
                     if !bot.inner.running.load(Ordering::SeqCst) {
                         break;
                     }
-                    let result: Result<Batch> = async {
-                        let mut response = response?;
-                        failures = 0;
-                        if let Some(mut episode) = episode {
+                    if let Err(error) = &response {
+                        intake.fatal(error.to_remote());
+                        break;
+                    }
+                    if let Ok(response) = &response {
+                        if let Err(error) = intake.raw_pending(&response.events) {
+                            intake.fatal(error.to_remote());
+                            break;
+                        }
+                    }
+                    if response.is_ok() {
+                        if let Some(mut episode) = episode.take() {
                             episode.success();
                         }
-                        response.events.sort_by_key(|event| event.id);
+                    }
+                    // A long poll must not monopolize the only admission slot.
+                    // Hold at most one raw response; reserve before any claim or
+                    // intake effects, so gateway delivery can proceed meanwhile.
+                    let Ok(permit) = poll_sender.reserve().await else {
+                        break;
+                    };
+                    if !bot.inner.running.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let result: Result<Batch> = async {
+                        let response = response?;
+                        failures = 0;
                         let watermark = after.max(response.last);
                         if response.events.iter().any(|event| event.id > watermark) {
                             return Err(YappinError::validation(
@@ -190,17 +216,15 @@ impl Bot {
                         // Compare same-batch duplicates canonically before claiming
                         // any event, so a contradiction precedes all intake effects.
                         let unique = intake.polling_batch(response.events).await?;
+                        intake
+                            .confirm_retirement_coverage(&unique, watermark)
+                            .await?;
                         for event in unique {
-                            events.push(
-                                intake
-                                    .claim(event, super::IngressSource::Polling)
-                                    .await?
-                                    .ok_or_else(|| {
-                                        YappinError::Config(
+                            events.push(intake.claim_polling(event).await?.ok_or_else(|| {
+                                YappinError::Config(
                                     "shared ingress claim capacity exhausted during polling".into(),
                                 )
-                                    })?,
-                            );
+                            })?);
                         }
                         after = watermark;
                         intake.watermark(watermark);
@@ -216,6 +240,9 @@ impl Bot {
                         })
                     }
                     .await;
+                    if let Err(error) = &result {
+                        intake.fatal(error.to_remote());
+                    }
                     let failed = result.is_err();
                     let owned: Vec<_> = result
                         .as_ref()
@@ -230,6 +257,9 @@ impl Bot {
                         .unwrap_or_default();
                     permit.send(result);
                     intake.publish(&owned);
+                    if !failed {
+                        intake.raw_published();
+                    }
                     if failed {
                         break;
                     }
@@ -247,10 +277,11 @@ impl Bot {
             let bot = self.handle.clone();
             let input = ingress.clone();
             let tx = sender.clone();
+            let response_lease = guard.responses.downgrade();
             guard.tasks.push(supervise(async move {
                 let mut gateway = crate::gateway::Gateway::new(bot.client().clone())
                     .url(bot.inner.gateway_url.clone().unwrap_or_else(|| crate::gateway::DEFAULT_GATEWAY.into()))
-                    .max_age(bot.inner.max_age).telemetry(bot.inner.telemetry.clone())
+                    .max_age(bot.inner.max_age).telemetry(bot.inner.telemetry.clone()).response_lease(response_lease)
                     .without_fallback().shared_delivery();
                 let mut after = last;
                 let mut failures = 0u32;
@@ -262,6 +293,7 @@ impl Bot {
                             failures = 0;
                             after = after.max(batch.last);
                             for event in batch.events {
+                                if input.polling_only() {continue;}
                                 if tx.capacity() == 0 { gateway.backpressure(); }
                                 let Ok(permit) = tx.reserve().await else { return; };
                                 let result = input.claim(event, super::IngressSource::Gateway).await
@@ -295,7 +327,7 @@ impl Bot {
                                 status.active = Some(crate::EventTransport::Polling);
                                 status.fallback = Some(if error.status_code() == Some(4003) {
                                     crate::FallbackReason::AccessDenied
-                                } else { crate::FallbackReason::Unavailable });
+                                } else if error.to_json()["reason"] == "event_backpressure" {crate::FallbackReason::Backpressure} else { crate::FallbackReason::Unavailable });
                             });
                             tokio::time::sleep(std::time::Duration::from_secs(wait.unwrap())).await;
                         }
@@ -314,6 +346,8 @@ impl Bot {
             cursor_error: None,
         };
         let mut stopping = false;
+        let mut drain_deadline = None;
+        let _draining = super::drain::Guard(self.handle.clone());
         let mut barrier = false;
         let mut polling_prefix = last;
         self.handle.inner.telemetry.update(|s| {
@@ -322,7 +356,16 @@ impl Bot {
         });
         loop {
             if stopping {
+                self.handle.inner.draining.store(true, Ordering::SeqCst);
+                if drain_deadline.is_none() {
+                    drain_deadline = self
+                        .handle
+                        .inner
+                        .drain_timeout
+                        .map(|limit| tokio::time::Instant::now() + limit);
+                }
                 ingress.close();
+                self.client().events().close();
                 for task in &guard.tasks {
                     task.abort();
                 }
@@ -333,6 +376,13 @@ impl Bot {
                 }
             }
             tokio::select! {
+                _=async {if let Some(deadline)=drain_deadline {tokio::time::sleep_until(deadline).await;}else{std::future::pending::<()>().await;}},if stopping=>{
+                    let cause=super::drain::timeout(self.handle.inner.drain_timeout.expect("drain deadline"));
+                    ingress.interrupt_unfinished(cause.to_remote());super::drain::attach(&mut report,cause);
+                    self.client().cancel_auto_ack();
+                    #[cfg(feature="gateway")] guard.responses.shutdown("drain_timeout");
+                    drop(std::mem::take(&mut batches));break;
+                },
                 error=ingress.failure(),if !stopping=>{report.intake_error=Some(self.failure_cause(&error));gate.halt();stopping=true;},
                 Some(error)=intake_failures.recv(),if !stopping=>{report.intake_error=Some(self.failure_cause(&error));gate.halt();stopping=true;},
                 _=tokio::signal::ctrl_c(),if !stopping=>{self.stop();stopping=true;},
@@ -355,6 +405,9 @@ impl Bot {
                 stopping = true;
             }
         }
+        self.client().cancel_auto_ack();
+        #[cfg(feature = "gateway")]
+        guard.responses.shutdown("pipeline_shutdown");
         for task in &mut guard.tasks {
             task.abort();
             let _ = task.await;
@@ -416,6 +469,9 @@ impl Bot {
                 async move {
                     let id = claimed.event.id;
                     if !claimed.owner {
+                        if ingress.retired(id) {
+                            return (id, Some(Ok(())));
+                        }
                         // Waiting for a claim never owns an execution permit. Its owner
                         // can be queued in a later batch (e.g. slow durable admission).
                         let status = claimed.receipt.wait().await;
@@ -521,7 +577,9 @@ impl Bot {
         for (id, result) in batch.outcomes {
             match result {
                 Some(Ok(())) => {
-                    report.completed_uncommitted_events.push(id);
+                    if !ingress.retired(id) {
+                        report.completed_uncommitted_events.push(id);
+                    }
                     if complete && batch.watermark.is_some() {
                         prefix = prefix.max(id);
                     }

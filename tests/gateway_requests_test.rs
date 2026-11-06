@@ -505,3 +505,43 @@ async fn oversized_json_selects_https_without_submitting_a_socket_frame() {
     stop.send(()).unwrap();
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn unknown_gateway_mutation_is_not_replayed_by_the_outer_client_retry_loop() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let count = Arc::new(AtomicUsize::new(0));
+    let posts = count.clone();
+    let server = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = accept_async(socket).await.unwrap();
+        ready(&mut ws, true).await;
+        let request = text(&mut ws).await;
+        assert_eq!(request["method"], "POST");
+        posts.fetch_add(1, Ordering::SeqCst);
+    });
+    let (base, https, http) = no_http().await;
+    let client = Client::builder("fixture")
+        .base_url(base)
+        .max_retries(5)
+        .build();
+    client
+        .configure_gateway_requests(Some(GatewayRequestConfig::default()))
+        .unwrap();
+    let mut gateway = Gateway::new(client.clone()).url(format!("ws://{address}"));
+    gateway.poll(0).await.unwrap();
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.request(Method::POST, "/mutate", Some(json!({"once":true}))),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(error.to_json()["outcome"], "unknown");
+    assert_eq!(error.to_json()["submitted"], true);
+    assert!(error.to_json()["reason"].is_string());
+    server.await.unwrap();
+    http.abort();
+    assert_eq!(https.load(Ordering::SeqCst), 0);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+}

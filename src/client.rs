@@ -552,6 +552,9 @@ impl Client {
                     continue;
                 }
             }
+            // Transport/unknown-outcome errors are terminal, including submitted
+            // gateway writes. Only explicit known-unapplied HTTP advice below
+            // can spend the client retry budget.
             let res = res?;
             let status = res.status();
 

@@ -60,6 +60,19 @@ impl Default for TimestampReconciliationOptions {
         }
     }
 }
+impl TimestampReconciliationOptions {
+    pub(super) fn valid(&self) -> bool {
+        !self.timeout.is_zero()
+            && self.timeout <= Duration::from_secs(120)
+            && self
+                .preparation_timeout
+                .is_none_or(|v| !v.is_zero() && v <= Duration::from_secs(360))
+            && self.polling_wait <= 25
+            && !self.approval_ttl.is_zero()
+            && self.approval_ttl <= Duration::from_secs(300)
+            && self.max_age.is_none_or(|v| v <= 86400)
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -145,15 +158,7 @@ pub async fn prepare_timestamp_reconciliation(
         || !valid_hash(&request.retained_fingerprint)
         || !valid_hash(&request.polling_fingerprint)
         || request.retained_fingerprint == request.polling_fingerprint
-        || options.timeout.is_zero()
-        || options.timeout > Duration::from_secs(120)
-        || options
-            .preparation_timeout
-            .is_some_and(|limit| limit.is_zero() || limit > Duration::from_secs(360))
-        || options.polling_wait > 25
-        || options.approval_ttl.is_zero()
-        || options.approval_ttl > Duration::from_secs(300)
-        || options.max_age.is_some_and(|age| age > 86400)
+        || !options.valid()
     {
         return Err(rejected("invalid_request_or_bounds"));
     }
@@ -423,7 +428,7 @@ fn retained(snapshot: &IngressRecovery, bot: Uuid, id: u64) -> Result<&IngressRe
     }
     Ok(record)
 }
-fn valid_hash(value: &str) -> bool {
+pub(super) fn valid_hash(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
@@ -433,7 +438,7 @@ pub(super) fn fingerprint(event: &Event, limit: usize) -> Result<String> {
     Ok(hex(&event_fingerprint(event, limit)?))
 }
 
-fn digest(value: &impl Serialize) -> Result<String> {
+pub(super) fn digest(value: &impl Serialize) -> Result<String> {
     let mut value = serde_json::to_value(value)?;
     conflicts::canonicalize(&mut value);
     Ok(hex(&Sha256::digest(serde_json::to_vec(&value)?).into()))
@@ -458,17 +463,28 @@ pub(super) async fn bounded<T>(
     phase: &str,
     future: impl std::future::Future<Output = Result<T>>,
 ) -> Result<T> {
+    bounded_for("timestamp_reconciliation", timeout, phase, future).await
+}
+pub(super) async fn bounded_for<T>(
+    kind: &str,
+    timeout: Duration,
+    phase: &str,
+    future: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
     tokio::time::timeout(timeout, future)
         .await
         .unwrap_or_else(|_| Err(timeout_cause()))
-        .map_err(|cause| operation_failure(phase, cause))
+        .map_err(|cause| operation_failure_for(kind, phase, cause))
 }
 fn timeout_cause() -> YappinError {
     YappinError::Config("reconciliation operation timed out; inspect store before retrying".into())
 }
 fn operation_failure(phase: &str, cause: YappinError) -> YappinError {
+    operation_failure_for("timestamp_reconciliation", phase, cause)
+}
+fn operation_failure_for(kind: &str, phase: &str, cause: YappinError) -> YappinError {
     YappinError::Remote(RemoteError {
-        kind: "timestamp_reconciliation".into(),
+        kind: kind.into(),
         message: "reconciliation read or durable commit failed".into(),
         status: cause.status_code(),
         retry_after: cause.retry_after().map(|d| d.as_secs_f64()),

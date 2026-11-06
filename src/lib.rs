@@ -126,12 +126,15 @@ pub mod permissions;
 pub mod role_hierarchy;
 pub use api::{Api, ApiExt};
 pub use bot::{
-    prepare_timestamp_reconciliation, Admission, AdmissionDurability, AdmissionStatus,
-    ConflictDisposition, EventIngress, EventReceipt, IngressConfig, IngressConflict,
-    IngressConflictPolicy, IngressRecord, IngressRecovery, IngressSource, IngressStatus,
-    IngressStore, PayloadDifference, PayloadType, PreparedTimestampReconciliation, ReceiptStage,
-    ReceiptStatus, TimestampReconciliation, TimestampReconciliationOptions,
-    TimestampReconciliationRequest, TimestampReconciliationState,
+    canonical_event_fingerprint, prepare_event_retirement, prepare_timestamp_reconciliation,
+    Admission, AdmissionDurability, AdmissionStatus, ConflictDisposition, EventIngress,
+    EventReceipt, EventRetirement, EventRetirementAssessment, EventRetirementEvidence,
+    EventRetirementOptions, EventRetirementRequest, EventRetirementState, IngressAdmissionPolicy,
+    IngressConfig, IngressConflict, IngressConflictPolicy, IngressRecord, IngressRecovery,
+    IngressSource, IngressStatus, IngressStore, PayloadDifference, PayloadType,
+    PreparedEventRetirement, PreparedTimestampReconciliation, ReceiptStage, ReceiptStatus,
+    TimestampReconciliation, TimestampReconciliationOptions, TimestampReconciliationRequest,
+    TimestampReconciliationState,
 };
 pub use bot::{
     EventFailure, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,

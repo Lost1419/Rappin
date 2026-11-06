@@ -43,6 +43,12 @@ async fn receive(
                 ),
             );
         }
+        AdmissionStatus::PollingRequired => {
+            return (
+                StatusCode::ACCEPTED,
+                Json(json!({"admission":"polling_required","durability":"not_admitted"})),
+            )
+        }
         AdmissionStatus::Full | AdmissionStatus::Stopped => StatusCode::SERVICE_UNAVAILABLE,
         _ => StatusCode::CONFLICT,
     };

@@ -458,12 +458,7 @@ impl BotHandle {
             (Some((path, args)), Some(snapshot))
                 if path == name
                     && args == plan.context.args
-                    && Arc::ptr_eq(&snapshot.def.handler, &plan.snapshot.def.handler)
-                    && match (&snapshot.cog, &plan.snapshot.cog) {
-                        (None, None) => true,
-                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                        _ => false,
-                    } =>
+                    && snapshot.same_binding(&plan.snapshot) =>
             {
                 self.execute_checked_invocation(plan.context, snapshot, plan.operation_id)
                     .await
