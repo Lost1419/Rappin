@@ -48,7 +48,7 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.26"
+rappin-rs = "0.1.27"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

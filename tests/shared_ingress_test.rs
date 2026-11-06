@@ -2298,3 +2298,216 @@ async fn unapproved_payload_after_timestamp_approval_stops_and_retains_checkpoin
     let bot = builder(&http).ingress_store(store.clone()).build();
     assert!(bot.run().await.is_err());
 }
+
+#[tokio::test]
+async fn timestamp_probe_zero_wait_snapshot_and_default_history_wait_are_distinct() {
+    let mut fixture = Http::new(vec![]).await;
+    let (store, incoming, calls) = legacy_fixture(&mut fixture).await;
+    let original = serde_json::to_value(store.data.lock().unwrap().clone()).unwrap();
+    let (url, mut requests, server) = support::mock(vec![
+        support::response(200, support::profile()),
+        support::response(200, json!({"events":[],"last":99})),
+        support::response(200, support::profile()),
+        support::response(200, json!({"events":[incoming.clone()],"last":105})),
+    ])
+    .await;
+    let client = Client::builder("fixture").base_url(url).build();
+    let mut zero = TimestampReconciliationOptions::default();
+    zero.polling_wait = 0;
+    let error = prepare_timestamp_reconciliation(
+        &client,
+        store.clone(),
+        timestamp_request(&incoming),
+        zero,
+    )
+    .await
+    .err()
+    .unwrap()
+    .to_remote();
+    assert_eq!(error.details["reason"], "authoritative_event_unavailable");
+    let prepared = prepare_timestamp_reconciliation(
+        &client,
+        store.clone(),
+        timestamp_request(&incoming),
+        Default::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        prepared.evidence().state,
+        TimestampReconciliationState::Prepared
+    );
+    server.await.unwrap();
+    assert!(requests.recv().await.unwrap().starts_with("GET /me "));
+    let zero = requests.recv().await.unwrap();
+    assert!(zero.contains("after=99&wait=0&max_age=86400 "));
+    assert!(requests.recv().await.unwrap().starts_with("GET /me "));
+    let historical = requests.recv().await.unwrap();
+    assert!(historical.contains("after=99&wait=1&max_age=86400 "));
+    assert!(requests.recv().await.is_none());
+    assert_eq!(
+        serde_json::to_value(store.data.lock().unwrap().clone()).unwrap(),
+        original
+    );
+    assert_eq!(store.reconciliation_writes.load(Ordering::SeqCst), 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn timestamp_history_probe_still_rejects_missing_scope_hashes_and_changed_content() {
+    let mut fixture = Http::new(vec![]).await;
+    let (store, incoming, calls) = legacy_fixture(&mut fixture).await;
+    let original = serde_json::to_value(store.data.lock().unwrap().clone()).unwrap();
+    for case in [
+        "wrong_bot",
+        "retained_hash",
+        "polling_hash",
+        "content",
+        "unavailable",
+        "retry",
+    ] {
+        let mut request = timestamp_request(&incoming);
+        let mut returned = incoming.clone();
+        let mut responses = vec![support::response(200, support::profile())];
+        let expected = match case {
+            "wrong_bot" => {
+                request.bot_id = Uuid::from_u128(999);
+                "authenticated_bot_mismatch"
+            }
+            "retained_hash" => {
+                request.retained_fingerprint = "a".repeat(64);
+                "retained_fingerprint_or_timestamp_mismatch"
+            }
+            "polling_hash" => {
+                request.polling_fingerprint = "b".repeat(64);
+                "polling_fingerprint_mismatch"
+            }
+            "content" => {
+                returned.data["content"] = json!("changed");
+                request.polling_fingerprint = event_hash(&returned);
+                "non_metadata_difference"
+            }
+            "unavailable" => "authoritative_event_unavailable",
+            _ => "retry",
+        };
+        if !matches!(case, "wrong_bot" | "retained_hash") {
+            responses.push(if case == "retry" {
+                support::response(503, json!({"message":"fixture unavailable"}))
+            } else {
+                support::response(
+                    200,
+                    json!({"events":if case=="unavailable"{vec![]}else{vec![returned]},"last":105}),
+                )
+            });
+        }
+        let (url, mut requests, server) = support::mock(responses).await;
+        let client = Client::builder("fixture")
+            .base_url(url)
+            .max_retries(4)
+            .build();
+        let error =
+            prepare_timestamp_reconciliation(&client, store.clone(), request, Default::default())
+                .await
+                .err()
+                .unwrap();
+        if expected == "retry" {
+            assert_eq!(error.status_code(), Some(503));
+        } else {
+            assert_eq!(error.to_remote().details["reason"], expected);
+        }
+        server.await.unwrap();
+        let mut count = 0;
+        while let Some(request) = requests.recv().await {
+            count += 1;
+            assert!(request.starts_with("GET "));
+            if request.starts_with("GET /events?") {
+                assert!(request.contains("wait=1"));
+            }
+        }
+        assert_eq!(
+            count,
+            if matches!(case, "wrong_bot" | "retained_hash") {
+                1
+            } else {
+                2
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(store.data.lock().unwrap().clone()).unwrap(),
+            original
+        );
+    }
+    assert_eq!(store.reconciliation_writes.load(Ordering::SeqCst), 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn timestamp_probe_deadlines_and_cancellation_leave_no_approval_or_checkpoint() {
+    let mut http = Http::new(vec![]).await;
+    let (store, incoming, calls) = legacy_fixture(&mut http).await;
+    let original = serde_json::to_value(store.data.lock().unwrap().clone()).unwrap();
+    for phase in ["polling", "preparation", "cancellation"] {
+        let client = Client::builder("fixture")
+            .base_url(&http.url)
+            .max_retries(4)
+            .build();
+        let mut options = TimestampReconciliationOptions::default();
+        if phase == "polling" {
+            options.timeout = Duration::from_secs(1);
+        } else {
+            options.preparation_timeout = Some(Duration::from_secs(1));
+        }
+        let s = store.clone();
+        let request = timestamp_request(&incoming);
+        let before = http.poll_after.lock().unwrap().len();
+        let task = tokio::spawn(async move {
+            prepare_timestamp_reconciliation(&client, s, request, options).await
+        });
+        let _unanswered = http.next().await;
+        if phase == "cancellation" {
+            task.abort();
+            assert!(matches!(task.await,Err(error) if error.is_cancelled()));
+        } else {
+            let error = match task.await.unwrap() {
+                Ok(_) => panic!("pending poll unexpectedly succeeded"),
+                Err(error) => error.to_remote(),
+            };
+            assert_eq!(error.details["phase"], phase);
+            assert_eq!(error.details["outcome"], "not_applied");
+        }
+        assert_eq!(http.poll_after.lock().unwrap().len(), before + 1);
+        assert_eq!(
+            serde_json::to_value(store.data.lock().unwrap().clone()).unwrap(),
+            original
+        );
+    }
+    assert_eq!(store.reconciliation_writes.load(Ordering::SeqCst), 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn timestamp_probe_rejects_invalid_wait_and_total_deadline_before_io() {
+    let store = Arc::new(Store::default());
+    let mut incoming = legacy_event();
+    incoming.created_at = Some("2026-01-01T00:00:00Z".parse().unwrap());
+    let client = Client::builder("fixture")
+        .base_url("http://127.0.0.1:1")
+        .build();
+    for (wait, budget) in [
+        (26, None),
+        (1, Some(Duration::ZERO)),
+        (1, Some(Duration::from_secs(361))),
+    ] {
+        let mut options = TimestampReconciliationOptions::default();
+        options.polling_wait = wait;
+        options.preparation_timeout = budget;
+        let error = prepare_timestamp_reconciliation(
+            &client,
+            store.clone(),
+            timestamp_request(&incoming),
+            options,
+        )
+        .await
+        .err()
+        .unwrap()
+        .to_remote();
+        assert_eq!(error.details["reason"], "invalid_request_or_bounds");
+    }
+}

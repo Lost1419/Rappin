@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.27 — 2026-11-05
+
+- Default timestamp-reconciliation preparation to a one-second polling wait. Zero-wait snapshots can omit historical events that remain available; `TimestampReconciliationOptions::polling_wait` lets callers select 0–25 seconds without rewriting API URLs.
+- Add an optional overall `preparation_timeout`, alongside the existing per-operation deadline. Probe failures, cancellation and exhausted budgets never approve decisions, alter checkpoints or retry reads; fingerprint and full-payload validation are unchanged.
+
 ## 0.1.26 — 2026-11-05
 
 - Add explicit, fingerprint-bound reconciliation for durable Completed server-message events whose only difference is an outer null timestamp supplied by fresh polling. Preserve original events/completions and require consumer approval, atomic audit storage and matching normal polling before checkpoint release.

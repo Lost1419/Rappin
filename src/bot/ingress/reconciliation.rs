@@ -36,6 +36,14 @@ impl TimestampReconciliationRequest {
 pub struct TimestampReconciliationOptions {
     /// Bounds each network/storage operation; cancellation never retries a write.
     pub timeout: Duration,
+    /// Aggregate preparation deadline. None uses three times `timeout` (30s by
+    /// default), preserving the existing per-operation allowance. Approval has
+    /// its own per-operation bounds and is not part of this read-only deadline.
+    pub preparation_timeout: Option<Duration>,
+    /// Server long-poll wait in seconds, 0..=25. Defaults to 1 so a historical
+    /// event can be retrieved when a zero-wait snapshot does not return it.
+    /// A shorter client deadline still cancels the read; no fallback/retry occurs.
+    pub polling_wait: u32,
     /// Preparation expires before approval (maximum five minutes).
     pub approval_ttl: Duration,
     /// Read-only polling retention filter, not a checkpoint adjustment.
@@ -45,6 +53,8 @@ impl Default for TimestampReconciliationOptions {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(10),
+            preparation_timeout: None,
+            polling_wait: 1,
             approval_ttl: Duration::from_secs(300),
             max_age: Some(86400),
         }
@@ -137,12 +147,37 @@ pub async fn prepare_timestamp_reconciliation(
         || request.retained_fingerprint == request.polling_fingerprint
         || options.timeout.is_zero()
         || options.timeout > Duration::from_secs(120)
+        || options
+            .preparation_timeout
+            .is_some_and(|limit| limit.is_zero() || limit > Duration::from_secs(360))
+        || options.polling_wait > 25
         || options.approval_ttl.is_zero()
         || options.approval_ttl > Duration::from_secs(300)
         || options.max_age.is_some_and(|age| age > 86400)
     {
         return Err(rejected("invalid_request_or_bounds"));
     }
+    let budget = options.preparation_timeout.unwrap_or(options.timeout * 3);
+    let deadline = tokio::time::Instant::now() + budget;
+    let result = tokio::time::timeout_at(
+        deadline,
+        prepare_within_budget(client, store, request, options),
+    )
+    .await
+    .unwrap_or_else(|_| Err(operation_failure("preparation", timeout_cause())));
+    // Synchronous canonicalization cannot be preempted by Tokio's timer. Do not
+    // return a successful preparation if validation finished after the deadline.
+    if result.is_ok() && tokio::time::Instant::now() >= deadline {
+        return Err(operation_failure("preparation", timeout_cause()));
+    }
+    result
+}
+async fn prepare_within_budget(
+    client: &Client,
+    store: Arc<dyn IngressStore>,
+    request: TimestampReconciliationRequest,
+    options: TimestampReconciliationOptions,
+) -> Result<PreparedTimestampReconciliation> {
     let me = bounded(
         options.timeout,
         "identity",
@@ -165,7 +200,7 @@ pub async fn prepare_timestamp_reconciliation(
         "polling",
         crate::client::single_attempt(client.get_events(
             Some(request.event_id - 1),
-            Some(0),
+            Some(options.polling_wait),
             options.max_age,
         )),
     )
@@ -425,36 +460,36 @@ pub(super) async fn bounded<T>(
 ) -> Result<T> {
     tokio::time::timeout(timeout, future)
         .await
-        .unwrap_or_else(|_| {
-            Err(YappinError::Config(
-                "reconciliation operation timed out; inspect store before retrying".into(),
-            ))
-        })
-        .map_err(|cause| {
-            YappinError::Remote(RemoteError {
-                kind: "timestamp_reconciliation".into(),
-                message: "reconciliation read or durable commit failed".into(),
-                status: cause.status_code(),
-                retry_after: cause.retry_after().map(|d| d.as_secs_f64()),
-                details: BTreeMap::from([
-                    ("phase".into(), phase.into()),
-                    ("source".into(), cause.to_json()),
-                    (
-                        "outcome".into(),
-                        if matches!(phase, "approval" | "confirmation") {
-                            "unknown"
-                        } else {
-                            "not_applied"
-                        }
-                        .into(),
-                    ),
-                    (
-                        "retry_safety".into(),
-                        "inspect_store_do_not_replay_workflow".into(),
-                    ),
-                ]),
-            })
-        })
+        .unwrap_or_else(|_| Err(timeout_cause()))
+        .map_err(|cause| operation_failure(phase, cause))
+}
+fn timeout_cause() -> YappinError {
+    YappinError::Config("reconciliation operation timed out; inspect store before retrying".into())
+}
+fn operation_failure(phase: &str, cause: YappinError) -> YappinError {
+    YappinError::Remote(RemoteError {
+        kind: "timestamp_reconciliation".into(),
+        message: "reconciliation read or durable commit failed".into(),
+        status: cause.status_code(),
+        retry_after: cause.retry_after().map(|d| d.as_secs_f64()),
+        details: BTreeMap::from([
+            ("phase".into(), phase.into()),
+            ("source".into(), cause.to_json()),
+            (
+                "outcome".into(),
+                if matches!(phase, "approval" | "confirmation") {
+                    "unknown"
+                } else {
+                    "not_applied"
+                }
+                .into(),
+            ),
+            (
+                "retry_safety".into(),
+                "inspect_store_do_not_replay_workflow".into(),
+            ),
+        ]),
+    })
 }
 
 impl EventIngress {

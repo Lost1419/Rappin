@@ -48,12 +48,19 @@ async fn approve_one(
   the authenticated bot/event and two expected lowercase SHA-256 fingerprints.
 - `TimestampReconciliationOptions` bounds each operation (default 10 seconds,
   maximum 120), preparation lifetime (default/maximum 300 seconds) and polling
-  `max_age` (default 86400; `None` omits the filter).
+  `max_age` (default 86400; `None` omits the filter). `polling_wait` defaults to **1
+  second** and accepts 0–25. A zero-wait snapshot can omit available historical
+  events, so an empty result does not establish expiry. `preparation_timeout`
+  optionally caps the entire read-only preparation (maximum 360 seconds); `None`
+  derives three times the per-operation timeout, or 30 seconds by default.
 - `prepare_timestamp_reconciliation(&Client, Arc<dyn IngressStore>, request,
-  options)` reads the store, fresh `GET /me`, and `GET /events` with `wait=0` and
-  `after=event_id-1`. This is a stateless evidence probe, never a persisted cursor
+  options)` reads the store, fresh `GET /me`, and `GET /events` with `wait=1` by
+  default and `after=event_id-1`. This is a stateless evidence probe, never a persisted cursor
   change. Event 1 is unsupported because `after=0` bootstraps an empty snapshot.
-  Each API read uses a single client attempt. Dropping preparation has no effects.
+  Each API read uses a single client attempt, including transient HTTP errors.
+  There is no zero-wait fallback or retry. Per-operation and overall deadlines
+  cancel a pending poll even when its server wait is longer. Dropping preparation
+  has no effects; read failures/deadline exhaustion write no decisions or cursors.
 - `PreparedTimestampReconciliation::{evidence, approve}` exposes content-free
   evidence, then commits once with a bounded consumer audit reference (`OperationId`).
   Expired preparations and changed receipts, reports or checkpoints are rejected.
@@ -162,7 +169,7 @@ A durable Completed server-message event is blocked by a legacy outer timestamp
 conflict: Recovery -> Polling, /created_at Null -> String, no truncated differences.
 Retained fingerprint: <sha256>; observed polling fingerprint: <sha256>.
 Checkpoint: <cursor>; event: <id>; original completion and effects remain intact.
-A fresh GET /events probe after <id-1>, wait=0, max_age=<filter> returned <IDs>, last=<id>.
+A fresh GET /events probe after <id-1>, wait=<configured wait>, max_age=<filter> returned <IDs>, last=<id>.
 Please document event immutability/representation and retention, and provide an
 authoritative way to recover this exact event when polling no longer returns it.
 No handler replay, receipt rewrite or manual cursor advancement has been performed.
@@ -173,3 +180,9 @@ stale snapshots, ineligible receipts, approval rollback/lost responses, confirma
 rollback/lost responses/cancellation, failed checkpoints, restart, unchanged original
 completion and zero repeated handlers/mutations. The journal example also tests
 exclusive lease behavior, failed transactions and a durable reopen round trip.
+
+Offline probe coverage includes a zero-wait empty snapshot followed by a one-second
+wait returning the historical event, genuinely missing evidence, wrong authenticated
+bot/fingerprints, changed content, single-attempt HTTP failure, invalid bounds,
+per-operation/overall deadline exhaustion and cancellation. All leave approval and
+checkpoint state untouched.
