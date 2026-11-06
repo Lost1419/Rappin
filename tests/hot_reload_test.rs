@@ -51,7 +51,14 @@ fn main(){
         if line.contains("\"op\":\"shutdown\""){if !marker.is_empty(){std::fs::write(format!("{}.stopped",marker),"stopped").unwrap();}break;}
         assert!(line.contains("\"op\":\"invoke\""));
         if !marker.is_empty(){std::fs::write(marker,"started").unwrap();}
-        std::thread::sleep(std::time::Duration::from_millis(__DELAY__));
+        if !marker.is_empty(){
+            let release=format!("{}.release",marker);
+            while !std::path::Path::new(&release).exists(){
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }else{
+            std::thread::sleep(std::time::Duration::from_millis(__DELAY__));
+        }
         println!("{}",__API__);std::io::stdout().flush().unwrap();
         let result=lines.next().unwrap().unwrap();assert!(result.contains("\"op\":\"api_result\""));assert!(!result.contains("yb_private_fixture"));
         println!("{{\"op\":\"done\",\"error\":null}}");std::io::stdout().flush().unwrap();
@@ -128,6 +135,9 @@ async fn edited_rust_is_rebuilt_while_inflight_old_code_finishes_and_failed_buil
         !old.is_finished(),
         "old request must still be running during swap"
     );
+    tokio::fs::write(format!("{}.release", marker.display()), "release")
+        .await
+        .unwrap();
     assert_ne!(old_pid, reload.process_id().await);
     bot.process_event(event("added")).await.unwrap();
     assert!(requests
