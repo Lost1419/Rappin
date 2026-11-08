@@ -10,13 +10,37 @@ const MAX_REPORTS: usize = 1024;
 /// This is a consumer-approved exception, not a claim of platform equivalence.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+/// # Example
+///
+/// ```rust
+/// use rappin::TimestampReconciliationRequest;
+/// fn requested(bot: uuid::Uuid, event: u64, retained_sha256: String, polling_sha256: String) -> TimestampReconciliationRequest {
+///     // Digests must come from the exact retained record and freshly observed polling payload.
+///     TimestampReconciliationRequest::new(bot, event, retained_sha256, polling_sha256)
+/// }
+/// ```
 pub struct TimestampReconciliationRequest {
+    /// Authenticated bot namespace bound to this decision.
     pub bot_id: Uuid,
+    /// Immutable original event identity being assessed.
     pub event_id: u64,
+    /// Canonical digest of the exact retained event; not proof of its remote effects.
     pub retained_fingerprint: String,
+    /// Canonical digest of fresh polling evidence; absent only for explicit retained-execution coverage.
     pub polling_fingerprint: String,
 }
 impl TimestampReconciliationRequest {
+    /// Bind exact retained/fresh polling fingerprints; construction is not preparation, approval or equivalence proof.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::TimestampReconciliationRequest;
+    /// fn requested(bot: uuid::Uuid, event: u64, retained_sha256: String, polling_sha256: String) -> TimestampReconciliationRequest {
+    ///     // Digests must come from the exact retained record and freshly observed polling payload.
+    ///     TimestampReconciliationRequest::new(bot, event, retained_sha256, polling_sha256)
+    /// }
+    /// ```
     pub fn new(
         bot_id: Uuid,
         event_id: u64,
@@ -33,6 +57,16 @@ impl TimestampReconciliationRequest {
 }
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+/// Bounded read/expiry configuration; no field permits handler replay or direct cursor changes.
+///
+/// # Example
+///
+/// ```rust
+/// let mut options = rappin::TimestampReconciliationOptions::default();
+/// options.polling_wait = 2;
+/// options.preparation_timeout = Some(std::time::Duration::from_secs(30));
+/// assert_eq!(options.approval_ttl, std::time::Duration::from_secs(300));
+/// ```
 pub struct TimestampReconciliationOptions {
     /// Bounds each network/storage operation; cancellation never retries a write.
     pub timeout: Duration,
@@ -76,29 +110,67 @@ impl TimestampReconciliationOptions {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Durable audit transition; only normal polling can confirm an approved timestamp exception.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::TimestampReconciliationState;
+/// assert_ne!(TimestampReconciliationState::Prepared, TimestampReconciliationState::Confirmed);
+/// ```
 pub enum TimestampReconciliationState {
+    /// Read-only evidence proposal; no consumer approval is established.
     Prepared,
+    /// Consumer approval durably committed; matching normal polling is still required.
     Approved,
+    /// Normal polling matched the approved fingerprint-bound exception.
     Confirmed,
 }
 /// Separate durable audit record. Never replaces the original event or receipt.
 /// Consumers must retain this record while its receipt/conflicts remain loadable.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Client, IngressStore, TimestampReconciliationRequest, TimestampReconciliationOptions, PreparedTimestampReconciliation, Result};
+/// use std::sync::Arc;
+/// async fn assess(client: &Client, store: Arc<dyn IngressStore>, request: TimestampReconciliationRequest) -> Result<PreparedTimestampReconciliation> {
+///     // Stop intake and hold the consumer's exclusive store lease throughout this workflow.
+///     let prepared = rappin::prepare_timestamp_reconciliation(client, store, request, TimestampReconciliationOptions::default()).await?;
+///     println!("Proposed event {}", prepared.evidence().event_id);
+///     // Return evidence for application approval; preparation performs GETs and store reads only.
+///     Ok(prepared)
+/// }
+/// ```
 pub struct TimestampReconciliation {
+    /// SDK-generated unique audit decision ID.
     pub decision_id: Uuid,
+    /// Consumer-owned approval/audit key; it does not identify an API-idempotent mutation.
     pub approval_id: OperationId,
+    /// Authenticated bot namespace bound to this decision.
     pub bot_id: Uuid,
+    /// Immutable original event identity being assessed.
     pub event_id: u64,
+    /// Canonical digest of the exact retained event; not proof of its remote effects.
     pub retained_fingerprint: String,
+    /// Canonical digest of fresh polling evidence; absent only for explicit retained-execution coverage.
     pub polling_fingerprint: String,
+    /// Outer event timestamp observed in fresh polling evidence, when available.
     pub polling_created_at: DateTime<Utc>,
+    /// Fresh polling watermark observed during preparation; not a handler-completion claim.
     pub polling_watermark: u64,
+    /// Durable polling checkpoint captured during preparation for compare-and-swap validation.
     pub prepared_checkpoint: u64,
+    /// UTC time of read-only preparation.
     pub prepared_at: DateTime<Utc>,
+    /// UTC time of explicit consumer approval, when approved.
     pub approved_at: DateTime<Utc>,
+    /// UTC expiry of this preparation; approval after expiry is rejected.
     pub approval_deadline: DateTime<Utc>,
+    /// UTC time matching normal polling confirmed the approved exception.
     pub confirmed_at: Option<DateTime<Utc>>,
+    /// Prepared, Approved or Confirmed audit state.
     pub state: TimestampReconciliationState,
     /// Digest of the full retained receipt (including source and error state).
     pub receipt_fingerprint: String,
@@ -107,6 +179,19 @@ pub struct TimestampReconciliation {
 }
 /// Opaque, single-use preparation: GET /me + GET /events and store reads only.
 /// Approval policy belongs to the consumer. Dropping this value has no effects.
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Client, IngressStore, TimestampReconciliationRequest, TimestampReconciliationOptions, PreparedTimestampReconciliation, Result};
+/// use std::sync::Arc;
+/// async fn assess(client: &Client, store: Arc<dyn IngressStore>, request: TimestampReconciliationRequest) -> Result<PreparedTimestampReconciliation> {
+///     // Stop intake and hold the consumer's exclusive store lease throughout this workflow.
+///     let prepared = rappin::prepare_timestamp_reconciliation(client, store, request, TimestampReconciliationOptions::default()).await?;
+///     println!("Proposed event {}", prepared.evidence().event_id);
+///     // Return evidence for application approval; preparation performs GETs and store reads only.
+///     Ok(prepared)
+/// }
+/// ```
 pub struct PreparedTimestampReconciliation {
     decision: TimestampReconciliation,
     store: Arc<dyn IngressStore>,
@@ -116,12 +201,35 @@ pub struct PreparedTimestampReconciliation {
 impl PreparedTimestampReconciliation {
     /// Content-free evidence for the consumer's explicit approval decision.
     /// State is a proposal until `approve` successfully commits it.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Client, IngressStore, TimestampReconciliationRequest, TimestampReconciliationOptions, PreparedTimestampReconciliation, Result};
+    /// use std::sync::Arc;
+    /// async fn assess(client: &Client, store: Arc<dyn IngressStore>, request: TimestampReconciliationRequest) -> Result<PreparedTimestampReconciliation> {
+    ///     // Stop intake and hold the consumer's exclusive store lease throughout this workflow.
+    ///     let prepared = rappin::prepare_timestamp_reconciliation(client, store, request, TimestampReconciliationOptions::default()).await?;
+    ///     println!("Proposed event {}", prepared.evidence().event_id);
+    ///     // Return evidence for application approval; preparation performs GETs and store reads only.
+    ///     Ok(prepared)
+    /// }
+    /// ```
     pub fn evidence(&self) -> &TimestampReconciliation {
         &self.decision
     }
     /// Commit once through the store's atomic compare-and-swap hook. An error,
     /// timeout or cancellation may follow a durable commit: load before deciding
     /// what to do next. Never retry this write or a completed handler blindly.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{PreparedTimestampReconciliation, OperationId, TimestampReconciliation, Result};
+    /// async fn approve(prepared: PreparedTimestampReconciliation, consumer_approval: OperationId) -> Result<TimestampReconciliation> {
+    ///     // Caller established approval and holds the stopped consumer's exclusive lease.
+    ///     // If the commit errors or times out, load the decision before taking further action.
+    ///     prepared.approve(consumer_approval).await
+    /// }
+    /// ```
     pub async fn approve(mut self, approval_id: OperationId) -> Result<TimestampReconciliation> {
         if tokio::time::Instant::now() >= self.expires
             || Utc::now() > self.decision.approval_deadline
@@ -147,6 +255,19 @@ impl PreparedTimestampReconciliation {
 /// handlers, acknowledging interactions, or writing any event/checkpoint. Requires
 /// the runner to be stopped and the consumer's exclusive store lease to be held.
 /// Empty polling results, higher watermarks and nested timestamps are insufficient.
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Client, IngressStore, TimestampReconciliationRequest, TimestampReconciliationOptions, PreparedTimestampReconciliation, Result};
+/// use std::sync::Arc;
+/// async fn assess(client: &Client, store: Arc<dyn IngressStore>, request: TimestampReconciliationRequest) -> Result<PreparedTimestampReconciliation> {
+///     // Stop intake and hold the consumer's exclusive store lease throughout this workflow.
+///     let prepared = rappin::prepare_timestamp_reconciliation(client, store, request, TimestampReconciliationOptions::default()).await?;
+///     println!("Proposed event {}", prepared.evidence().event_id);
+///     // Return evidence for application approval; preparation performs GETs and store reads only.
+///     Ok(prepared)
+/// }
+/// ```
 pub async fn prepare_timestamp_reconciliation(
     client: &Client,
     store: Arc<dyn IngressStore>,
@@ -272,6 +393,15 @@ impl TimestampReconciliation {
     /// The transaction preserves original event/completion, reports and checkpoint.
     /// Repeated identical writes are accepted for storage-level idempotence only;
     /// the SDK never automatically resubmits an ambiguous commit.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{TimestampReconciliation, IngressRecovery, Result};
+    /// fn validate_in_transaction(decision: &TimestampReconciliation, transaction_snapshot: &IngressRecovery) -> Result<()> {
+    ///     // The store must write atomically in this SAME transaction after validation.
+    ///     decision.validate_write(transaction_snapshot)
+    /// }
+    /// ```
     pub fn validate_write(&self, current: &IngressRecovery) -> Result<()> {
         if self.state == TimestampReconciliationState::Prepared {
             return Err(rejected("approval_required"));

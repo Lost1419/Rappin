@@ -30,7 +30,17 @@ struct Connection {
 
 /// Rust handler context inside a worker. Authenticated JSON API requests go through the parent.
 #[derive(Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::hot_reload::WorkerCog;
+/// let worker = WorkerCog::new("utilities")
+///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await })
+///     .button("confirm:", |ctx| async move { ctx.ephemeral("Confirmed").await });
+/// // Reserve stdout for IPC. Call run only in the executable started by the parent.
+/// ```
 pub struct WorkerContext {
+    /// Original parent-supplied handler input; operation identity is separate metadata, not a replacement message ID.
     pub event: CogEvent,
     connection: Arc<Mutex<Connection>>,
     active: Arc<AtomicBool>,
@@ -38,10 +48,27 @@ pub struct WorkerContext {
 }
 impl WorkerContext {
     /// Consumer operation key supplied by the parent, separate from CogEvent identity.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerContext;
+    /// fn inspect(ctx: &WorkerContext) {
+    ///     let journal_key = ctx.operation_id();
+    ///     eprintln!("Operation: {journal_key:?}");
+    /// }
+    /// ```
     pub fn operation_id(&self) -> Option<&crate::OperationId> {
         self.operation_id.as_ref()
     }
 
+    /// Parse and finish a FromArgs argument cursor; invalid/extra tokens return typed command errors.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Result, hot_reload::WorkerContext};
+    /// fn no_arguments(ctx: &WorkerContext) -> Result<()> { ctx.parse::<()>() }
+    /// ```
     pub fn parse<A: crate::commands::FromArgs>(&self) -> Result<A> {
         let mut args = crate::commands::Arguments::new(self.args())?;
         let value = A::parse(&mut args)?;
@@ -91,6 +118,18 @@ impl WorkerContext {
             _ => Err(protocol::protocol_error()),
         }
     }
+    /// Register a bounded parent-owned event waiter; timeout/loss remain structured errors.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, collectors::EventFilter, hot_reload::WorkerContext};
+    /// async fn wait(ctx: &WorkerContext, filter: EventFilter) -> Result<()> {
+    ///     let event = ctx.wait_for_event(filter, std::time::Duration::from_secs(10)).await?;
+    ///     eprintln!("Collected {}", event.id);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn wait_for_event(
         &self,
         filter: crate::collectors::EventFilter,
@@ -99,6 +138,16 @@ impl WorkerContext {
         self.wait_request(filter, timeout, None).await
     }
     /// The parent registers the waiter before posting the prompt, preventing fast-answer races.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::WorkerContext};
+    /// async fn ask(ctx: &WorkerContext) -> Result<()> {
+    ///     let answer = ctx.prompt_for_reply("Your choice?", std::time::Duration::from_secs(30)).await?;
+    ///     eprintln!("Collected message {}", answer.id);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn prompt_for_reply(
         &self,
         prompt: impl Into<String>,
@@ -139,25 +188,86 @@ impl WorkerContext {
             Err(YappinError::validation("ui_api","worker UI callbacks require WorkerCog::ui_api() or on_ui_interaction and a protocol v7 parent"))
         }
     }
+    /// Borrow extended select/modal/command values for a UI listener event.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerContext;
+    /// fn inspect(ctx: &WorkerContext) {
+    ///     if let Some(event) = ctx.ui_interaction() { eprintln!("UI kind: {:?}", event.interaction.kind); }
+    /// }
+    /// ```
     pub fn ui_interaction(&self) -> Option<&crate::UiInteraction> {
         match &self.event {
             CogEvent::UiInteraction { event } => Some(event),
             _ => None,
         }
     }
+    /// Borrow explicit raw command arguments; other event kinds may supply no arguments.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerContext;
+    /// fn inspect(ctx: &WorkerContext) {
+    ///     let text = ctx.args();
+    ///     eprintln!("Argument bytes: {}", text.len());
+    /// }
+    /// ```
     pub fn args(&self) -> &str {
         self.event.args()
     }
+    /// Borrow parent-supplied command tokens, empty for non-command events.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerContext;
+    /// fn inspect(ctx: &WorkerContext) {
+    ///     let tokens = ctx.argv();
+    ///     eprintln!("Tokens: {}", tokens.len());
+    /// }
+    /// ```
     pub fn argv(&self) -> &[String] {
         self.event.argv()
     }
+    /// Original message/reaction/interaction actor, when available.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerContext;
+    /// fn inspect(ctx: &WorkerContext) {
+    ///     let requester = ctx.author_id();
+    /// }
+    /// ```
     pub fn author_id(&self) -> Option<uuid::Uuid> {
         self.event.author_id()
     }
+    /// Original event channel, when available.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerContext;
+    /// fn inspect(ctx: &WorkerContext) {
+    ///     let channel = ctx.channel_id();
+    /// }
+    /// ```
     pub fn channel_id(&self) -> Option<uuid::Uuid> {
         self.event.channel_id()
     }
     /// JSON-only API access; paths are checked by the parent Client. No bot token is exposed.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::WorkerContext};
+    /// async fn handle(ctx: &WorkerContext, channel: uuid::Uuid) -> Result<()> {
+    ///     let receipt = ctx.api_once("GET", "/me", None).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn api_once(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
         self.ensure_active()?;
         if !self.connection.lock().await.allow_single_attempt {
@@ -173,6 +283,17 @@ impl WorkerContext {
         })
         .await
     }
+    /// Request an origin-confined JSON operation through the authenticated parent; existing client request retries remain.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::WorkerContext};
+    /// async fn handle(ctx: &WorkerContext, channel: uuid::Uuid) -> Result<()> {
+    ///     let receipt = ctx.api("GET", "/me", None).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn api(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
         self.proxy(Wire::Api {
             method: method.into(),
@@ -285,6 +406,17 @@ impl WorkerContext {
             ))
         }
     }
+    /// Send a message to an explicitly selected channel using the parent API.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::WorkerContext};
+    /// async fn handle(ctx: &WorkerContext, channel: uuid::Uuid) -> Result<()> {
+    ///     let receipt = ctx.send(channel, rappin::CreateMessage::new("Notice")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn send(&self, channel: uuid::Uuid, message: CreateMessage) -> Result<Message> {
         let clean = message.for_request();
         let message = clean.as_ref();
@@ -298,12 +430,34 @@ impl WorkerContext {
             .await?;
         Ok(serde_json::from_value(response["message"].clone())?)
     }
+    /// Post in the original event channel without a reply reference.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::WorkerContext};
+    /// async fn handle(ctx: &WorkerContext, channel: uuid::Uuid) -> Result<()> {
+    ///     let receipt = ctx.say("Channel notice").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn say(&self, content: impl Into<String>) -> Result<Message> {
         let channel = self
             .channel_id()
             .ok_or_else(|| YappinError::Config("event has no channel".into()))?;
         self.send(channel, CreateMessage::new(content)).await
     }
+    /// Reply in the original message/interaction context.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::WorkerContext};
+    /// async fn handle(ctx: &WorkerContext, channel: uuid::Uuid) -> Result<()> {
+    ///     let receipt = ctx.reply("Reply to the original message").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn reply(&self, content: impl Into<String>) -> Result<()> {
         let content = content.into();
         if let Some(message) = self.event.message() {
@@ -317,6 +471,17 @@ impl WorkerContext {
             self.respond(InteractionCallback::reply(content)).await
         }
     }
+    /// Send a customized reply preserving the original message target.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::WorkerContext};
+    /// async fn handle(ctx: &WorkerContext, channel: uuid::Uuid) -> Result<()> {
+    ///     let receipt = ctx.reply_with(rappin::CreateMessage::new("Rich reply")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn reply_with(&self, mut message: CreateMessage) -> Result<Message> {
         let event = self
             .event
@@ -327,6 +492,17 @@ impl WorkerContext {
         }
         self.send(event.channel_id, message).await
     }
+    /// Submit a callback for the original interaction.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::WorkerContext};
+    /// async fn handle(ctx: &WorkerContext, channel: uuid::Uuid) -> Result<()> {
+    ///     let receipt = ctx.respond(rappin::InteractionCallback::ephemeral("Received")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn respond(&self, callback: InteractionCallback) -> Result<()> {
         callback.validate()?;
         let event = self
@@ -350,12 +526,45 @@ impl WorkerContext {
         .await?;
         Ok(())
     }
+    /// Send an ephemeral callback reply.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::WorkerContext};
+    /// async fn handle(ctx: &WorkerContext, channel: uuid::Uuid) -> Result<()> {
+    ///     let receipt = ctx.ephemeral("Only you can see this").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn ephemeral(&self, content: impl Into<String>) -> Result<()> {
         self.respond(InteractionCallback::ephemeral(content)).await
     }
+    /// Update the original component message.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::WorkerContext};
+    /// async fn handle(ctx: &WorkerContext, channel: uuid::Uuid) -> Result<()> {
+    ///     let receipt = ctx.update("Updated").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn update(&self, content: impl Into<String>) -> Result<()> {
         self.respond(InteractionCallback::update(content)).await
     }
+    /// Silently acknowledge the original interaction.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::WorkerContext};
+    /// async fn handle(ctx: &WorkerContext, channel: uuid::Uuid) -> Result<()> {
+    ///     let receipt = ctx.ack().await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn ack(&self) -> Result<()> {
         self.respond(InteractionCallback::ack()).await
     }
@@ -363,6 +572,15 @@ impl WorkerContext {
 
 /// A small executable cog. Keep stdout exclusively for the protocol; log with eprintln!.
 /// Handler futures must finish their API requests before returning (do not detach them).
+/// # Example
+///
+/// ```rust
+/// use rappin::hot_reload::WorkerCog;
+/// let worker = WorkerCog::new("utilities")
+///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await })
+///     .button("confirm:", |ctx| async move { ctx.ephemeral("Confirmed").await });
+/// // Reserve stdout for IPC. Call run only in the executable started by the parent.
+/// ```
 pub struct WorkerCog {
     manifest: Manifest,
     commands: HashMap<String, Handler>,
@@ -373,6 +591,14 @@ pub struct WorkerCog {
     operation_identity: bool,
 }
 impl WorkerCog {
+    /// Bind a FromArgs parser and help metadata to a single-name worker route.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerCog;
+    /// let worker = WorkerCog::new("utilities").command_typed("status", "Show status", |ctx, (): ()| async move { ctx.reply("Ready").await });
+    /// ```
     pub fn command_typed<A, F, Fut>(
         mut self,
         name: impl Into<String>,
@@ -401,6 +627,17 @@ impl WorkerCog {
             }
         })
     }
+    /// Create a worker definition without starting IPC or executing handlers.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerCog;
+    /// let worker = WorkerCog::new("utilities")
+    ///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await })
+    ///     .button("confirm:", |ctx| async move { ctx.ephemeral("Confirmed").await });
+    /// // Reserve stdout for IPC. Call run only in the executable started by the parent.
+    /// ```
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             manifest: Manifest {
@@ -420,6 +657,16 @@ impl WorkerCog {
     }
     /// Runtime argument schemas on workers use the same parser as native commands.
     /// Worker routes are single command names; use native commands for aliases/subcommands.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{CommandSchema, hot_reload::WorkerCog};
+    /// fn configured(schema: CommandSchema) -> rappin::Result<WorkerCog> {
+    ///     WorkerCog::new("utilities").dynamic_command(schema, |ctx, values| async move {
+    ///         ctx.reply(format!("Parsed {} arguments", values.len())).await
+    ///     })
+    /// }
+    /// ```
     pub fn dynamic_command<F, Fut>(
         mut self,
         schema: crate::CommandSchema,
@@ -451,6 +698,17 @@ impl WorkerCog {
         });
         Ok(self)
     }
+    /// Bind a single-name worker command using parent-authenticated context.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerCog;
+    /// let worker = WorkerCog::new("utilities")
+    ///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await })
+    ///     .button("confirm:", |ctx| async move { ctx.ephemeral("Confirmed").await });
+    /// // Reserve stdout for IPC. Call run only in the executable started by the parent.
+    /// ```
     pub fn command<F, Fut>(
         mut self,
         name: impl Into<String>,
@@ -474,6 +732,17 @@ impl WorkerCog {
         );
         self
     }
+    /// Bind a custom-ID prefix to a fallible interaction handler.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerCog;
+    /// let worker = WorkerCog::new("utilities")
+    ///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await })
+    ///     .button("confirm:", |ctx| async move { ctx.ephemeral("Confirmed").await });
+    /// // Reserve stdout for IPC. Call run only in the executable started by the parent.
+    /// ```
     pub fn button<F, Fut>(mut self, prefix: impl Into<String>, handler: F) -> Self
     where
         F: Fn(WorkerContext) -> Fut + Send + Sync + 'static,
@@ -490,6 +759,16 @@ impl WorkerCog {
         );
         self
     }
+    /// Register a fallible event listener; finish required work before returning, and keep stdout for IPC.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::{WorkerCog, Listener};
+    /// let worker = WorkerCog::new("observer").listen(Listener::ReactionAdd, |_ctx| async move {
+    ///     eprintln!("Reaction received"); Ok(())
+    /// });
+    /// ```
     pub fn listen<F, Fut>(mut self, kind: Listener, handler: F) -> Self
     where
         F: Fn(WorkerContext) -> Fut + Send + Sync + 'static,
@@ -508,6 +787,17 @@ impl WorkerCog {
     /// Opt-in fallible server-message listener, after command dispatch. Required
     /// I/O must finish before returning. Errors use the parent's message policy.
     /// Do not also register Listener::Message for the same worker.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{MessageDisposition, hot_reload::WorkerCog};
+    /// let worker = WorkerCog::new("greetings").on_message(|ctx| async move {
+    ///     if let Some(message) = ctx.event.message() {
+    ///         if message.content.as_deref() == Some("hello") { ctx.reply("Hello!").await?; }
+    ///     }
+    ///     Ok(MessageDisposition::Continue)
+    /// });
+    /// ```
     pub fn on_message<F, Fut>(mut self, handler: F) -> Self
     where
         F: Fn(WorkerContext) -> Fut + Send + Sync + 'static,
@@ -521,6 +811,15 @@ impl WorkerCog {
         self
     }
     /// Extended select/modal/command event values. Parent must opt into interactive_events.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{UiApiExt, InteractionCallbackType, UiMessageBody, hot_reload::WorkerCog};
+    /// let worker = WorkerCog::new("forms").on_ui_interaction(|ctx| async move {
+    ///     let event = ctx.ui_interaction().expect("UI listener event");
+    ///     ctx.respond_ui(&event.interaction, InteractionCallbackType::Ephemeral, &UiMessageBody::new("Received")).await
+    /// });
+    /// ```
     pub fn on_ui_interaction<F, Fut>(self, handler: F) -> Self
     where
         F: Fn(WorkerContext) -> Fut + Send + Sync + 'static,
@@ -529,21 +828,53 @@ impl WorkerCog {
         self.listen(Listener::UiInteraction, handler)
     }
     /// Require a protocol v7 parent for UI callbacks from existing button/command routes.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerCog;
+    /// let worker = WorkerCog::new("utilities").ui_api();
+    /// // Upgrade the parent before enabling the required protocol capability.
+    /// ```
     pub fn ui_api(mut self) -> Self {
         self.ui_api = true;
         self
     }
     /// Require parent protocol v6 before starting handlers that use request_once.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerCog;
+    /// let worker = WorkerCog::new("utilities").single_attempt_api();
+    /// // Upgrade the parent before enabling the required protocol capability.
+    /// ```
     pub fn single_attempt_api(mut self) -> Self {
         self.single_attempt_api = true;
         self
     }
     /// Opt into protocol v8 operation metadata. Upgrade the parent first.
     /// This does not enable single-attempt API or UI helpers implicitly.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerCog;
+    /// let worker = WorkerCog::new("utilities").operation_identity();
+    /// // Upgrade the parent before enabling the required protocol capability.
+    /// ```
     pub fn operation_identity(mut self) -> Self {
         self.operation_identity = true;
         self
     }
+    /// Serve the parent-owned stdio protocol until shutdown; execute only trusted worker code and await all required effects.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::WorkerCog};
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     WorkerCog::new("utilities").command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await }).run().await
+    /// }
+    /// ```
     pub async fn run(self) -> Result<()> {
         self.manifest.validate()?;
         let connection = Arc::new(Mutex::new(Connection {

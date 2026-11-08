@@ -12,7 +12,19 @@ use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, Web
 pub(crate) mod requests;
 pub use requests::{GatewayRequestConfig, GatewayRequestStatus, RequestTransport};
 
+/// Default public Yapin bot WebSocket endpoint.
 pub const DEFAULT_GATEWAY: &str = "wss://rt.yapper.website/bot";
+/// Manual gateway/polling event source; requires gateway. The consumer owns event processing and checkpoints.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{Client, gateway::{Gateway, DEFAULT_GATEWAY}};
+/// let gateway = Gateway::new(Client::new("unused-documentation-token"))
+///     .url(DEFAULT_GATEWAY).events(vec!["message".into()]).max_age(Some(900));
+/// let status = gateway.status();
+/// // No connection is opened until poll; default mode can fall back to polling.
+/// ```
 pub struct Gateway {
     client: Client,
     url: String,
@@ -31,6 +43,17 @@ pub struct Gateway {
     heartbeat_sent: Option<Instant>,
 }
 impl Gateway {
+    /// Configure a manual gateway from an authenticated client without connecting.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Client, gateway::{Gateway, DEFAULT_GATEWAY}};
+    /// let gateway = Gateway::new(Client::new("unused-documentation-token"))
+    ///     .url(DEFAULT_GATEWAY).events(vec!["message".into()]).max_age(Some(900));
+    /// let status = gateway.status();
+    /// // No connection is opened until poll; default mode can fall back to polling.
+    /// ```
     pub fn new(client: Client) -> Self {
         Self {
             client,
@@ -50,19 +73,62 @@ impl Gateway {
             heartbeat_sent: None,
         }
     }
+    /// Override the trusted WebSocket endpoint.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Client, gateway::{Gateway, DEFAULT_GATEWAY}};
+    /// let gateway = Gateway::new(Client::new("unused-documentation-token"))
+    ///     .url(DEFAULT_GATEWAY).events(vec!["message".into()]).max_age(Some(900));
+    /// let status = gateway.status();
+    /// // No connection is opened until poll; default mode can fall back to polling.
+    /// ```
     pub fn url(mut self, url: impl Into<String>) -> Self {
         self.url = url.into();
         self
     }
+    /// Select event kinds in the gateway handshake.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Client, gateway::{Gateway, DEFAULT_GATEWAY}};
+    /// let gateway = Gateway::new(Client::new("unused-documentation-token"))
+    ///     .url(DEFAULT_GATEWAY).events(vec!["message".into()]).max_age(Some(900));
+    /// let status = gateway.status();
+    /// // No connection is opened until poll; default mode can fall back to polling.
+    /// ```
     pub fn events(mut self, events: Vec<String>) -> Self {
         self.events = events;
         self
     }
+    /// Configure optional maximum event age in seconds.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Client, gateway::{Gateway, DEFAULT_GATEWAY}};
+    /// let gateway = Gateway::new(Client::new("unused-documentation-token"))
+    ///     .url(DEFAULT_GATEWAY).events(vec!["message".into()]).max_age(Some(900));
+    /// let status = gateway.status();
+    /// // No connection is opened until poll; default mode can fall back to polling.
+    /// ```
     pub fn max_age(mut self, age: Option<u32>) -> Self {
         self.max_age = age;
         self
     }
     /// Disable REST fallback. A connection failure is returned to the caller.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Client, gateway::{Gateway, DEFAULT_GATEWAY}};
+    /// let gateway = Gateway::new(Client::new("unused-documentation-token"))
+    ///     .url(DEFAULT_GATEWAY).events(vec!["message".into()]).max_age(Some(900));
+    /// let status = gateway.status();
+    /// // No connection is opened until poll; default mode can fall back to polling.
+    /// let gateway = gateway.gateway_only();
+    /// ```
     pub fn gateway_only(mut self) -> Self {
         self.allow_fallback = false;
         self.telemetry
@@ -77,9 +143,32 @@ impl Gateway {
         self.allow_fallback = false;
         self
     }
+    /// Read the latest transport/fallback snapshot.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Client, gateway::{Gateway, DEFAULT_GATEWAY}};
+    /// let gateway = Gateway::new(Client::new("unused-documentation-token"))
+    ///     .url(DEFAULT_GATEWAY).events(vec!["message".into()]).max_age(Some(900));
+    /// let status = gateway.status();
+    /// // No connection is opened until poll; default mode can fall back to polling.
+    /// ```
     pub fn status(&self) -> TransportStatus {
         self.telemetry.status()
     }
+    /// Subscribe to latest transport state; intermediate updates may coalesce.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Client, gateway::{Gateway, DEFAULT_GATEWAY}};
+    /// let gateway = Gateway::new(Client::new("unused-documentation-token"))
+    ///     .url(DEFAULT_GATEWAY).events(vec!["message".into()]).max_age(Some(900));
+    /// let status = gateway.status();
+    /// // No connection is opened until poll; default mode can fall back to polling.
+    /// let updates = gateway.subscribe_status();
+    /// ```
     pub fn subscribe_status(&self) -> tokio::sync::watch::Receiver<TransportStatus> {
         self.telemetry.subscribe()
     }
@@ -215,6 +304,17 @@ impl Gateway {
         }
     }
     /// Reconnect on the next call using the last *handled* ID. Beta denial falls back for 5 min.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{gateway::Gateway, Result};
+    /// async fn receive(gateway: &mut Gateway, committed: u64) -> Result<()> {
+    ///     let batch = gateway.poll(committed).await?;
+    ///     println!("Received {} events; watermark {}", batch.events.len(), batch.last);
+    ///     // Process ordered completion before persisting the checkpoint.
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn poll(&mut self, after: u64) -> Result<EventsResponse> {
         crate::security::endpoint(&self.url, true)?;
         if self

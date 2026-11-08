@@ -1,4 +1,12 @@
 use super::*;
+/// Borrow the pinned offline OpenAPI contract; it need not match the latest live spec.
+///
+/// # Example
+///
+/// ```rust
+/// let spec = rappin::capabilities::bundled_schema();
+/// assert_eq!(spec["openapi"], "3.1.0");
+/// ```
 pub fn bundled_schema() -> &'static Value {
     static SPEC: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
         serde_json::from_str(include_str!("../../docs/openapi.json")).expect("bundled OpenAPI JSON")
@@ -158,6 +166,15 @@ pub(super) fn body_schema(name: &str) -> Option<Value> {
 
 /// Validate the JSON Schema subset used by this catalogue. This is not a
 /// general-purpose validator for untrusted external schema dialects.
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::validate_schema;
+/// let schema = serde_json::json!({"type":"integer", "minimum":1, "maximum":100});
+/// validate_schema(&schema, &serde_json::json!(20))?;
+/// assert!(validate_schema(&schema, &serde_json::json!(101)).is_err());
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub fn validate_schema(schema: &Value, value: &Value) -> Result<()> {
     validate_at(schema, schema, value, "arguments", false, 0)
 }
@@ -334,6 +351,16 @@ fn validate_at(
     }
     Ok(())
 }
+/// Resolve one method/path operation from a supplied OpenAPI document.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{bundled_schema, endpoint_schema};
+/// let operation = endpoint_schema(bundled_schema(), "/me", "get")?;
+/// assert!(operation.is_object());
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub fn endpoint_schema(spec: &Value, path: &str, method: &str) -> Result<Value> {
     let method = method.to_ascii_lowercase();
     let item = spec["paths"]

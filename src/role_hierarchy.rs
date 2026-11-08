@@ -12,6 +12,14 @@ use uuid::Uuid;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Select conservative public evidence or an explicit application hierarchy rule.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::role_hierarchy::RoleHierarchyRules;
+/// let rules = RoleHierarchyRules::PublicApi;
+/// ```
 pub enum RoleHierarchyRules {
     /// Public documentation establishes bot position checks, but not arbitrary
     /// requester authority, ties or owner/administrator hierarchy exemptions.
@@ -24,23 +32,64 @@ pub enum RoleHierarchyRules {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
+/// Scoped hierarchy evidence; execution must reassess current access.
+///
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Api, role_hierarchy::RoleHierarchyPolicy, capabilities::Principal};
+/// use uuid::Uuid;
+/// async fn inspect<A: Api + ?Sized>(api: &A, server: Uuid, actor: Uuid, role: Uuid) -> rappin::Result<()> {
+///     let report = RoleHierarchyPolicy::new(api).assess(server, actor, role, Principal::Requester).await?;
+///     let answer = report.resolution();
+///     println!("{:?}: {}", answer.decision, answer.reason);
+///     // Assess the bot separately; Unknown does not authorize deletion.
+///     Ok(())
+/// }
+/// ```
 pub struct RoleHierarchyAssessment {
+    /// Server that supplied the evidence.
     pub server_id: Uuid,
+    /// Requester or bot assessed independently.
     pub actor_id: Uuid,
+    /// Role whose deletion is assessed.
     pub target_role_id: Uuid,
+    /// Allowed, Denied or Unknown; Unknown blocks validated execution.
     pub decision: AccessDecision,
+    /// Explanation of this evidence and selected hierarchy rule.
     pub reason: String,
+    /// Whether server evidence identifies this actor as owner.
     pub owner: bool,
+    /// Actor Administrator grant, or None if unavailable.
     pub administrator: Option<bool>,
+    /// Target role Administrator grant, or None if unavailable.
     pub target_administrator: Option<bool>,
+    /// Highest resolved assigned role position, when known.
     pub highest_assigned_position: Option<i32>,
+    /// Target role numeric position, when supplied.
     pub target_position: Option<i32>,
     /// Every role needed by this decision was resolved. This does not attest
     /// that the API exposed every other role in the server.
     pub required_roles_complete: bool,
+    /// Evidence or authoritative semantics unavailable for this decision.
     pub unavailable_facts: Vec<String>,
 }
 impl RoleHierarchyAssessment {
+    /// Convert this evidence into a policy answer without changing its decision.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Api, role_hierarchy::RoleHierarchyPolicy, capabilities::Principal};
+    /// use uuid::Uuid;
+    /// async fn inspect<A: Api + ?Sized>(api: &A, server: Uuid, actor: Uuid, role: Uuid) -> rappin::Result<()> {
+    ///     let report = RoleHierarchyPolicy::new(api).assess(server, actor, role, Principal::Requester).await?;
+    ///     let answer = report.resolution();
+    ///     println!("{:?}: {}", answer.decision, answer.reason);
+    ///     // Assess the bot separately; Unknown does not authorize deletion.
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn resolution(&self) -> CheckResolution {
         CheckResolution {
             decision: self.decision,
@@ -57,11 +106,35 @@ impl RoleHierarchyAssessment {
     }
 }
 
+/// Fresh-data hierarchy policy for native/worker Api implementations. Unknown facts remain unresolved.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{Api, role_hierarchy::RoleHierarchyPolicy};
+/// fn configured<A: Api + ?Sized>(api: &A) {
+///     let conservative = RoleHierarchyPolicy::new(api);
+///     let explicit_rule = RoleHierarchyPolicy::new(api).owner_admin_strict();
+///     // The explicit application rule is not a claim about undocumented platform exemptions.
+/// }
+/// ```
 pub struct RoleHierarchyPolicy<'a, A: Api + ?Sized> {
     api: &'a A,
     rules: RoleHierarchyRules,
 }
 impl<'a, A: Api + ?Sized> RoleHierarchyPolicy<'a, A> {
+    /// Construct a conservative policy using fresh public evidence.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Api, role_hierarchy::RoleHierarchyPolicy};
+    /// fn configured<A: Api + ?Sized>(api: &A) {
+    ///     let conservative = RoleHierarchyPolicy::new(api);
+    ///     let explicit_rule = RoleHierarchyPolicy::new(api).owner_admin_strict();
+    ///     // The explicit application rule is not a claim about undocumented platform exemptions.
+    /// }
+    /// ```
     pub fn new(api: &'a A) -> Self {
         Self {
             api,
@@ -70,11 +143,36 @@ impl<'a, A: Api + ?Sized> RoleHierarchyPolicy<'a, A> {
     }
     /// Opt in to the application's owner/admin/strict-position rule. This does
     /// not claim these undocumented exemptions/ties are platform semantics.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Api, role_hierarchy::RoleHierarchyPolicy};
+    /// fn configured<A: Api + ?Sized>(api: &A) {
+    ///     let conservative = RoleHierarchyPolicy::new(api);
+    ///     let explicit_rule = RoleHierarchyPolicy::new(api).owner_admin_strict();
+    ///     // The explicit application rule is not a claim about undocumented platform exemptions.
+    /// }
+    /// ```
     pub fn owner_admin_strict(mut self) -> Self {
         self.rules = RoleHierarchyRules::OwnerAdminStrict;
         self
     }
 
+    /// Fetch fresh scoped server, role and membership evidence; propagate sanitized structured API failures.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Api, role_hierarchy::RoleHierarchyPolicy, capabilities::Principal};
+    /// use uuid::Uuid;
+    /// async fn inspect<A: Api + ?Sized>(api: &A, server: Uuid, actor: Uuid, role: Uuid) -> rappin::Result<()> {
+    ///     let report = RoleHierarchyPolicy::new(api).assess(server, actor, role, Principal::Requester).await?;
+    ///     let answer = report.resolution();
+    ///     println!("{:?}: {}", answer.decision, answer.reason);
+    ///     // Assess the bot separately; Unknown does not authorize deletion.
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn assess(
         &self,
         server: Uuid,
@@ -354,6 +452,16 @@ impl<'a, A: Api + ?Sized> RoleHierarchyPolicy<'a, A> {
     /// Reassess immediately, force fresh SDK permission reads, then issue one
     /// DELETE attempt. Custom Api implementations must support request_once;
     /// workers must opt into WorkerCog::single_attempt_api().
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Api, capabilities::{ValidatedOperation, OperationContext, OperationPolicy}};
+    /// use rappin::role_hierarchy::{execute_role_deletion, RoleHierarchyPolicy};
+    /// async fn delete<A: Api + ?Sized>(api: &A, operation: &ValidatedOperation, context: &OperationContext, policy: &dyn OperationPolicy) -> rappin::Result<()> {
+    ///     let receipt = RoleHierarchyPolicy::new(api).execute_deletion(operation, context).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn execute_deletion(
         &self,
         operation: &ValidatedOperation,
@@ -388,6 +496,16 @@ impl<A: Api + ?Sized> OperationPolicy for RoleHierarchyPolicy<'_, A> {
 
 /// Compose an application policy with validated role deletion. Fresh permission
 /// checks precede exactly one DELETE attempt; assessment is not a reservation.
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Api, capabilities::{ValidatedOperation, OperationContext, OperationPolicy}};
+/// use rappin::role_hierarchy::{execute_role_deletion, RoleHierarchyPolicy};
+/// async fn delete<A: Api + ?Sized>(api: &A, operation: &ValidatedOperation, context: &OperationContext, policy: &dyn OperationPolicy) -> rappin::Result<()> {
+///     let receipt = execute_role_deletion(api, operation, context, policy).await?;
+///     Ok(())
+/// }
+/// ```
 pub async fn execute_role_deletion<A: Api + ?Sized>(
     api: &A,
     operation: &ValidatedOperation,

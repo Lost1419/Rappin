@@ -8,8 +8,22 @@ use chrono::{DateTime, Utc};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Client, IngressStore, EventRetirementRequest, EventRetirementOptions, PreparedEventRetirement, Result};
+/// use std::sync::Arc;
+/// async fn assess(client: &Client, store: Arc<dyn IngressStore>, request: EventRetirementRequest) -> Result<PreparedEventRetirement> {
+///     // Keep intake stopped and hold the same exclusive consumer/store lease.
+///     let prepared = rappin::prepare_event_retirement(client, store, request, EventRetirementOptions::default()).await?;
+///     println!("Original stage: {:?}", prepared.evidence().original_stage);
+///     Ok(prepared) // Consumer assessment/approval is a separate step.
+/// }
+/// ```
 pub enum EventRetirementAssessment {
+    /// Consumer independently established the original work was applied; the SDK does not verify that assertion.
     AttestedApplied,
+    /// Consumer independently established the original work was not applied; this still does not replay it.
     AttestedNotApplied,
     /// Deliberately resume without replay while preserving the unknown outcome.
     AcceptUnknown,
@@ -17,15 +31,47 @@ pub enum EventRetirementAssessment {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Durable retirement transition independent of the immutable execution outcome.
+///
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Client, IngressStore, EventRetirementRequest, EventRetirementOptions, PreparedEventRetirement, Result};
+/// use std::sync::Arc;
+/// async fn assess(client: &Client, store: Arc<dyn IngressStore>, request: EventRetirementRequest) -> Result<PreparedEventRetirement> {
+///     // Keep intake stopped and hold the same exclusive consumer/store lease.
+///     let prepared = rappin::prepare_event_retirement(client, store, request, EventRetirementOptions::default()).await?;
+///     println!("Original stage: {:?}", prepared.evidence().original_stage);
+///     Ok(prepared) // Consumer assessment/approval is a separate step.
+/// }
+/// ```
 pub enum EventRetirementState {
+    /// Read-only evidence proposal awaiting explicit consumer assessment.
     Prepared,
+    /// Durable consumer assessment committed; normal polling evidence is still required.
     Approved,
+    /// Normal polling confirmed evidence/coverage; original failed/unknown outcome remains preserved.
     PollingConfirmed,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Exact payload evidence or explicitly selected historical polling coverage.
+///
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Client, IngressStore, EventRetirementRequest, EventRetirementOptions, PreparedEventRetirement, Result};
+/// use std::sync::Arc;
+/// async fn assess(client: &Client, store: Arc<dyn IngressStore>, request: EventRetirementRequest) -> Result<PreparedEventRetirement> {
+///     // Keep intake stopped and hold the same exclusive consumer/store lease.
+///     let prepared = rappin::prepare_event_retirement(client, store, request, EventRetirementOptions::default()).await?;
+///     println!("Original stage: {:?}", prepared.evidence().original_stage);
+///     Ok(prepared) // Consumer assessment/approval is a separate step.
+/// }
+/// ```
 pub enum EventRetirementEvidence {
+    /// Require fresh target event identity, allowing only the documented missing outer-timestamp exception.
     ExactPollingEvent,
     /// Explicitly retire the retained attempt despite unavailable historical
     /// event data. Only AcceptUnknown is allowed. Coverage is not equivalence.
@@ -33,14 +79,47 @@ pub enum EventRetirementEvidence {
 }
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+/// Explicit immutable target/evidence selection; construction does not approve, retire or replay work.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::EventRetirementRequest;
+/// fn exact(bot: uuid::Uuid, event: u64, retained_sha256: String, polling_sha256: String) -> EventRetirementRequest {
+///     EventRetirementRequest::new(bot, event, retained_sha256, polling_sha256)
+/// }
+/// fn unavailable_history(bot: uuid::Uuid, event: u64, retained_sha256: String) -> EventRetirementRequest {
+///     // This mode requires AcceptUnknown during approval; coverage is not payload equivalence.
+///     EventRetirementRequest::retained_execution(bot, event, retained_sha256)
+/// }
+/// ```
 pub struct EventRetirementRequest {
+    /// Authenticated bot namespace bound to this decision.
     pub bot_id: Uuid,
+    /// Immutable original event identity being assessed.
     pub event_id: u64,
+    /// Canonical digest of the exact retained event; not proof of its remote effects.
     pub retained_fingerprint: String,
+    /// Canonical digest of fresh polling evidence; absent only for explicit retained-execution coverage.
     pub polling_fingerprint: Option<String>,
+    /// Exact event comparison or explicit retained-execution polling coverage; neither establishes remote write success.
     pub evidence: EventRetirementEvidence,
 }
 impl EventRetirementRequest {
+    /// Bind exact retained and polling fingerprints for read-only preparation.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::EventRetirementRequest;
+    /// fn exact(bot: uuid::Uuid, event: u64, retained_sha256: String, polling_sha256: String) -> EventRetirementRequest {
+    ///     EventRetirementRequest::new(bot, event, retained_sha256, polling_sha256)
+    /// }
+    /// fn unavailable_history(bot: uuid::Uuid, event: u64, retained_sha256: String) -> EventRetirementRequest {
+    ///     // This mode requires AcceptUnknown during approval; coverage is not payload equivalence.
+    ///     EventRetirementRequest::retained_execution(bot, event, retained_sha256)
+    /// }
+    /// ```
     pub fn new(
         bot_id: Uuid,
         event_id: u64,
@@ -57,6 +136,18 @@ impl EventRetirementRequest {
     }
     /// Select deliberately retained-work retirement, not payload reconciliation.
     /// The consumer must explicitly accept uncertainty during approval.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::EventRetirementRequest;
+    /// fn exact(bot: uuid::Uuid, event: u64, retained_sha256: String, polling_sha256: String) -> EventRetirementRequest {
+    ///     EventRetirementRequest::new(bot, event, retained_sha256, polling_sha256)
+    /// }
+    /// fn unavailable_history(bot: uuid::Uuid, event: u64, retained_sha256: String) -> EventRetirementRequest {
+    ///     // This mode requires AcceptUnknown during approval; coverage is not payload equivalence.
+    ///     EventRetirementRequest::retained_execution(bot, event, retained_sha256)
+    /// }
+    /// ```
     pub fn retained_execution(bot_id: Uuid, event_id: u64, retained: impl Into<String>) -> Self {
         Self {
             bot_id,
@@ -73,31 +164,80 @@ pub type EventRetirementOptions = TimestampReconciliationOptions;
 /// Immutable audit evidence, stored separately from the original event/error.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Client, IngressStore, EventRetirementRequest, EventRetirementOptions, PreparedEventRetirement, Result};
+/// use std::sync::Arc;
+/// async fn assess(client: &Client, store: Arc<dyn IngressStore>, request: EventRetirementRequest) -> Result<PreparedEventRetirement> {
+///     // Keep intake stopped and hold the same exclusive consumer/store lease.
+///     let prepared = rappin::prepare_event_retirement(client, store, request, EventRetirementOptions::default()).await?;
+///     println!("Original stage: {:?}", prepared.evidence().original_stage);
+///     Ok(prepared) // Consumer assessment/approval is a separate step.
+/// }
+/// ```
 pub struct EventRetirement {
+    /// SDK-generated unique audit decision ID.
     pub decision_id: Uuid,
+    /// Authenticated bot namespace bound to this decision.
     pub bot_id: Uuid,
+    /// Immutable original event identity being assessed.
     pub event_id: u64,
+    /// Canonical digest of the exact retained event; not proof of its remote effects.
     pub retained_fingerprint: String,
+    /// Canonical digest of fresh polling evidence; absent only for explicit retained-execution coverage.
     pub polling_fingerprint: Option<String>,
+    /// Evidence mode selected before preparation.
     pub evidence: EventRetirementEvidence,
+    /// Whether fresh preparation polling returned the target event itself.
     pub target_observed: bool,
+    /// Digest binding the full original receipt, including stage/source/error evidence.
     pub receipt_fingerprint: String,
+    /// Immutable Started or Failed stage being retired, not rewritten as successful.
     pub original_stage: ReceiptStage,
+    /// Outer event timestamp observed in fresh polling evidence, when available.
     pub polling_created_at: Option<DateTime<Utc>>,
+    /// Fresh polling watermark observed during preparation; not a handler-completion claim.
     pub polling_watermark: u64,
+    /// Durable polling checkpoint captured during preparation for compare-and-swap validation.
     pub prepared_checkpoint: u64,
+    /// UTC time of read-only preparation.
     pub prepared_at: DateTime<Utc>,
+    /// UTC expiry of this preparation; approval after expiry is rejected.
     pub approval_deadline: DateTime<Utc>,
+    /// UTC time of explicit consumer approval, when approved.
     pub approved_at: Option<DateTime<Utc>>,
+    /// UTC time normal polling confirmed the required evidence or coverage.
     pub polling_confirmed_at: Option<DateTime<Utc>>,
+    /// Normal polling coverage used to confirm retirement, when available.
     pub confirmation_watermark: Option<u64>,
+    /// Whether confirmation polling returned the target itself, rather than coverage alone.
     pub target_observed_at_confirmation: Option<bool>,
+    /// Prepared, Approved or PollingConfirmed audit transition.
     pub state: EventRetirementState,
+    /// Consumer attestation of applied/not-applied, or explicit acceptance of unknown outcome.
     pub assessment: Option<EventRetirementAssessment>,
+    /// Bounded key to consumer-owned approval evidence.
     pub approval_reference: Option<OperationId>,
+    /// Bounded key to consumer-owned reconciliation/outcome evidence.
     pub evidence_reference: Option<OperationId>,
+    /// Immutable original conflict reports retained separately from live diagnostic dispositions.
     pub conflicts: Vec<IngressConflict>,
 }
+/// Opaque one-use evidence proposal; dropping it performs no approval or replay.
+///
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Client, IngressStore, EventRetirementRequest, EventRetirementOptions, PreparedEventRetirement, Result};
+/// use std::sync::Arc;
+/// async fn assess(client: &Client, store: Arc<dyn IngressStore>, request: EventRetirementRequest) -> Result<PreparedEventRetirement> {
+///     // Keep intake stopped and hold the same exclusive consumer/store lease.
+///     let prepared = rappin::prepare_event_retirement(client, store, request, EventRetirementOptions::default()).await?;
+///     println!("Original stage: {:?}", prepared.evidence().original_stage);
+///     Ok(prepared) // Consumer assessment/approval is a separate step.
+/// }
+/// ```
 pub struct PreparedEventRetirement {
     decision: EventRetirement,
     store: Arc<dyn IngressStore>,
@@ -105,12 +245,36 @@ pub struct PreparedEventRetirement {
     timeout: Duration,
 }
 impl PreparedEventRetirement {
+    /// Borrow immutable proposal evidence for the consumer's assessment; this is not an approval.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Client, IngressStore, EventRetirementRequest, EventRetirementOptions, PreparedEventRetirement, Result};
+    /// use std::sync::Arc;
+    /// async fn assess(client: &Client, store: Arc<dyn IngressStore>, request: EventRetirementRequest) -> Result<PreparedEventRetirement> {
+    ///     // Keep intake stopped and hold the same exclusive consumer/store lease.
+    ///     let prepared = rappin::prepare_event_retirement(client, store, request, EventRetirementOptions::default()).await?;
+    ///     println!("Original stage: {:?}", prepared.evidence().original_stage);
+    ///     Ok(prepared) // Consumer assessment/approval is a separate step.
+    /// }
+    /// ```
     pub fn evidence(&self) -> &EventRetirement {
         &self.decision
     }
     /// Consumer approval only: no remote success is inferred. Hold the stopped
     /// runner's exclusive store lease. Never retry an ambiguous durable commit;
     /// reload its decision first. References point to consumer-owned audit data.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{PreparedEventRetirement, EventRetirementAssessment, EventRetirement, OperationId, Result};
+    /// async fn approve(prepared: PreparedEventRetirement, approval: OperationId, evidence: OperationId, assessment: EventRetirementAssessment) -> Result<EventRetirement> {
+    ///     // Consumer explicitly assessed the uncertain work and owns the stopped runner's lease.
+    ///     // An ambiguous durable write must be loaded before deciding further action.
+    ///     prepared.approve(approval, assessment, evidence).await
+    /// }
+    /// ```
     pub async fn approve(
         mut self,
         reference: OperationId,
@@ -154,6 +318,18 @@ impl PreparedEventRetirement {
 /// without claiming payload equivalence or remote success. No handlers, callbacks, mutation
 /// retries, approvals or checkpoint writes occur here. Keep intake stopped and
 /// hold the consumer's exclusive lease for preparation and approval.
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Client, IngressStore, EventRetirementRequest, EventRetirementOptions, PreparedEventRetirement, Result};
+/// use std::sync::Arc;
+/// async fn assess(client: &Client, store: Arc<dyn IngressStore>, request: EventRetirementRequest) -> Result<PreparedEventRetirement> {
+///     // Keep intake stopped and hold the same exclusive consumer/store lease.
+///     let prepared = rappin::prepare_event_retirement(client, store, request, EventRetirementOptions::default()).await?;
+///     println!("Original stage: {:?}", prepared.evidence().original_stage);
+///     Ok(prepared) // Consumer assessment/approval is a separate step.
+/// }
+/// ```
 pub async fn prepare_event_retirement(
     client: &Client,
     store: Arc<dyn IngressStore>,
@@ -317,6 +493,15 @@ impl EventRetirement {
     /// Call inside the same atomic transaction that writes/transitions the audit
     /// decision. Original event, Failed/Started state, error/partial receipts,
     /// conflicts and checkpoint are immutable. Archive them before pruning.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{EventRetirement, IngressRecovery, Result};
+    /// fn validate_in_transaction(decision: &EventRetirement, snapshot: &IngressRecovery) -> Result<()> {
+    ///     // Persist in this same atomic transaction only after successful validation.
+    ///     decision.validate_write(snapshot)
+    /// }
+    /// ```
     pub fn validate_write(&self, current: &IngressRecovery) -> Result<()> {
         self.validate_loaded(current)?;
         let prior = current
@@ -519,6 +704,14 @@ fn reject(reason: &str) -> YappinError {
     })
 }
 impl EventIngress {
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::EventIngress;
+    /// fn inspect(ingress: &EventIngress) {
+    ///     for decision in ingress.retirements() { println!("{} {:?}", decision.event_id, decision.state); }
+    /// }
+    /// ```
     pub fn retirements(&self) -> Vec<EventRetirement> {
         self.0
             .state

@@ -25,6 +25,15 @@ use watch::fingerprint;
 
 /// A separately compiled Rust binary (or example) containing WorkerCog::run().
 #[derive(Clone, Debug)]
+/// # Example
+///
+/// ```rust
+/// use rappin::hot_reload::WorkerProject;
+/// let mut project = WorkerProject::new("./worker/Cargo.toml", "utilities")
+///     .features(["hot-reload"]).package("worker").offline(true).watch_path("./shared");
+/// project.build_timeout = std::time::Duration::from_secs(300);
+/// // Builds, dependencies, macros and build scripts execute trusted code; this is not a sandbox.
+/// ```
 pub struct WorkerProject {
     manifest: PathBuf,
     target: String,
@@ -33,11 +42,25 @@ pub struct WorkerProject {
     package: Option<String>,
     offline: bool,
     watch_paths: Vec<PathBuf>,
+    /// Maximum Cargo build lifetime; defaults to five minutes.
     pub build_timeout: Duration,
+    /// Maximum worker startup/ready-handshake lifetime; defaults to ten seconds.
     pub startup_timeout: Duration,
+    /// Maximum invocation lifetime including queued time in this generation; defaults to 120 seconds.
     pub handler_timeout: Duration,
 }
 impl WorkerProject {
+    /// Select a Cargo binary target; no build starts until loading/reloading.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerProject;
+    /// let mut project = WorkerProject::new("./worker/Cargo.toml", "utilities")
+    ///     .features(["hot-reload"]).package("worker").offline(true).watch_path("./shared");
+    /// project.build_timeout = std::time::Duration::from_secs(300);
+    /// // Builds, dependencies, macros and build scripts execute trusted code; this is not a sandbox.
+    /// ```
     pub fn new(manifest: impl Into<PathBuf>, binary: impl Into<String>) -> Self {
         Self {
             manifest: manifest.into(),
@@ -52,25 +75,74 @@ impl WorkerProject {
             handler_timeout: Duration::from_secs(120),
         }
     }
+    /// Select a Cargo example target instead of a binary.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let project = rappin::hot_reload::WorkerProject::example("./Cargo.toml", "hot_cog_worker").features(["hot-reload"]);
+    /// ```
     pub fn example(manifest: impl Into<PathBuf>, name: impl Into<String>) -> Self {
         let mut spec = Self::new(manifest, name);
         spec.example = true;
         spec
     }
+    /// Select Cargo features for worker builds.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerProject;
+    /// let mut project = WorkerProject::new("./worker/Cargo.toml", "utilities")
+    ///     .features(["hot-reload"]).package("worker").offline(true).watch_path("./shared");
+    /// project.build_timeout = std::time::Duration::from_secs(300);
+    /// // Builds, dependencies, macros and build scripts execute trusted code; this is not a sandbox.
+    /// ```
     pub fn features(mut self, features: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.features = features.into_iter().map(Into::into).collect();
         self
     }
+    /// Select a workspace package for worker builds.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerProject;
+    /// let mut project = WorkerProject::new("./worker/Cargo.toml", "utilities")
+    ///     .features(["hot-reload"]).package("worker").offline(true).watch_path("./shared");
+    /// project.build_timeout = std::time::Duration::from_secs(300);
+    /// // Builds, dependencies, macros and build scripts execute trusted code; this is not a sandbox.
+    /// ```
     pub fn package(mut self, package: impl Into<String>) -> Self {
         self.package = Some(package.into());
         self
     }
+    /// Ask Cargo to use locally available dependencies; this does not sandbox builds.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerProject;
+    /// let mut project = WorkerProject::new("./worker/Cargo.toml", "utilities")
+    ///     .features(["hot-reload"]).package("worker").offline(true).watch_path("./shared");
+    /// project.build_timeout = std::time::Duration::from_secs(300);
+    /// // Builds, dependencies, macros and build scripts execute trusted code; this is not a sandbox.
+    /// ```
     pub fn offline(mut self, offline: bool) -> Self {
         self.offline = offline;
         self
     }
     /// Additional required source/config roots, including roots outside the
     /// manifest directory or inside normally skipped directories.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::WorkerProject;
+    /// let mut project = WorkerProject::new("./worker/Cargo.toml", "utilities")
+    ///     .features(["hot-reload"]).package("worker").offline(true).watch_path("./shared");
+    /// project.build_timeout = std::time::Duration::from_secs(300);
+    /// // Builds, dependencies, macros and build scripts execute trusted code; this is not a sandbox.
+    /// ```
     pub fn watch_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.watch_paths.push(path.into());
         self
@@ -1057,13 +1129,47 @@ struct ReloadState {
 }
 /// Cloneable controller. A failed build/handshake/registration leaves the old generation installed.
 #[derive(Clone)]
+/// # Example
+///
+/// ```no_run
+/// use rappin::{BotHandle, Result, hot_reload::{HotReload, WorkerProject}};
+/// async fn install(handle: BotHandle, project: WorkerProject) -> Result<HotReload> {
+///     // Only operator-selected trusted source/build paths may reach this API.
+///     let controller = HotReload::load(handle, project).await?;
+///     println!("{} generation {}", controller.name(), controller.generation());
+///     Ok(controller)
+/// }
+/// ```
 pub struct HotReload {
     inner: Arc<ReloadState>,
 }
 impl HotReload {
+    /// Build/start a candidate, validate/register its manifest and publish routes; existing active routes survive candidate failure.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, Result, hot_reload::{HotReload, WorkerProject}};
+    /// async fn install(handle: BotHandle, project: WorkerProject) -> Result<HotReload> {
+    ///     // Only operator-selected trusted source/build paths may reach this API.
+    ///     let controller = HotReload::load(handle, project).await?;
+    ///     println!("{} generation {}", controller.name(), controller.generation());
+    ///     Ok(controller)
+    /// }
+    /// ```
     pub async fn load(bot: BotHandle, project: WorkerProject) -> Result<Self> {
         Self::load_source(bot, Source::Project(project)).await
     }
+    /// Load an operator-selected trusted prebuilt worker; no Cargo build occurs.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, Result, hot_reload::HotReload};
+    /// async fn install(handle: BotHandle, executable: std::path::PathBuf) -> Result<HotReload> {
+    ///     HotReload::from_executable(handle, executable).await
+    /// }
+    /// ```
     pub async fn from_executable(bot: BotHandle, path: impl Into<PathBuf>) -> Result<Self> {
         Self::load_source(bot, Source::Executable(path.into())).await
     }
@@ -1150,15 +1256,59 @@ impl HotReload {
             }),
         })
     }
+    /// Stable registered cog name.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Result, hot_reload::HotReload};
+    /// fn use_controller(controller: &HotReload) -> Result<()> {
+    ///     println!("{}", controller.name());
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn name(&self) -> &str {
         &self.inner.name
     }
+    /// Currently published worker generation number.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Result, hot_reload::HotReload};
+    /// fn use_controller(controller: &HotReload) -> Result<()> {
+    ///     println!("Generation {}", controller.generation());
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn generation(&self) -> u64 {
         self.inner.number.load(Ordering::SeqCst)
     }
+    /// Process ID of the current generation, when still available.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Result, hot_reload::HotReload};
+    /// async fn use_controller(controller: &HotReload) -> Result<()> {
+    ///     println!("Process {:?}", controller.process_id().await);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn process_id(&self) -> Option<u32> {
         self.inner.current.read().await.as_ref().and_then(|g| g.pid)
     }
+    /// Advertised command definitions of the current generation.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Result, hot_reload::HotReload};
+    /// async fn use_controller(controller: &HotReload) -> Result<()> {
+    ///     println!("{:?}", controller.commands().await);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn commands(&self) -> Vec<Command> {
         self.inner
             .current
@@ -1168,6 +1318,17 @@ impl HotReload {
             .map(|g| g.manifest.commands.clone())
             .unwrap_or_default()
     }
+    /// Build/start/validate and publish a replacement while keeping active routes until successful publication.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::HotReload};
+    /// async fn use_controller(controller: &HotReload) -> Result<()> {
+    ///     controller.reload().await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn reload(&self) -> Result<()> {
         let _reload = self.inner.reload.lock().await;
         if self.inner.current.read().await.is_none() {
@@ -1214,6 +1375,15 @@ impl HotReload {
         Ok(())
     }
     /// Stop accepting new events; in-flight handlers retain their generation until done.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::HotReload};
+    /// async fn use_controller(controller: &HotReload) -> Result<()> {
+    ///     controller.unload().await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn unload(&self) -> Result<()> {
         let _reload = self.inner.reload.lock().await;
         if let Some(bot) = self.inner.bot.upgrade() {
@@ -1224,6 +1394,18 @@ impl HotReload {
     }
 
     /// Watch Rust/TOML sources and Cargo.lock. Keep the returned guard alive.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::{HotReload, WatchGuard}};
+    /// async fn start(controller: &HotReload) -> Result<WatchGuard> {
+    ///     let guard = controller.watch(std::time::Duration::from_secs(1)).await?;
+    ///     let status = guard.status();
+    ///     if let Some(error) = status.scan_error { eprintln!("Scan: {error}"); }
+    ///     if let Some(error) = status.reload_error { eprintln!("Candidate: {error}"); }
+    ///     Ok(guard) // Keep the guard alive; dropping it stops watching, not the active cog.
+    /// }
+    /// ```
     pub async fn watch(&self, interval: Duration) -> Result<WatchGuard> {
         if interval.is_zero() {
             return Err(YappinError::validation("interval", "must be positive"));
@@ -1276,21 +1458,74 @@ impl HotReload {
 /// A recovered scan clears only `scan_error`; a failed candidate remains visible
 /// until a changed candidate is successfully installed.
 #[derive(Clone, Debug, Default, PartialEq)]
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Result, hot_reload::{HotReload, WatchGuard}};
+/// async fn start(controller: &HotReload) -> Result<WatchGuard> {
+///     let guard = controller.watch(std::time::Duration::from_secs(1)).await?;
+///     let status = guard.status();
+///     if let Some(error) = status.scan_error { eprintln!("Scan: {error}"); }
+///     if let Some(error) = status.reload_error { eprintln!("Candidate: {error}"); }
+///     Ok(guard) // Keep the guard alive; dropping it stops watching, not the active cog.
+/// }
+/// ```
 pub struct WatchStatus {
+    /// Current fingerprint scan error; cleared when scanning recovers even if the digest is unchanged.
     pub scan_error: Option<String>,
+    /// Last failed candidate build/publication error, retained independently of scan recovery.
     pub reload_error: Option<String>,
+    /// Structured bounded candidate phase/diagnostics corresponding to reload_error.
     pub reload_failure: Option<crate::HotReloadFailure>,
 }
 /// Dropping the guard stops watching; the currently installed cog keeps running.
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Result, hot_reload::{HotReload, WatchGuard}};
+/// async fn start(controller: &HotReload) -> Result<WatchGuard> {
+///     let guard = controller.watch(std::time::Duration::from_secs(1)).await?;
+///     let status = guard.status();
+///     if let Some(error) = status.scan_error { eprintln!("Scan: {error}"); }
+///     if let Some(error) = status.reload_error { eprintln!("Candidate: {error}"); }
+///     Ok(guard) // Keep the guard alive; dropping it stops watching, not the active cog.
+/// }
+/// ```
 pub struct WatchGuard {
     task: tokio::task::JoinHandle<()>,
     status: tokio::sync::watch::Receiver<WatchStatus>,
 }
 impl WatchGuard {
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::{HotReload, WatchGuard}};
+    /// async fn start(controller: &HotReload) -> Result<WatchGuard> {
+    ///     let guard = controller.watch(std::time::Duration::from_secs(1)).await?;
+    ///     if let Some(error) = guard.last_error() { eprintln!("{error}"); }
+    ///     let status = guard.status();
+    ///     if let Some(error) = status.scan_error { eprintln!("Scan: {error}"); }
+    ///     if let Some(error) = status.reload_error { eprintln!("Candidate: {error}"); }
+    ///     Ok(guard) // Keep the guard alive; dropping it stops watching, not the active cog.
+    /// }
+    /// ```
     pub fn status(&self) -> WatchStatus {
         self.status.borrow().clone()
     }
     /// Most recent scan error, or the last failed candidate if scanning is healthy.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Result, hot_reload::{HotReload, WatchGuard}};
+    /// async fn start(controller: &HotReload) -> Result<WatchGuard> {
+    ///     let guard = controller.watch(std::time::Duration::from_secs(1)).await?;
+    ///     if let Some(error) = guard.last_error() { eprintln!("{error}"); }
+    ///     let status = guard.status();
+    ///     if let Some(error) = status.scan_error { eprintln!("Scan: {error}"); }
+    ///     if let Some(error) = status.reload_error { eprintln!("Candidate: {error}"); }
+    ///     Ok(guard) // Keep the guard alive; dropping it stops watching, not the active cog.
+    /// }
+    /// ```
     pub fn last_error(&self) -> Option<String> {
         let status = self.status.borrow();
         status

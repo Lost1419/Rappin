@@ -48,13 +48,13 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.28"
+rappin-rs = "0.1.29"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 Save this as `src/main.rs`:
 
-```rust
+```rust,no_run
 use rappin::prelude::*;
 
 #[tokio::main]
@@ -195,7 +195,7 @@ The default library build needs neither Node nor the CLI dependencies.
 
 ## Guides and examples
 
-- [API reference](https://docs.rs/rappin-rs): Rust types and client methods.
+- [API reference](https://docs.rs/rappin-rs): public types, client methods, and compiling usage examples. The reference includes all optional features; enable the relevant Cargo feature in your application.
 - [API support by release](docs/api-support.md): reviewed feature coverage, required features, known gaps, and the public API-audit skill.
 - [Rust bot guide](docs/rust-bots.md): typed commands, checks, collectors, and delivery semantics.
 - [Checked invocation](docs/checked-invocation.md): invoke installed commands from the original message context, with read-only preparation, consumer operation IDs, and explicit completion.

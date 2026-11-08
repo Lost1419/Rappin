@@ -1,3 +1,4 @@
+//! Bot configuration, scoped command routing, cog registration and ordered event processing.
 pub mod cog;
 pub mod context;
 mod failure;
@@ -69,9 +70,23 @@ struct CommandRegistry {
 /// An advisory plan, not a reservation. Installation revalidates under the
 /// registry update lock because other tasks can change routes after preflight.
 #[derive(Debug, Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::{BotHandle, Cog, Result};
+/// async fn assess(runner: &BotHandle, candidate: &dyn Cog) -> Result<()> {
+///     let plan = runner.preflight_cog(candidate).await?;
+///     println!("Advertised: {:?}; routes: {:?}", plan.advertised, plan.routes);
+///     // Advisory only: installation rechecks conflicts and publication can still fail.
+///     Ok(())
+/// }
+/// ```
 pub struct RegistrationPlan {
+    /// Root command definitions that would be published to Yapin.
     pub advertised: Vec<Command>,
+    /// Canonical local command and alias paths checked for conflicts.
     pub routes: Vec<String>,
+    /// Cog whose current routes may be replaced, if this is a replacement assessment.
     pub replacing_cog: Option<String>,
 }
 impl CommandRegistry {
@@ -190,18 +205,21 @@ struct ButtonDef {
 
 type CogFactoryFn = Arc<dyn Fn() -> Box<dyn Cog> + Send + Sync>;
 
+/// Legacy command failure observer; completion policy remains separate.
 pub type CommandErrorHandlerFn = Arc<
     dyn Fn(MessageContext, YappinError) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>>
         + Send
         + Sync,
 >;
 
+/// Legacy button failure observer; completion policy remains separate.
 pub type ButtonErrorHandlerFn = Arc<
     dyn Fn(InteractionContext, YappinError) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send>>
         + Send
         + Sync,
 >;
 
+/// Fallible command callback returning an explicit completion disposition.
 pub type CommandFailureHandlerFn = Arc<
     dyn Fn(
             MessageContext,
@@ -210,6 +228,7 @@ pub type CommandFailureHandlerFn = Arc<
         + Send
         + Sync,
 >;
+/// Fallible button callback returning an explicit completion disposition.
 pub type ButtonFailureHandlerFn = Arc<
     dyn Fn(
             InteractionContext,
@@ -219,6 +238,7 @@ pub type ButtonFailureHandlerFn = Arc<
         + Sync,
 >;
 
+/// Fallible shared gate before server-message command dispatch.
 pub type MessageGateFn = Arc<
     dyn Fn(
             MessageContext,
@@ -226,6 +246,7 @@ pub type MessageGateFn = Arc<
         + Send
         + Sync,
 >;
+/// Fallible gate/listener failure callback with explicit completion ownership.
 pub type MessageFailureHandlerFn = Arc<
     dyn Fn(
             MessageContext,
@@ -286,6 +307,16 @@ pub(crate) struct BotState {
 
 /// A cloneable handle to control the bot and dynamically manage cogs while running.
 #[derive(Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::Bot;
+/// let bot = Bot::builder("unused-documentation-token")
+///     .command("ping", "Check connectivity", |ctx| async move {
+///         ctx.reply("pong").await?; Ok(())
+///     }).build();
+/// // Call bot.run().await only after configuring a real token in the environment.
+/// ```
 pub struct BotHandle {
     pub(crate) inner: Arc<BotState>,
 }
@@ -302,6 +333,15 @@ impl WeakBotHandle {
 }
 
 impl BotHandle {
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotHandle;
+    /// async fn inspect(runner: &BotHandle) {
+    ///     let metadata = runner.command_info().await;
+    ///     println!("{metadata:?}");
+    /// }
+    /// ```
     pub async fn command_info(&self) -> Vec<crate::commands::CommandInfo> {
         let commands = self.inner.commands.read().await;
         let mut result: Vec<_> = commands
@@ -321,6 +361,15 @@ impl BotHandle {
         result.sort_by(|a, b| a.name.cmp(&b.name));
         result
     }
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotHandle;
+    /// async fn inspect(runner: &BotHandle) {
+    ///     let metadata = runner.help("status").await;
+    ///     println!("{metadata:?}");
+    /// }
+    /// ```
     pub async fn help(&self, path: &str) -> String {
         let info = self.command_info().await;
         if path.is_empty() {
@@ -340,22 +389,75 @@ impl BotHandle {
             .collect::<Vec<_>>()
             .join("\n\n")
     }
+    /// Read the latest availability snapshot; watch updates may coalesce.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotHandle;
+    /// fn inspect(runner: &BotHandle) {
+    ///     let status = runner.availability_status();
+    ///     println!("Availability: {:?}", status);
+    /// }
+    /// ```
     pub fn availability_status(&self) -> crate::AvailabilityStatus {
         self.inner.availability_telemetry.status()
     }
+    /// Subscribe to the latest availability state; use cumulative counters for totals.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotHandle;
+    /// fn inspect(runner: &BotHandle) {
+    ///     let updates = runner.subscribe_availability();
+    /// }
+    /// ```
     pub fn subscribe_availability(
         &self,
     ) -> tokio::sync::watch::Receiver<crate::AvailabilityStatus> {
         self.inner.availability_telemetry.subscribe()
     }
+    /// Read current active event transport and fallback state.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotHandle;
+    /// fn inspect(runner: &BotHandle) {
+    ///     let status = runner.transport_status();
+    ///     println!("Transport: {:?}", status);
+    /// }
+    /// ```
     pub fn transport_status(&self) -> crate::diagnostics::TransportStatus {
         self.inner.telemetry.status()
     }
+    /// Subscribe to latest transport state; updates may coalesce.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotHandle;
+    /// async fn observe(runner: &BotHandle) {
+    ///     let mut updates = runner.subscribe_transport();
+    ///     while updates.changed().await.is_ok() { println!("{:?}", *updates.borrow_and_update()); }
+    /// }
+    /// ```
     pub fn subscribe_transport(
         &self,
     ) -> tokio::sync::watch::Receiver<crate::diagnostics::TransportStatus> {
         self.inner.telemetry.subscribe()
     }
+    /// Access the event collector hub owned by this bot.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotHandle;
+    /// fn inspect(runner: &BotHandle) {
+    ///     let hub = runner.events();
+    /// }
+    /// ```
     pub fn events(&self) -> &crate::collectors::EventHub {
         self.client().events()
     }
@@ -367,29 +469,79 @@ impl BotHandle {
     }
     /// Returns a reference to the bot's REST client.
     /// True after intake closes and while the running pipeline drains accepted work.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotHandle;
+    /// fn status(runner: &BotHandle) -> bool { runner.is_draining() }
+    /// ```
     pub fn is_draining(&self) -> bool {
         self.inner.draining.load(Ordering::SeqCst)
     }
+    /// Borrow the authenticated client; application code remains responsible for operation authorization.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotHandle;
+    /// fn inspect(runner: &BotHandle) {
+    ///     let client = runner.client();
+    /// }
+    /// ```
     pub fn client(&self) -> &Client {
         &self.inner.client
     }
 
     /// Returns a reference to the client's internal in-memory cache.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotHandle;
+    /// fn inspect(runner: &BotHandle) {
+    ///     let cache = runner.cache();
+    /// }
+    /// ```
     pub fn cache(&self) -> &crate::cache::Cache {
         self.inner.client.cache()
     }
 
     /// Checks if a cog with the given name is currently loaded.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotHandle;
+    /// async fn inspect(runner: &BotHandle) {
+    ///     let metadata = runner.has_cog("status").await;
+    ///     println!("{metadata:?}");
+    /// }
+    /// ```
     pub async fn has_cog(&self, name: &str) -> bool {
         self.inner.cogs.read().await.contains_key(name)
     }
 
     /// Lists the names of all currently loaded cogs.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotHandle;
+    /// async fn inspect(runner: &BotHandle) {
+    ///     let metadata = runner.list_cogs().await;
+    ///     println!("{metadata:?}");
+    /// }
+    /// ```
     pub async fn list_cogs(&self) -> Vec<String> {
         self.inner.cogs.read().await.keys().cloned().collect()
     }
 
     /// Registers a factory function to instantiate a cog by name dynamically.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{BotHandle, CogBuilder, Result};
+    /// async fn install(runner: &BotHandle) {
+    ///     runner.register_cog_factory("status", || Box::new(CogBuilder::new("status").build())).await;
+    /// }
+    /// ```
     pub async fn register_cog_factory<F>(&self, name: impl Into<String>, factory: F)
     where
         F: Fn() -> Box<dyn Cog> + Send + Sync + 'static,
@@ -403,12 +555,31 @@ impl BotHandle {
     }
 
     /// Install a cog without removing its current version until preparation succeeds.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, Result};
+    /// async fn update(runner: &BotHandle, cog: impl rappin::Cog) -> Result<()> {
+    ///     let result = runner.add_cog(cog).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn add_cog<C: Cog>(&self, cog: C) -> Result<()> {
         self.install_cog(Arc::new(cog), true, None, true).await
     }
 
     /// Validate runtime definitions and ownership before an application action
     /// (such as a database write). Does not run checks, handlers, lifecycle hooks or HTTP.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{BotHandle, CommandInfo, Result};
+    /// async fn assess(runner: &BotHandle, commands: &[CommandInfo]) -> Result<()> {
+    ///     let plan = runner.preflight_commands(commands, None).await?;
+    ///     println!("{:?}", plan.routes);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn preflight_commands(
         &self,
         commands: &[crate::CommandInfo],
@@ -445,6 +616,17 @@ impl BotHandle {
 
     /// Check a cog's currently exposed definitions before its on_load hook.
     /// Cogs that build definitions in on_load are checked again before publication.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{BotHandle, Cog, Result};
+    /// async fn assess(runner: &BotHandle, candidate: &dyn Cog) -> Result<()> {
+    ///     let plan = runner.preflight_cog(candidate).await?;
+    ///     println!("Advertised: {:?}; routes: {:?}", plan.advertised, plan.routes);
+    ///     // Advisory only: installation rechecks conflicts and publication can still fail.
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn preflight_cog(&self, cog: &dyn Cog) -> Result<RegistrationPlan> {
         if cog.name().is_empty() {
             return Err(YappinError::validation("cog.name", "must not be empty"));
@@ -621,6 +803,15 @@ impl BotHandle {
     }
 
     /// Remove routing atomically. Existing handler snapshots may finish in flight.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, Result};
+    /// async fn update(runner: &BotHandle) -> Result<()> {
+    ///     let result = runner.remove_cog("status").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn remove_cog(&self, name: &str) -> Result<Option<Arc<dyn Cog>>> {
         let old = {
             let _update = self.inner.registry_update.lock().await;
@@ -653,11 +844,29 @@ impl BotHandle {
 
     /// Replace an instance built from code already linked into this executable.
     /// For edited Rust source, use the optional hot_reload module.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, Result};
+    /// async fn update(runner: &BotHandle, cog: impl rappin::Cog) -> Result<()> {
+    ///     let result = runner.reload_cog(cog).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn reload_cog<C: Cog>(&self, cog: C) -> Result<()> {
         self.install_cog(Arc::new(cog), true, None, true).await
     }
 
     /// Recreate a linked cog through its factory; this does not compile source files.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, Result};
+    /// async fn update(runner: &BotHandle) -> Result<()> {
+    ///     let result = runner.reload_cog_by_name("status").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn reload_cog_by_name(&self, name: &str) -> Result<()> {
         let factory = self
             .inner
@@ -687,6 +896,16 @@ impl BotHandle {
         }
     }
     /// Synchronize a consistent command snapshot without blocking normal dispatch.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, Result};
+    /// async fn publish(runner: &BotHandle) -> Result<()> {
+    ///     let advertised = runner.sync_commands().await?;
+    ///     println!("Published {} roots", advertised.len());
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn sync_commands(&self) -> Result<Vec<Command>> {
         let _update = self.inner.registry_update.lock().await;
         let commands = advertised_commands(&*self.inner.commands.read().await)?;
@@ -694,6 +913,14 @@ impl BotHandle {
     }
 
     /// Stops the bot's event loop.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotHandle;
+    /// fn inspect(runner: &BotHandle) {
+    ///     runner.stop();
+    /// }
+    /// ```
     pub fn stop(&self) {
         if let Some(ingress) = &self.inner.ingress {
             ingress.close();
@@ -705,6 +932,16 @@ impl BotHandle {
 }
 
 /// Builder for configuring and starting a [`Bot`].
+/// # Example
+///
+/// ```rust
+/// use rappin::Bot;
+/// let bot = Bot::builder("unused-documentation-token")
+///     .command("ping", "Check connectivity", |ctx| async move {
+///         ctx.reply("pong").await?; Ok(())
+///     }).build();
+/// // Call bot.run().await only after configuring a real token in the environment.
+/// ```
 pub struct BotBuilder {
     token: String,
     base_url: String,
@@ -747,6 +984,12 @@ pub struct BotBuilder {
 }
 
 impl BotBuilder {
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::BotBuilder;
+    /// let builder = BotBuilder::new("unused-documentation-token");
+    /// ```
     pub fn new(token: impl Into<String>) -> Self {
         Self {
             token: token.into(),
@@ -791,12 +1034,24 @@ impl BotBuilder {
     }
 
     /// Sets the API base URL.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").base_url("https://bots.yapper.website/api/bot/v1").build();
+    /// ```
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
         self.base_url = url.into();
         self
     }
 
     /// Adds a message command prefix (e.g. `!` or `yap!`).
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").prefix("?").build();
+    /// ```
     pub fn prefix(mut self, prefix: impl Into<String>) -> Self {
         let p = prefix.into();
         if !self.prefixes.contains(&p) {
@@ -804,6 +1059,16 @@ impl BotBuilder {
         }
         self
     }
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token")
+    ///     .prefixes_with(|ctx| async move {
+    ///         // Query an application-owned store by ctx.server_id here.
+    ///         Ok(vec!["?".to_owned()])
+    ///     }).build();
+    /// ```
     pub fn prefixes_with<F, Fut>(mut self, resolver: F) -> Self
     where
         F: Fn(MessageEvent) -> Fut + Send + Sync + 'static,
@@ -812,10 +1077,25 @@ impl BotBuilder {
         self.prefix_resolver = Some(Arc::new(move |event| Box::pin(resolver(event))));
         self
     }
+    /// Enable bot-mention command prefixes in addition to configured string prefixes.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").mention_prefix(true).build();
+    /// ```
     pub fn mention_prefix(mut self, enabled: bool) -> Self {
         self.mention_prefix = enabled;
         self
     }
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Bot, CommandSpec};
+    /// let spec = CommandSpec::<()>::new("status", "Show status");
+    /// let bot = Bot::builder("unused-documentation-token").command_spec(spec, |ctx, ()| async move { ctx.reply("Ready").await?; Ok(()) }).build();
+    /// ```
     pub fn command_spec<A, F, Fut>(
         mut self,
         spec: crate::commands::CommandSpec<A>,
@@ -831,6 +1111,12 @@ impl BotBuilder {
         }
         self
     }
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").help_command("help").build();
+    /// ```
     pub fn help_command(self, name: impl Into<String>) -> Self {
         self.command(name, "Show command usage", |ctx| async move {
             let text = ctx
@@ -850,6 +1136,13 @@ impl BotBuilder {
     }
 
     /// Installs an erased typed or runtime-schema command on the builder.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Bot, CommandSpec};
+    /// let spec = CommandSpec::<()>::new("status", "Show status");
+    /// let bot = Bot::builder("unused-documentation-token").registered_command(spec.bind(|ctx, ()| async move { ctx.reply("Ready").await?; Ok(()) })).build();
+    /// ```
     pub fn registered_command(mut self, command: crate::RegisteredCommand) -> Self {
         if let Err(error) = insert_registered(&mut self.commands, command, None) {
             self.definition_error = Some(error.to_string());
@@ -858,6 +1151,16 @@ impl BotBuilder {
     }
 
     /// Registers a command with a name, description, and async handler.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token")
+    ///     .command("ping", "Check connectivity", |ctx| async move {
+    ///         ctx.reply("pong").await?; Ok(())
+    ///     }).build();
+    /// // Call bot.run().await only after configuring a real token in the environment.
+    /// ```
     pub fn command<F, Fut>(
         mut self,
         name: impl Into<String>,
@@ -894,6 +1197,14 @@ impl BotBuilder {
     }
 
     /// Registers a command with an automatic rate limit cooldown.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Bot, cooldown::Cooldown};
+    /// let bot = Bot::builder("unused-documentation-token")
+    ///     .command_with_cooldown("ping", "Check connectivity", Cooldown::user(std::time::Duration::from_secs(5)),
+    ///         |ctx| async move { ctx.reply("pong").await?; Ok(()) }).build();
+    /// ```
     pub fn command_with_cooldown<F, Fut>(
         mut self,
         name: impl Into<String>,
@@ -945,12 +1256,24 @@ impl BotBuilder {
     }
 
     /// Enable extended interaction events for native/cog/worker UI hooks.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").interactive_events(true).build();
+    /// ```
     pub fn interactive_events(mut self, enabled: bool) -> Self {
         self.ui_events = enabled;
         self
     }
     /// Opt into slash command interaction events, leaving message commands unchanged.
     /// Register an on_command_interaction handler or cog UI hook to answer them.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").interaction_commands(true).build();
+    /// ```
     pub fn interaction_commands(mut self, enabled: bool) -> Self {
         self.interaction_commands = enabled;
         if enabled {
@@ -968,6 +1291,13 @@ impl BotBuilder {
             .insert(kind.into(), Arc::new(move |ctx| Box::pin(handler(ctx))));
         self
     }
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").interactive_events(true)
+    ///     .on_select(|ctx| async move { ctx.respond_ui(rappin::InteractionCallbackType::Ephemeral, &rappin::UiMessageBody::new("Received")).await }).build();
+    /// ```
     pub fn on_select<F, Fut>(self, handler: F) -> Self
     where
         F: Fn(crate::UiInteractionContext) -> Fut + Send + Sync + 'static,
@@ -975,6 +1305,13 @@ impl BotBuilder {
     {
         self.ui_handler("select", handler)
     }
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").interactive_events(true)
+    ///     .on_modal(|ctx| async move { ctx.respond_ui(rappin::InteractionCallbackType::Ephemeral, &rappin::UiMessageBody::new("Received")).await }).build();
+    /// ```
     pub fn on_modal<F, Fut>(self, handler: F) -> Self
     where
         F: Fn(crate::UiInteractionContext) -> Fut + Send + Sync + 'static,
@@ -982,6 +1319,13 @@ impl BotBuilder {
     {
         self.ui_handler("modal_submit", handler)
     }
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").interactive_events(true)
+    ///     .on_command_interaction(|ctx| async move { ctx.respond_ui(rappin::InteractionCallbackType::Ephemeral, &rappin::UiMessageBody::new("Received")).await }).build();
+    /// ```
     pub fn on_command_interaction<F, Fut>(self, handler: F) -> Self
     where
         F: Fn(crate::UiInteractionContext) -> Fut + Send + Sync + 'static,
@@ -991,6 +1335,13 @@ impl BotBuilder {
     }
 
     /// Registers a handler for button clicks whose `custom_id` starts with `prefix`.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token")
+    ///     .button("confirm:", |ctx| async move { ctx.ephemeral("Confirmed").await }).build();
+    /// ```
     pub fn button<F, Fut>(mut self, prefix: impl Into<String>, handler: F) -> Self
     where
         F: Fn(InteractionContext) -> Fut + Send + Sync + 'static,
@@ -1007,12 +1358,25 @@ impl BotBuilder {
     }
 
     /// Adds an initial cog to be loaded at startup.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Bot, CogBuilder};
+    /// let cog = CogBuilder::new("status").command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) }).build();
+    /// let bot = Bot::builder("unused-documentation-token").cog(cog).build();
+    /// ```
     pub fn cog(mut self, cog: impl Cog) -> Self {
         self.cogs.push(Box::new(cog));
         self
     }
 
     /// Attaches a custom [`EventHandler`].
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Bot, bot::NoopEventHandler};
+    /// let bot = Bot::builder("unused-documentation-token").event_handler(NoopEventHandler).build();
+    /// ```
     pub fn event_handler(mut self, handler: impl EventHandler) -> Self {
         self.event_handler = Some(Arc::new(handler));
         self
@@ -1030,6 +1394,14 @@ impl BotBuilder {
     ///     .on_command_error(|_ctx, err| async move {
     ///         eprintln!("Command failed: {err}");
     ///     });
+    /// ```
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token")
+    ///     .on_command_error(|_ctx, error| async move { tracing::error!("Handler failed: {error}"); }).build();
+    /// // Legacy callbacks observe failures; returning () does not mark unexpected work handled.
     /// ```
     pub fn on_command_error<F, Fut>(mut self, handler: F) -> Self
     where
@@ -1054,6 +1426,14 @@ impl BotBuilder {
     ///         eprintln!("Button failed: {err}");
     ///     });
     /// ```
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token")
+    ///     .on_button_error(|_ctx, error| async move { tracing::error!("Handler failed: {error}"); }).build();
+    /// // Legacy callbacks observe failures; returning () does not mark unexpected work handled.
+    /// ```
     pub fn on_button_error<F, Fut>(mut self, handler: F) -> Self
     where
         F: Fn(InteractionContext, YappinError) -> Fut + Send + Sync + 'static,
@@ -1067,6 +1447,16 @@ impl BotBuilder {
     /// Explicitly decide whether a failed invocation completed. Callback errors
     /// remain unprocessed and retain both the original and handling causes.
     /// Replaces `on_command_error`; the last registration selects the callback.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Bot, FailureDisposition};
+    /// let bot = Bot::builder("unused-documentation-token")
+    ///     .on_command_failure(|_ctx, failure| async move {
+    ///         tracing::error!("Incomplete handler: {}", failure.error);
+    ///         Ok(FailureDisposition::Stop)
+    ///     }).build();
+    /// ```
     pub fn on_command_failure<F, Fut>(mut self, handler: F) -> Self
     where
         F: Fn(MessageContext, HandlerFailure) -> Fut + Send + Sync + 'static,
@@ -1080,6 +1470,16 @@ impl BotBuilder {
     }
     /// Button counterpart of `on_command_failure`. `Handled` completes only the
     /// failed invocation; remaining matching handlers/listeners still run.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Bot, FailureDisposition};
+    /// let bot = Bot::builder("unused-documentation-token")
+    ///     .on_button_failure(|_ctx, failure| async move {
+    ///         tracing::error!("Incomplete handler: {}", failure.error);
+    ///         Ok(FailureDisposition::Stop)
+    ///     }).build();
+    /// ```
     pub fn on_button_failure<F, Fut>(mut self, handler: F) -> Self
     where
         F: Fn(InteractionContext, HandlerFailure) -> Fut + Send + Sync + 'static,
@@ -1093,18 +1493,36 @@ impl BotBuilder {
     }
 
     /// Whether to ignore messages authored by other bots (default `true`).
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").ignore_bots(true).build();
+    /// ```
     pub fn ignore_bots(mut self, ignore: bool) -> Self {
         self.ignore_bots = ignore;
         self
     }
 
     /// Whether to automatically sync registered commands to Yapin' on startup (default `true`).
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").sync_commands(false).build();
+    /// ```
     pub fn sync_commands(mut self, sync: bool) -> Self {
         self.sync_commands = sync;
         self
     }
 
     /// Whether to log status messages to console (default `true`).
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").log(false).build();
+    /// ```
     pub fn log(mut self, enable_log: bool) -> Self {
         self.log = enable_log;
         self
@@ -1113,6 +1531,16 @@ impl BotBuilder {
     /// Opt-in gate for server-message events, after bot/target filters and before
     /// prefix resolution, help replies, cog checks, commands and message listeners.
     /// The context has no resolved command/args yet. This does not filter EventHub.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Bot, MessageDisposition};
+    /// let bot = Bot::builder("unused-documentation-token")
+    ///     .message_gate(|ctx| async move {
+    ///         // Evaluate current application policy before prefix parsing or command checks.
+    ///         Ok(MessageDisposition::Continue)
+    ///     }).build();
+    /// ```
     pub fn message_gate<F, Fut>(mut self, gate: F) -> Self
     where
         F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
@@ -1126,6 +1554,16 @@ impl BotBuilder {
     /// Default replies to typed rejections; unexpected errors remain incomplete.
     /// Handled completes a gate rejection without dispatch, or a listener invocation
     /// before remaining listeners. Callback errors preserve both structured causes.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Bot, FailureDisposition};
+    /// let bot = Bot::builder("unused-documentation-token")
+    ///     .on_message_failure(|_ctx, failure| async move {
+    ///         tracing::error!("Incomplete handler: {}", failure.error);
+    ///         Ok(FailureDisposition::Stop)
+    ///     }).build();
+    /// ```
     pub fn on_message_failure<F, Fut>(mut self, handler: F) -> Self
     where
         F: Fn(MessageContext, MessageFailure) -> Fut + Send + Sync + 'static,
@@ -1138,21 +1576,47 @@ impl BotBuilder {
     }
 
     /// Resume after the ordered completed event prefix. A cursor file has one owner.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").cursor_file("./state/events.json").build();
+    /// ```
     pub fn cursor_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.cursor = Some(EventCursor::new(path));
         self
     }
     /// Opt in to bounded, cancellable startup/intake read recovery. This policy
     /// owns retry attempts; client retries are suppressed only inside these reads.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").availability_policy(rappin::AvailabilityPolicy::default()).build();
+    /// ```
     pub fn availability_policy(mut self, policy: crate::AvailabilityPolicy) -> Self {
         self.availability_policy = Some(policy);
         self
     }
+    /// Set the maximum event age in seconds requested during polling.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").max_event_age(900).build();
+    /// ```
     pub fn max_event_age(mut self, seconds: u32) -> Self {
         self.max_age = Some(seconds);
         self
     }
     /// Maximum concurrent events. Use 1 for strict event ordering.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").handler_concurrency(4).build();
+    /// ```
     pub fn handler_concurrency(mut self, limit: usize) -> Self {
         self.handler_concurrency = limit.clamp(1, 100);
         self
@@ -1160,11 +1624,26 @@ impl BotBuilder {
     /// Enable bounded shared webhook/polling admission. Existing intake remains
     /// unchanged unless explicitly enabled. GatewayOnly requires polling recovery
     /// and is therefore rejected with shared ingress.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").shared_ingress(rappin::IngressConfig::default()).build();
+    /// ```
     pub fn shared_ingress(mut self, config: IngressConfig) -> Self {
         self.ingress_config = Some(config);
         self
     }
     /// Application-owned durable receipts; enables shared ingress with defaults.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Bot, IngressStore};
+    /// use std::sync::Arc;
+    /// fn configured(storage: Arc<dyn IngressStore>) {
+    ///     let bot = Bot::builder("unused-documentation-token").ingress_store(storage).build();
+    /// }
+    /// ```
     pub fn ingress_store(mut self, store: Arc<dyn IngressStore>) -> Self {
         self.ingress_config.get_or_insert_with(Default::default);
         self.ingress_store = Some(store);
@@ -1175,6 +1654,12 @@ impl BotBuilder {
     /// gateway API responses/heartbeats stay alive until completion or this limit.
     /// None (the default) preserves legacy unbounded draining. Hard task abort is
     /// cancellation, not graceful draining; uncertain effects must be reconciled.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").drain_timeout(Some(std::time::Duration::from_secs(30))).build();
+    /// ```
     pub fn drain_timeout(mut self, timeout: Option<Duration>) -> Self {
         if timeout.is_some_and(|value| value.is_zero() || value > Duration::from_secs(3600)) {
             self.definition_error =
@@ -1185,54 +1670,125 @@ impl BotBuilder {
     }
     /// Bounds prepared intake and active batches. Shared polling may hold one
     /// additional raw response while awaiting admission, before any intake effects.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").pending_batches(4).build();
+    /// ```
     pub fn pending_batches(mut self, limit: usize) -> Self {
         self.pending_batches = limit.clamp(1, 32);
         self
     }
+    /// Choose polling, preferred gateway or gateway-only intake; non-polling modes require gateway support and configuration.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").transport_mode(rappin::diagnostics::TransportMode::Polling).build();
+    /// ```
     pub fn transport_mode(mut self, mode: crate::diagnostics::TransportMode) -> Self {
         self.transport_mode = mode;
         self
     }
+    /// Opt in to bounded in-memory member/role snapshots; authorization freshness remains explicit.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").lookup_cache(rappin::CachePolicy::new(128, std::time::Duration::from_secs(15))).build();
+    /// ```
     pub fn lookup_cache(mut self, policy: crate::cache::CachePolicy) -> Self {
         self.lookup_policy = policy;
         self
     }
     /// Use your own asynchronous member/role cache (e.g. Redis or SQL).
     /// The backend controls storage, expiration and failures. No database is required.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Bot, LookupCache};
+    /// use std::sync::Arc;
+    /// fn configured(storage: Arc<dyn LookupCache>) {
+    ///     let bot = Bot::builder("unused-documentation-token").lookup_cache_backend(storage).build();
+    /// }
+    /// ```
     pub fn lookup_cache_backend(mut self, backend: Arc<dyn crate::cache::LookupCache>) -> Self {
         self.lookup_backend = Some(backend);
         self
     }
     /// Configure known-host REST fallback; custom base URLs never fail over.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").api_fallback(true).build();
+    /// ```
     pub fn api_fallback(mut self, enabled: bool) -> Self {
         self.api_fallback = enabled;
         self
     }
     /// Opt-in early acknowledgement. Use a short delay (e.g. 250ms); already answered clicks are skipped.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").auto_ack_after(std::time::Duration::from_millis(500)).build();
+    /// ```
     pub fn auto_ack_after(mut self, after: Duration) -> Self {
         self.auto_ack_after = Some(after);
         self
     }
     /// Gateway automatically resumes and falls back to polling when unavailable.
     #[cfg(feature = "gateway")]
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").gateway(rappin::gateway::DEFAULT_GATEWAY).build();
+    /// ```
     pub fn gateway(mut self, url: impl Into<String>) -> Self {
         self.gateway_url = Some(url.into());
         self.transport_mode = crate::diagnostics::TransportMode::GatewayPreferred;
         self
     }
     #[cfg(feature = "gateway")]
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").gateway_only(rappin::gateway::DEFAULT_GATEWAY).build();
+    /// ```
     pub fn gateway_only(self, url: impl Into<String>) -> Self {
         self.gateway(url)
             .transport_mode(crate::diagnostics::TransportMode::GatewayOnly)
     }
 
     /// Total server-advised rate-limit waiting per API request, default 30 seconds.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token").max_retry_wait(std::time::Duration::from_secs(10)).build();
+    /// ```
     pub fn max_retry_wait(mut self, budget: Duration) -> Self {
         self.max_retry_wait = budget;
         self
     }
 
     /// Builds the configured [`Bot`].
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token")
+    ///     .command("ping", "Check connectivity", |ctx| async move {
+    ///         ctx.reply("pong").await?; Ok(())
+    ///     }).build();
+    /// // Call bot.run().await only after configuring a real token in the environment.
+    /// ```
     pub fn build(mut self) -> Bot {
         prepare_prefixes(&mut self.prefixes);
         let mut client = Client::builder(self.token)
@@ -1296,15 +1852,46 @@ impl BotBuilder {
 }
 
 /// The core bot runner that connects to Yapin', handles long-polling, and routes events.
+/// # Example
+///
+/// ```rust
+/// use rappin::Bot;
+/// let bot = Bot::builder("unused-documentation-token")
+///     .command("ping", "Check connectivity", |ctx| async move {
+///         ctx.reply("pong").await?; Ok(())
+///     }).build();
+/// // Call bot.run().await only after configuring a real token in the environment.
+/// ```
 pub struct Bot {
     handle: BotHandle,
     initial_cogs: Vec<Box<dyn Cog>>,
 }
 
 impl Bot {
+    /// Read the latest availability snapshot; watch updates may coalesce.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// fn inspect(runner: &Bot) {
+    ///     let status = runner.availability_status();
+    ///     println!("Availability: {:?}", status);
+    /// }
+    /// ```
     pub fn availability_status(&self) -> crate::AvailabilityStatus {
         self.handle.availability_status()
     }
+    /// Subscribe to the latest availability state; use cumulative counters for totals.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// fn inspect(runner: &Bot) {
+    ///     let updates = runner.subscribe_availability();
+    /// }
+    /// ```
     pub fn subscribe_availability(
         &self,
     ) -> tokio::sync::watch::Receiver<crate::AvailabilityStatus> {
@@ -1335,48 +1922,141 @@ impl Bot {
         }
     }
 
+    /// Read current active event transport and fallback state.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// fn inspect(runner: &Bot) {
+    ///     let status = runner.transport_status();
+    ///     println!("Transport: {:?}", status);
+    /// }
+    /// ```
     pub fn transport_status(&self) -> crate::diagnostics::TransportStatus {
         self.handle.transport_status()
     }
+    /// Access the event collector hub owned by this bot.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// fn inspect(runner: &Bot) {
+    ///     let hub = runner.events();
+    /// }
+    /// ```
     pub fn events(&self) -> &crate::collectors::EventHub {
         self.client().events()
     }
     /// Creates a [`BotBuilder`] for the specified bot token.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token")
+    ///     .command("ping", "Check connectivity", |ctx| async move {
+    ///         ctx.reply("pong").await?; Ok(())
+    ///     }).build();
+    /// // Call bot.run().await only after configuring a real token in the environment.
+    /// ```
     pub fn builder(token: impl Into<String>) -> BotBuilder {
         BotBuilder::new(token)
     }
 
     /// Returns a [`BotHandle`] for managing cogs and state at runtime.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// let bot = Bot::builder("unused-documentation-token")
+    ///     .command("ping", "Check connectivity", |ctx| async move {
+    ///         ctx.reply("pong").await?; Ok(())
+    ///     }).build();
+    /// // Call bot.run().await only after configuring a real token in the environment.
+    /// let handle = bot.handle();
+    /// ```
     pub fn handle(&self) -> BotHandle {
         self.handle.clone()
     }
 
     /// Returns a reference to the underlying [`Client`].
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// fn inspect(runner: &Bot) {
+    ///     let client = runner.client();
+    /// }
+    /// ```
     pub fn client(&self) -> &Client {
         self.handle.client()
     }
 
     /// Returns a reference to the bot's internal in-memory cache.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// fn inspect(runner: &Bot) {
+    ///     let cache = runner.cache();
+    /// }
+    /// ```
     pub fn cache(&self) -> &crate::cache::Cache {
         self.handle.cache()
     }
 
     /// Adds a cog to the bot. Can be called before or while the bot is running.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Bot, Result};
+    /// async fn update(runner: &Bot, cog: impl rappin::Cog) -> Result<()> {
+    ///     let result = runner.add_cog(cog).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn add_cog(&self, cog: impl Cog) -> Result<()> {
         self.handle.add_cog(cog).await
     }
 
     /// Removes a cog by name from the bot.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Bot, Result};
+    /// async fn update(runner: &Bot) -> Result<()> {
+    ///     let result = runner.remove_cog("status").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn remove_cog(&self, name: &str) -> Result<Option<Arc<dyn Cog>>> {
         self.handle.remove_cog(name).await
     }
 
     /// Reloads a cog.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Bot, Result};
+    /// async fn update(runner: &Bot, cog: impl rappin::Cog) -> Result<()> {
+    ///     let result = runner.reload_cog(cog).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn reload_cog(&self, cog: impl Cog) -> Result<()> {
         self.handle.reload_cog(cog).await
     }
 
     /// Registers a factory to instantiate a cog by name.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Bot, CogBuilder, Result};
+    /// async fn install(runner: &Bot) {
+    ///     runner.register_cog_factory("status", || Box::new(CogBuilder::new("status").build())).await;
+    /// }
+    /// ```
     pub async fn register_cog_factory<F>(&self, name: impl Into<String>, factory: F)
     where
         F: Fn() -> Box<dyn Cog> + Send + Sync + 'static,
@@ -1385,16 +2065,43 @@ impl Bot {
     }
 
     /// Reloads a cog by name using its registered factory.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Bot, Result};
+    /// async fn update(runner: &Bot) -> Result<()> {
+    ///     let result = runner.reload_cog_by_name("status").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn reload_cog_by_name(&self, name: &str) -> Result<()> {
         self.handle.reload_cog_by_name(name).await
     }
 
     /// Stops the bot long-polling loop gracefully.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Bot;
+    /// fn inspect(runner: &Bot) {
+    ///     runner.stop();
+    /// }
+    /// ```
     pub fn stop(&self) {
         self.handle.stop();
     }
 
     /// Runs the bot until stopped or Ctrl+C is received.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Bot, Result, YappinError};
+    /// #[tokio::main]
+    /// async fn main() -> Result<()> {
+    ///     let token = std::env::var("YAPPER_BOT_TOKEN").map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+    ///     Bot::builder(token).build().run().await
+    /// }
+    /// ```
     pub async fn run(self) -> Result<()> {
         struct Running(BotHandle);
         impl Drop for Running {
@@ -1514,6 +2221,16 @@ impl Bot {
     }
 
     /// Dispatch an already authenticated event from a custom transport.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Bot, Event, Result};
+    /// async fn verified_delivery(bot: &Bot, authenticated_event: Event) -> Result<()> {
+    ///     // The caller must authenticate delivery and own deduplication/checkpointing.
+    ///     // Prefer shared ingress for mixed webhook/polling intake.
+    ///     bot.process_event(authenticated_event).await
+    /// }
+    /// ```
     pub async fn process_event(&self, event: crate::models::Event) -> Result<()> {
         if let Some(error) = &self.handle.inner.definition_error {
             return Err(YappinError::Config(error.clone()));

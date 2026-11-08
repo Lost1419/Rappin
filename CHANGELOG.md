@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.29 — 2026-11-08
 
+- Document every public Rust item and add compiling usage examples across the client, command framework, workers, authorization and ingress recovery APIs. CI now rejects undocumented public items and rustdoc warnings.
+- Correct worker protocol compatibility and fallible-listener guidance, distinguish event-ID comparison from authenticated deduplication, and document the SDK's stricter emoji upload cap. Check the README and all guides as offline doctests, including minimal-feature gateway gating. Fix cross-guide links in rendered rustdoc.
 - Publish the API-audit skill with checksum-verified crate selection, dated source evidence and JSON/Markdown support reports. Add a 0.1.28 feature review that distinguishes typed, raw, validated, worker and CLI/MCP coverage; stale or unreviewed claims remain Unknown.
 - Standardize runnable examples and guides on `YAPPER_BOT_TOKEN`; missing credentials now fail with a setup error instead of passing a placeholder token to the API.
 - Add a minimal gateway-events example and document its `gateway` feature, polling fallback, and separation from the optional gateway API-request transport.

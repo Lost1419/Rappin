@@ -9,16 +9,45 @@ const MAX_DIFFERENCES: usize = 32;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Authenticated delivery source, or retained recovery evidence.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::IngressConflict;
+/// fn inspect(conflict: &IngressConflict) {
+///     println!("Event {}: {:?} vs {:?}", conflict.event_id, conflict.existing_source, conflict.incoming_source);
+///     for difference in &conflict.differences { println!("{}: {:?} -> {:?}", difference.path, difference.existing_type, difference.incoming_type); }
+///     let error = conflict.to_error(); // Retains bounded source/schema evidence.
+/// }
+/// ```
 pub enum IngressSource {
+    /// Authenticated webhook delivery.
     Webhook,
+    /// Authoritative authenticated polling response.
     Polling,
+    /// Authenticated gateway event delivery.
     Gateway,
+    /// Loaded retained record; original source may be supplied separately.
     Recovery,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
+/// Conservative conflict behavior; no policy replays a completed handler.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::IngressConflict;
+/// fn inspect(conflict: &IngressConflict) {
+///     println!("Event {}: {:?} vs {:?}", conflict.event_id, conflict.existing_source, conflict.incoming_source);
+///     for difference in &conflict.differences { println!("{}: {:?} -> {:?}", difference.path, difference.existing_type, difference.incoming_type); }
+///     let error = conflict.to_error(); // Retains bounded source/schema evidence.
+/// }
+/// ```
 pub enum IngressConflictPolicy {
     #[default]
+    /// Stop on contradictory event payloads; default policy.
     Stop,
     /// Retain a completed claim and require a matching polling delivery. Never
     /// executes either payload again or resolves a contradictory polling payload.
@@ -27,15 +56,32 @@ pub enum IngressConflictPolicy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Current resolution state of contradictory delivery evidence.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::IngressConflict;
+/// fn inspect(conflict: &IngressConflict) {
+///     println!("Event {}: {:?} vs {:?}", conflict.event_id, conflict.existing_source, conflict.incoming_source);
+///     for difference in &conflict.differences { println!("{}: {:?} -> {:?}", difference.path, difference.existing_type, difference.incoming_type); }
+///     let error = conflict.to_error(); // Retains bounded source/schema evidence.
+/// }
+/// ```
 pub enum ConflictDisposition {
+    /// Conflict remains a terminal processing/checkpoint barrier.
     Stop,
+    /// Completed original claim retained while matching polling evidence is awaited.
     AwaitingPolling,
+    /// Normal polling confirmed the retained payload without replay.
     PollingConfirmed,
+    /// Bounded evidence wait expired without resolving the barrier.
     TimedOut,
     /// Explicit durable approval still requires matching normal polling.
     AwaitingReconciliationPolling,
     /// Fingerprint-bound timestamp exception confirmed by normal polling.
     Reconciled,
+    /// Explicit retirement approval awaits authoritative normal polling coverage.
     AwaitingRetirementPolling,
     /// Consumer assessed and retired the original execution; not a success claim.
     Retired,
@@ -43,39 +89,107 @@ pub enum ConflictDisposition {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// JSON shape category; conflict reports omit payload values.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::IngressConflict;
+/// fn inspect(conflict: &IngressConflict) {
+///     println!("Event {}: {:?} vs {:?}", conflict.event_id, conflict.existing_source, conflict.incoming_source);
+///     for difference in &conflict.differences { println!("{}: {:?} -> {:?}", difference.path, difference.existing_type, difference.incoming_type); }
+///     let error = conflict.to_error(); // Retains bounded source/schema evidence.
+/// }
+/// ```
 pub enum PayloadType {
+    /// Field absent from the payload.
     Missing,
+    /// JSON null.
     Null,
+    /// JSON true or false.
     Boolean,
+    /// JSON number.
     Number,
+    /// JSON string, with its value omitted.
     String,
+    /// JSON array shape.
     Array,
+    /// JSON object shape.
     Object,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
+/// Content-free JSON-pointer/type difference between conflicting events.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::IngressConflict;
+/// fn inspect(conflict: &IngressConflict) {
+///     println!("Event {}: {:?} vs {:?}", conflict.event_id, conflict.existing_source, conflict.incoming_source);
+///     for difference in &conflict.differences { println!("{}: {:?} -> {:?}", difference.path, difference.existing_type, difference.incoming_type); }
+///     let error = conflict.to_error(); // Retains bounded source/schema evidence.
+/// }
+/// ```
 pub struct PayloadDifference {
     /// JSON pointer; unknown object keys are replaced by `*`. No values appear.
     pub path: String,
+    /// JSON type in the retained event, or Missing.
     pub existing_type: PayloadType,
+    /// JSON type in the competing event, or Missing.
     pub incoming_type: PayloadType,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
+/// Bounded contradictory-delivery evidence retained separately from immutable original processing receipts.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::IngressConflict;
+/// fn inspect(conflict: &IngressConflict) {
+///     println!("Event {}: {:?} vs {:?}", conflict.event_id, conflict.existing_source, conflict.incoming_source);
+///     for difference in &conflict.differences { println!("{}: {:?} -> {:?}", difference.path, difference.existing_type, difference.incoming_type); }
+///     let error = conflict.to_error(); // Retains bounded source/schema evidence.
+/// }
+/// ```
 pub struct IngressConflict {
+    /// Authenticated bot namespace.
     pub bot_id: Uuid,
+    /// Same global identity claimed by contradictory payloads.
     pub event_id: u64,
+    /// Source of retained evidence.
     pub existing_source: IngressSource,
+    /// Original persisted source when loaded through recovery.
     pub recovered_source: Option<IngressSource>,
+    /// Source of the competing delivery.
     pub incoming_source: IngressSource,
+    /// Canonical digest of the immutable retained event.
     pub existing_fingerprint: String,
+    /// Canonical digest of the competing event.
     pub incoming_fingerprint: String,
+    /// Original processing stage when known.
     pub retained_stage: Option<ReceiptStage>,
+    /// Resolution state; none of these states rewrites the original receipt.
     pub disposition: ConflictDisposition,
+    /// Bounded content-free JSON-pointer/type evidence.
     pub differences: Vec<PayloadDifference>,
+    /// Whether shape evidence omitted differences due to node/depth/count bounds.
     pub differences_truncated: bool,
 }
 impl IngressConflict {
+    /// Wrap a clone of this evidence as the original structured ingress conflict cause.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::IngressConflict;
+    /// fn inspect(conflict: &IngressConflict) {
+    ///     println!("Event {}: {:?} vs {:?}", conflict.event_id, conflict.existing_source, conflict.incoming_source);
+    ///     for difference in &conflict.differences { println!("{}: {:?} -> {:?}", difference.path, difference.existing_type, difference.incoming_type); }
+    ///     let error = conflict.to_error(); // Retains bounded source/schema evidence.
+    /// }
+    /// ```
     pub fn to_error(&self) -> YappinError {
         YappinError::IngressConflict {
             conflict: Box::new(self.clone()),

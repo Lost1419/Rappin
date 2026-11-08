@@ -7,7 +7,7 @@
 //! The `rappin` crate provides:
 //! - **Yapin API client**: Typed methods for common operations and a low-level request API for platform endpoints.
 //! - **Rich Message & Layout Builders**: Type-safe builders for `Embed` cards, `Button` rows, and Components V2 layouts (`Container`, `Section`, `TextDisplay`, etc.).
-//! - **Bot Framework & Event Dispatcher**: Ergonomic command routing, prefix support (`!`, `/`), button click handlers, event listeners, and resilient long-polling with exponential backoff and rate limit handling.
+//! - **Bot Framework & Event Dispatcher**: Command routing, configurable prefixes, interaction handlers, ordered checkpoints, and polling or optional gateway intake. Bounded availability retries are opt-in; incomplete handler work is never retried automatically.
 //! - **Modular Cogs System**: Add and replace cog instances at runtime. Optional `hot-reload` compiles and swaps edited Rust worker cogs while the main bot keeps running.
 //! - **Custom Lookup Caches**: Optional asynchronous member/role storage through `LookupCache`, including application-owned databases.
 //! - **In-Memory Cache Layer**: Thread-safe caching of bot profile, servers, and channels with zero network calls for repetitive lookups.
@@ -61,7 +61,9 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!     let client = Client::new("yb_your_token_here");
+//!     let token = std::env::var("YAPPER_BOT_TOKEN")
+//!         .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+//!     let client = Client::new(token);
 //!
 //!     let me = client.get_me().await?;
 //!     println!("Logged in as: {} ({})", me.username, me.id);

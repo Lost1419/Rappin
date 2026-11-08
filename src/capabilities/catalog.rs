@@ -1,16 +1,43 @@
 use super::*;
 #[derive(Debug, Clone, serde::Serialize)]
+/// Offline metadata shared by the Rust library, CLI and MCP surfaces.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
+/// let filter = CapabilityFilter {
+///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
+///     ..Default::default()
+/// };
+/// for operation in filtered_catalogue(&filter) {
+///     assert!(!operation.write);
+///     println!("{}: {}", operation.name, operation.description);
+///     // Discovery metadata is not authorization to execute.
+/// }
+/// ```
 pub struct Capability {
+    /// Stable operation identifier shared by library validation and tool discovery.
     pub name: &'static str,
+    /// Human-readable operation behavior.
     pub description: &'static str,
+    /// CLI command path corresponding to this operation.
     pub cli: &'static [&'static str],
+    /// Ordered argument schemas and required flags.
     pub arguments: Vec<OperationArgument>,
+    /// Whether execution can mutate remote state.
     pub write: bool,
+    /// Whether discovery marks the operation as potentially destructive.
     pub destructive: bool,
+    /// Whether the operation returns a bounded collection.
     pub collection: bool,
+    /// Resource/server binding that execution must establish.
     pub scope: OperationScope,
+    /// Separate requester and bot requirements.
     pub permissions: PermissionRequirements,
+    /// Execution surface and rollout restrictions.
     pub availability: Availability,
+    /// Family used for inventory filtering.
     pub domain: CapabilityDomain,
 }
 impl Capability {
@@ -37,10 +64,30 @@ impl Capability {
     }
 }
 #[derive(Debug, Clone, serde::Serialize)]
+/// Offline metadata shared by the Rust library, CLI and MCP surfaces.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
+/// let filter = CapabilityFilter {
+///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
+///     ..Default::default()
+/// };
+/// for operation in filtered_catalogue(&filter) {
+///     assert!(!operation.write);
+///     println!("{}: {}", operation.name, operation.description);
+///     // Discovery metadata is not authorization to execute.
+/// }
+/// ```
 pub struct OperationArgument {
+    /// Canonical JSON argument key.
     pub name: &'static str,
+    /// CLI flag name, if this argument is supplied as a flag.
     pub flag: Option<&'static str>,
+    /// Supported JSON Schema for this argument.
     pub schema: Value,
+    /// Whether the input object must contain this argument.
     pub required: bool,
 }
 struct Entry {

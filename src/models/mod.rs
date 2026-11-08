@@ -1,3 +1,4 @@
+//! Typed request/response/event payloads shared by the library, workers and capability bindings.
 pub mod channel;
 pub mod command;
 pub mod component;

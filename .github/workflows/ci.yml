@@ -60,8 +60,20 @@ jobs:
       - name: Check examples
         run: cargo check --examples
 
+      - name: Check public documentation
+        env:
+          RUSTDOCFLAGS: -D warnings -D missing_docs
+        run: cargo doc --locked --all-features --no-deps
+
       - name: Check documentation examples
-        run: cargo test --all-features --doc
+        run: cargo test --locked --all-features --doc
+
+      - name: Check minimal documentation examples
+        run: cargo test --locked --no-default-features --doc
+
+      - name: Check README and every guide
+        if: runner.os == 'Linux'
+        run: python3 scripts/check-guides.py
 
       - name: Check minimal library
         run: cargo check --no-default-features

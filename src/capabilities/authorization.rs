@@ -1,37 +1,94 @@
+//! Independent requester/bot assessment with explicit Denied and Unknown requirements.
 use super::*;
 use crate::{Api, ApiExt, Freshness, Permission, PermissionEvaluation, RemoteError};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Three-valued access decision; Unknown is never an implicit grant.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{AccessDecision, CheckResolution};
+/// assert_eq!(CheckResolution::allowed("Established by current evidence").decision, AccessDecision::Allowed);
+/// assert_eq!(CheckResolution::denied("Revoked").decision, AccessDecision::Denied);
+/// assert_eq!(CheckResolution::unknown("No authoritative effective access data").decision, AccessDecision::Unknown);
+/// ```
 pub enum AccessDecision {
+    /// Required evidence establishes access under the selected policy.
     Allowed,
+    /// Evidence establishes that a required condition is not satisfied.
     Denied,
+    /// Evidence or authoritative platform semantics are unavailable.
     Unknown,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Requester, bot or non-actor context being assessed.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{AccessDecision, CheckResolution};
+/// assert_eq!(CheckResolution::allowed("Established by current evidence").decision, AccessDecision::Allowed);
+/// assert_eq!(CheckResolution::denied("Revoked").decision, AccessDecision::Denied);
+/// assert_eq!(CheckResolution::unknown("No authoritative effective access data").decision, AccessDecision::Unknown);
+/// ```
 pub enum Principal {
+    /// Original requester, assessed independently from the bot.
     Requester,
+    /// Authenticated bot identity from /me.
     Bot,
+    /// Scope, availability or other non-actor requirement.
     Context,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Fact that generic server-wide permission evaluation cannot establish.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{AccessDecision, CheckResolution};
+/// assert_eq!(CheckResolution::allowed("Established by current evidence").decision, AccessDecision::Allowed);
+/// assert_eq!(CheckResolution::denied("Revoked").decision, AccessDecision::Denied);
+/// assert_eq!(CheckResolution::unknown("No authoritative effective access data").decision, AccessDecision::Unknown);
+/// ```
 pub enum ExternalCheck {
+    /// Effective channel access, independently for each principal.
     ChannelPermissions,
+    /// Platform-specific content restrictions beyond local payload validation.
     MessageContentRules,
+    /// Authority over a target role under known hierarchy rules.
     RoleHierarchy,
+    /// Whether the actor may grant the requested permission set.
     GrantablePermissions,
+    /// Authority to modify the specified resource override.
     OverrideAuthority,
+    /// Category belongs to the operation's bound server.
     CategoryScope,
+    /// Effective access to a destination or edited category.
     CategoryPermissions,
+    /// Scheduled-event destination belongs to the bound server.
     EventDestinationScope,
+    /// Trusted evidence of the endpoint's rollout/test-server eligibility.
     TestServerAvailability,
 }
 
 /// Host-derived identities, never arguments supplied by the model.
 #[derive(Debug, Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::{Freshness, capabilities::OperationContext};
+/// let server = uuid::Uuid::nil();
+/// let requester = uuid::Uuid::from_u128(1);
+/// let context = OperationContext::server(server, requester).freshness(Freshness::Refresh);
+/// assert_eq!(context.server_id(), server);
+/// assert_eq!(context.requester_id(), requester);
+/// // Derive identities from authenticated dispatch, never operation arguments.
+/// ```
 pub struct OperationContext {
     server_id: Uuid,
     requester_id: Uuid,
@@ -39,6 +96,19 @@ pub struct OperationContext {
     test_server: Option<bool>,
 }
 impl OperationContext {
+    /// Bind host-authenticated server and requester identities; defaults to fresh evidence.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Freshness, capabilities::OperationContext};
+    /// let server = uuid::Uuid::nil();
+    /// let requester = uuid::Uuid::from_u128(1);
+    /// let context = OperationContext::server(server, requester).freshness(Freshness::Refresh);
+    /// assert_eq!(context.server_id(), server);
+    /// assert_eq!(context.requester_id(), requester);
+    /// // Derive identities from authenticated dispatch, never operation arguments.
+    /// ```
     pub fn server(server_id: Uuid, requester_id: Uuid) -> Self {
         Self {
             server_id,
@@ -47,17 +117,69 @@ impl OperationContext {
             test_server: None,
         }
     }
+    /// Bound host server identity.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Freshness, capabilities::OperationContext};
+    /// let server = uuid::Uuid::nil();
+    /// let requester = uuid::Uuid::from_u128(1);
+    /// let context = OperationContext::server(server, requester).freshness(Freshness::Refresh);
+    /// assert_eq!(context.server_id(), server);
+    /// assert_eq!(context.requester_id(), requester);
+    /// // Derive identities from authenticated dispatch, never operation arguments.
+    /// ```
     pub fn server_id(&self) -> Uuid {
         self.server_id
     }
+    /// Original authenticated requester identity.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Freshness, capabilities::OperationContext};
+    /// let server = uuid::Uuid::nil();
+    /// let requester = uuid::Uuid::from_u128(1);
+    /// let context = OperationContext::server(server, requester).freshness(Freshness::Refresh);
+    /// assert_eq!(context.server_id(), server);
+    /// assert_eq!(context.requester_id(), requester);
+    /// // Derive identities from authenticated dispatch, never operation arguments.
+    /// ```
     pub fn requester_id(&self) -> Uuid {
         self.requester_id
     }
+    /// Choose fresh or explicitly cached membership/role evidence.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Freshness, capabilities::OperationContext};
+    /// let server = uuid::Uuid::nil();
+    /// let requester = uuid::Uuid::from_u128(1);
+    /// let context = OperationContext::server(server, requester).freshness(Freshness::Refresh);
+    /// assert_eq!(context.server_id(), server);
+    /// assert_eq!(context.requester_id(), requester);
+    /// // Derive identities from authenticated dispatch, never operation arguments.
+    /// ```
     pub fn freshness(mut self, freshness: Freshness) -> Self {
         self.freshness = freshness;
         self
     }
     /// Only set from trusted host configuration, not a model argument.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Freshness, capabilities::OperationContext};
+    /// let server = uuid::Uuid::nil();
+    /// let requester = uuid::Uuid::from_u128(1);
+    /// let context = OperationContext::server(server, requester).freshness(Freshness::Refresh);
+    /// assert_eq!(context.server_id(), server);
+    /// assert_eq!(context.requester_id(), requester);
+    /// // Derive identities from authenticated dispatch, never operation arguments.
+    /// // Only after the operator independently established endpoint eligibility:
+    /// let context = context.test_server_access(true);
+    /// ```
     pub fn test_server_access(mut self, enabled: bool) -> Self {
         self.test_server = Some(enabled);
         self
@@ -65,34 +187,98 @@ impl OperationContext {
 }
 
 /// A question the generic SDK cannot establish from server permission bits.
+/// # Example
+///
+/// ```rust
+/// use rappin::{Result, capabilities::{OperationPolicy, AccessQuestion, CheckResolution}};
+/// struct ConservativePolicy;
+/// #[async_trait::async_trait]
+/// impl OperationPolicy for ConservativePolicy {
+///     async fn check(&self, question: &AccessQuestion<'_>) -> Result<CheckResolution> {
+///         // Obtain authoritative evidence for question.principal and resource here.
+///         // A successful bot read does not establish requester effective access.
+///         Ok(CheckResolution::unknown(format!("No evidence for {:?}", question.check)))
+///     }
+/// }
+/// ```
 pub struct AccessQuestion<'a> {
+    /// Canonical validated operation name.
     pub operation: &'static str,
+    /// Specific external fact to establish.
     pub check: ExternalCheck,
+    /// Requester, bot or context to assess independently.
     pub principal: Principal,
+    /// Scoped actor identity, when the question concerns an actor.
     pub actor_id: Option<Uuid>,
+    /// Bound host server.
     pub server_id: Uuid,
+    /// Resolved channel, when relevant.
     pub channel_id: Option<Uuid>,
+    /// Effective resource permissions required by this question.
     pub permissions: &'a [&'static str],
+    /// Validated operation arguments, not identity or permission grants.
     pub arguments: &'a Value,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// One policy answer and its evidence explanation.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{AccessDecision, CheckResolution};
+/// assert_eq!(CheckResolution::allowed("Established by current evidence").decision, AccessDecision::Allowed);
+/// assert_eq!(CheckResolution::denied("Revoked").decision, AccessDecision::Denied);
+/// assert_eq!(CheckResolution::unknown("No authoritative effective access data").decision, AccessDecision::Unknown);
+/// ```
 pub struct CheckResolution {
+    /// Explicit grant, denial or unresolved fact.
     pub decision: AccessDecision,
+    /// Evidence-based explanation supplied by the host policy.
     pub reason: String,
 }
 impl CheckResolution {
+    /// Return an explicit allowed policy answer with its reason.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::{AccessDecision, CheckResolution};
+    /// assert_eq!(CheckResolution::allowed("Established by current evidence").decision, AccessDecision::Allowed);
+    /// assert_eq!(CheckResolution::denied("Revoked").decision, AccessDecision::Denied);
+    /// assert_eq!(CheckResolution::unknown("No authoritative effective access data").decision, AccessDecision::Unknown);
+    /// ```
     pub fn allowed(reason: impl Into<String>) -> Self {
         Self {
             decision: AccessDecision::Allowed,
             reason: reason.into(),
         }
     }
+    /// Return an explicit denied policy answer with its reason.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::{AccessDecision, CheckResolution};
+    /// assert_eq!(CheckResolution::allowed("Established by current evidence").decision, AccessDecision::Allowed);
+    /// assert_eq!(CheckResolution::denied("Revoked").decision, AccessDecision::Denied);
+    /// assert_eq!(CheckResolution::unknown("No authoritative effective access data").decision, AccessDecision::Unknown);
+    /// ```
     pub fn denied(reason: impl Into<String>) -> Self {
         Self {
             decision: AccessDecision::Denied,
             reason: reason.into(),
         }
     }
+    /// Return an explicit unknown policy answer with its reason.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::{AccessDecision, CheckResolution};
+    /// assert_eq!(CheckResolution::allowed("Established by current evidence").decision, AccessDecision::Allowed);
+    /// assert_eq!(CheckResolution::denied("Revoked").decision, AccessDecision::Denied);
+    /// assert_eq!(CheckResolution::unknown("No authoritative effective access data").decision, AccessDecision::Unknown);
+    /// ```
     pub fn unknown(reason: impl Into<String>) -> Self {
         Self {
             decision: AccessDecision::Unknown,
@@ -103,9 +289,55 @@ impl CheckResolution {
 /// Application access facts, supplied independently of model output. Unknown
 /// is the default; this is not a permission-bypass or a user confirmation flow.
 #[async_trait::async_trait]
+/// # Example
+///
+/// ```rust
+/// use rappin::{Result, capabilities::{OperationPolicy, AccessQuestion, CheckResolution}};
+/// struct ConservativePolicy;
+/// #[async_trait::async_trait]
+/// impl OperationPolicy for ConservativePolicy {
+///     async fn check(&self, question: &AccessQuestion<'_>) -> Result<CheckResolution> {
+///         // Obtain authoritative evidence for question.principal and resource here.
+///         // A successful bot read does not establish requester effective access.
+///         Ok(CheckResolution::unknown(format!("No evidence for {:?}", question.check)))
+///     }
+/// }
+/// ```
 pub trait OperationPolicy: Send + Sync {
+    /// Evaluate only the requested fact for the specified principal; unavailable evidence must remain Unknown.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Result, capabilities::{OperationPolicy, AccessQuestion, CheckResolution}};
+    /// struct ConservativePolicy;
+    /// #[async_trait::async_trait]
+    /// impl OperationPolicy for ConservativePolicy {
+    ///     async fn check(&self, question: &AccessQuestion<'_>) -> Result<CheckResolution> {
+    ///         // Obtain authoritative evidence for question.principal and resource here.
+    ///         // A successful bot read does not establish requester effective access.
+    ///         Ok(CheckResolution::unknown(format!("No evidence for {:?}", question.check)))
+    ///     }
+    /// }
+    /// ```
     async fn check(&self, question: &AccessQuestion<'_>) -> Result<CheckResolution>;
 }
+/// Default policy returning Unknown for every external access fact.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{Result, capabilities::{OperationPolicy, AccessQuestion, CheckResolution}};
+/// struct ConservativePolicy;
+/// #[async_trait::async_trait]
+/// impl OperationPolicy for ConservativePolicy {
+///     async fn check(&self, question: &AccessQuestion<'_>) -> Result<CheckResolution> {
+///         // Obtain authoritative evidence for question.principal and resource here.
+///         // A successful bot read does not establish requester effective access.
+///         Ok(CheckResolution::unknown(format!("No evidence for {:?}", question.check)))
+///     }
+/// }
+/// ```
 pub struct NoAdditionalAccess;
 #[async_trait::async_trait]
 impl OperationPolicy for NoAdditionalAccess {
@@ -116,23 +348,78 @@ impl OperationPolicy for NoAdditionalAccess {
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Read-only access evidence; execution always reassesses and the API remains authoritative for races.
+///
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Api, Result, capabilities::{ValidatedOperation, OperationContext, OperationPolicy}};
+/// async fn execute<A: Api + ?Sized>(api: &A, operation: &ValidatedOperation, context: &OperationContext, policy: &dyn OperationPolicy) -> Result<()> {
+///     let report = operation.assess_with_policy(api, context, policy).await?;
+///     if !report.allowed() { return Ok(()); } // Show unresolved/denied checks to the caller.
+///     // Execution reassesses both principals; assessment is not a reservation.
+///     let result = operation.execute_with_policy(api, context, policy).await?;
+///     println!("{} completed", result.operation);
+///     Ok(())
+/// }
+/// ```
 pub struct AuthorizationCheck {
+    /// Stable check label in this assessment.
     pub check: String,
+    /// Principal whose condition was assessed.
     pub principal: Principal,
+    /// Allowed, Denied or Unknown for this check.
     pub decision: AccessDecision,
+    /// Explanation including unavailable evidence.
     pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    /// Structured underlying failure when evidence could not be fetched.
     pub error: Option<RemoteError>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Read-only access evidence; execution always reassesses and the API remains authoritative for races.
+///
+/// # Example
+///
+/// ```no_run
+/// use rappin::{Api, Result, capabilities::{ValidatedOperation, OperationContext, OperationPolicy}};
+/// async fn execute<A: Api + ?Sized>(api: &A, operation: &ValidatedOperation, context: &OperationContext, policy: &dyn OperationPolicy) -> Result<()> {
+///     let report = operation.assess_with_policy(api, context, policy).await?;
+///     if !report.allowed() { return Ok(()); } // Show unresolved/denied checks to the caller.
+///     // Execution reassesses both principals; assessment is not a reservation.
+///     let result = operation.execute_with_policy(api, context, policy).await?;
+///     println!("{} completed", result.operation);
+///     Ok(())
+/// }
+/// ```
 pub struct AuthorizationReport {
+    /// Canonical operation assessed.
     pub operation: String,
+    /// Server scope checked by the assessment.
     pub server_id: Uuid,
+    /// Authenticated requester assessed independently.
     pub requester_id: Uuid,
+    /// Authenticated bot identity, when /me established it.
     pub bot_id: Option<Uuid>,
+    /// Individual scope, permission and external-policy decisions.
     pub checks: Vec<AuthorizationCheck>,
 }
 impl AuthorizationReport {
+    /// Denied takes precedence over Unknown; only all-Allowed checks yield Allowed.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Api, Result, capabilities::{ValidatedOperation, OperationContext, OperationPolicy}};
+    /// async fn execute<A: Api + ?Sized>(api: &A, operation: &ValidatedOperation, context: &OperationContext, policy: &dyn OperationPolicy) -> Result<()> {
+    ///     let report = operation.assess_with_policy(api, context, policy).await?;
+    ///     if !report.allowed() { return Ok(()); } // Show unresolved/denied checks to the caller.
+    ///     // Execution reassesses both principals; assessment is not a reservation.
+    ///     let result = operation.execute_with_policy(api, context, policy).await?;
+    ///     println!("{} completed", result.operation);
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn decision(&self) -> AccessDecision {
         if self
             .checks
@@ -150,6 +437,21 @@ impl AuthorizationReport {
             AccessDecision::Allowed
         }
     }
+    /// Whether every recorded requirement is Allowed; Unknown blocks execution.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Api, Result, capabilities::{ValidatedOperation, OperationContext, OperationPolicy}};
+    /// async fn execute<A: Api + ?Sized>(api: &A, operation: &ValidatedOperation, context: &OperationContext, policy: &dyn OperationPolicy) -> Result<()> {
+    ///     let report = operation.assess_with_policy(api, context, policy).await?;
+    ///     if !report.allowed() { return Ok(()); } // Show unresolved/denied checks to the caller.
+    ///     // Execution reassesses both principals; assessment is not a reservation.
+    ///     let result = operation.execute_with_policy(api, context, policy).await?;
+    ///     println!("{} completed", result.operation);
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn allowed(&self) -> bool {
         self.decision() == AccessDecision::Allowed
     }
@@ -215,6 +517,19 @@ impl ValidatedOperation {
     }
     /// Read-only assessment, not a reservation. execute() reassesses immediately
     /// before execution; the API still enforces races and channel-specific rules.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Api, Result, capabilities::{ValidatedOperation, OperationContext, OperationPolicy}};
+    /// async fn execute<A: Api + ?Sized>(api: &A, operation: &ValidatedOperation, context: &OperationContext, policy: &dyn OperationPolicy) -> Result<()> {
+    ///     let report = operation.assess(api, context).await?;
+    ///     if !report.allowed() { return Ok(()); } // Show unresolved/denied checks to the caller.
+    ///     // Execution reassesses both principals; assessment is not a reservation.
+    ///     let result = operation.execute_with_policy(api, context, policy).await?;
+    ///     println!("{} completed", result.operation);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn assess<A: Api + ?Sized>(
         &self,
         api: &A,
@@ -223,6 +538,21 @@ impl ValidatedOperation {
         self.assess_with_policy(api, context, &NoAdditionalAccess)
             .await
     }
+    /// Read current scope/authorization evidence without executing a mutation. This is advisory and does not reserve access.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Api, Result, capabilities::{ValidatedOperation, OperationContext, OperationPolicy}};
+    /// async fn execute<A: Api + ?Sized>(api: &A, operation: &ValidatedOperation, context: &OperationContext, policy: &dyn OperationPolicy) -> Result<()> {
+    ///     let report = operation.assess_with_policy(api, context, policy).await?;
+    ///     if !report.allowed() { return Ok(()); } // Show unresolved/denied checks to the caller.
+    ///     // Execution reassesses both principals; assessment is not a reservation.
+    ///     let result = operation.execute_with_policy(api, context, policy).await?;
+    ///     println!("{} completed", result.operation);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn assess_with_policy<A: Api + ?Sized>(
         &self,
         api: &A,

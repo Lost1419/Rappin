@@ -31,8 +31,18 @@ use uuid::Uuid;
 /// declares different cross-transport payloads equivalent.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
+/// # Example
+///
+/// ```rust
+/// use rappin::{Bot, IngressConfig, IngressAdmissionPolicy};
+/// let mut config = IngressConfig::default();
+/// config.admission_policy = IngressAdmissionPolicy::PollingOnly;
+/// let bot = Bot::builder("unused-documentation-token").shared_ingress(config).build();
+/// assert!(bot.handle().ingress().is_some());
+/// ```
 pub enum IngressAdmissionPolicy {
     #[default]
+    /// Allow authenticated webhook, polling or gateway delivery to claim execution; default policy.
     AnyVerified,
     /// Gateway/webhook payloads are notifications only; command processing comes
     /// exclusively from authoritative polling. Existing conflicts remain fenced.
@@ -40,13 +50,31 @@ pub enum IngressAdmissionPolicy {
 }
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+/// Opt-in admission bounds and source/conflict authority. Defaults preserve ordinary intake unless configured.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{Bot, IngressConfig, IngressAdmissionPolicy};
+/// let mut config = IngressConfig::default();
+/// config.admission_policy = IngressAdmissionPolicy::PollingOnly;
+/// let bot = Bot::builder("unused-documentation-token").shared_ingress(config).build();
+/// assert!(bot.handle().ingress().is_some());
+/// ```
 pub struct IngressConfig {
+    /// Which authenticated source may claim execution; default AnyVerified.
     pub admission_policy: IngressAdmissionPolicy,
+    /// Maximum retained claims, 2 through 1,000,000; default 4096.
     pub max_claims: usize,
+    /// Maximum canonical event size, 1 byte through 16 MiB; default 1 MiB.
     pub max_event_bytes: usize,
+    /// Per-storage-operation deadline, positive and at most 120 seconds; default 2 seconds.
     pub persistence_timeout: Duration,
+    /// Whether contradictory deliveries stop immediately or retain completed work for polling evidence.
     pub conflict_policy: IngressConflictPolicy,
+    /// Maximum wait for recovery evidence, positive and at most 300 seconds; default 60 seconds.
     pub conflict_recovery_timeout: Duration,
+    /// Bound on retained content-free conflict reports; default 32.
     pub max_conflict_reports: usize,
 }
 impl Default for IngressConfig {
@@ -65,40 +93,130 @@ impl Default for IngressConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Explicit execution stage; Started/Failed never implies replay safety.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::EventReceipt;
+/// async fn inspect(mut receipt: EventReceipt) {
+///     let initial = receipt.status();
+///     let final_status = receipt.wait().await;
+///     println!("{:?}, committed {}", final_status.stage, final_status.committed);
+///     // Completed and checkpoint-committed are distinct; failed/Started work needs assessment.
+/// }
+/// ```
 pub enum ReceiptStage {
+    /// Admission persistence is in progress; no handler effects may start.
     Admitting,
+    /// Admitted payload is retained and queued for bounded execution.
     Queued,
+    /// Processing may have produced effects; an interrupted durable Started receipt is not replay-safe.
     Started,
+    /// Required handler work completed; polling checkpoint commitment remains separate.
     Completed,
+    /// Processing failed or became uncertain; original structured cause is retained.
     Failed,
+    /// Received work never started; no handler effects were performed.
     Unprocessed,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Receipt persistence guarantee established by the configured store.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::EventReceipt;
+/// async fn inspect(mut receipt: EventReceipt) {
+///     let initial = receipt.status();
+///     let final_status = receipt.wait().await;
+///     println!("{:?}, committed {}", final_status.stage, final_status.committed);
+///     // Completed and checkpoint-committed are distinct; failed/Started work needs assessment.
+/// }
+/// ```
 pub enum AdmissionDurability {
+    /// In-memory receipt only; restart recovery is not guaranteed.
     Volatile,
+    /// Configured store confirmed persistence under its atomic durability contract.
     Durable,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
+/// Execution and checkpoint status for one admitted event.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::EventReceipt;
+/// async fn inspect(mut receipt: EventReceipt) {
+///     let initial = receipt.status();
+///     let final_status = receipt.wait().await;
+///     println!("{:?}, committed {}", final_status.stage, final_status.committed);
+///     // Completed and checkpoint-committed are distinct; failed/Started work needs assessment.
+/// }
+/// ```
 pub struct ReceiptStatus {
+    /// Original global event ID.
     pub event_id: u64,
+    /// Durable/volatile processing stage, independent of cursor commitment.
     pub stage: ReceiptStage,
+    /// Whether the receipt was persisted by the configured store.
     pub durability: AdmissionDurability,
+    /// Whether authoritative polling checkpoint coverage includes this receipt.
     pub committed: bool,
+    /// Whether the admitted payload remains retained for processing/recovery.
     pub payload_retained: bool,
     /// The event has been published to the bounded executor queue.
     pub queued_for_execution: bool,
+    /// Original sanitized failure cause, if processing failed.
     pub error: Option<RemoteError>,
 }
 /// A per-event receipt, independent of the HTTP admission response.
 #[derive(Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::EventReceipt;
+/// async fn inspect(mut receipt: EventReceipt) {
+///     let initial = receipt.status();
+///     let final_status = receipt.wait().await;
+///     println!("{:?}, committed {}", final_status.stage, final_status.committed);
+///     // Completed and checkpoint-committed are distinct; failed/Started work needs assessment.
+/// }
+/// ```
 pub struct EventReceipt(watch::Receiver<ReceiptStatus>);
 impl EventReceipt {
+    /// Read the latest receipt snapshot; intermediate watch updates may coalesce.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::EventReceipt;
+    /// async fn inspect(mut receipt: EventReceipt) {
+    ///     let initial = receipt.status();
+    ///     let final_status = receipt.wait().await;
+    ///     println!("{:?}, committed {}", final_status.stage, final_status.committed);
+    ///     // Completed and checkpoint-committed are distinct; failed/Started work needs assessment.
+    /// }
+    /// ```
     pub fn status(&self) -> ReceiptStatus {
         self.0.borrow().clone()
     }
+    /// Wait until a terminal execution stage, checkpoint commitment or receipt-channel closure; inspect the returned status explicitly.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::EventReceipt;
+    /// async fn inspect(mut receipt: EventReceipt) {
+    ///     let initial = receipt.status();
+    ///     let final_status = receipt.wait().await;
+    ///     println!("{:?}, committed {}", final_status.stage, final_status.committed);
+    ///     // Completed and checkpoint-committed are distinct; failed/Started work needs assessment.
+    /// }
+    /// ```
     pub async fn wait(&mut self) -> ReceiptStatus {
         loop {
             let status = self.status();
@@ -118,20 +236,62 @@ impl EventReceipt {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
+/// Immediate bounded admission result; independent of processing completion.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{EventIngress, AdmissionStatus, webhook::VerifiedEvent};
+/// async fn deliver(ingress: &EventIngress, verified: VerifiedEvent) {
+///     let admission = ingress.admit(verified).await;
+///     match admission.status {
+///         AdmissionStatus::Accepted | AdmissionStatus::Duplicate => {
+///             if let Some(mut receipt) = admission.receipt { println!("{:?}", receipt.wait().await.stage); }
+///         }
+///         _ => { if let Some(error) = admission.error { eprintln!("{error}"); } }
+///     }
+///     // No HTTP success response should imply durable handler completion unless the receipt proves it.
+/// }
+/// ```
 pub enum AdmissionStatus {
+    /// New bounded claim accepted; inspect its receipt for completion.
     Accepted,
+    /// Existing identity/payload claim reused without repeating effects.
     Duplicate,
+    /// Admission bound reached before this delivery could claim execution.
     Full,
+    /// Intake is stopped and will not admit this delivery.
     Stopped,
+    /// Admission failed; inspect the original structured error.
     Error,
     /// This source was not admitted for execution; await polling coverage. No
     /// durable receipt, completion, payload equivalence or cursor change is implied.
     PollingRequired,
 }
 #[must_use]
+/// Immediate result plus an optional independent processing receipt and original error.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{EventIngress, AdmissionStatus, webhook::VerifiedEvent};
+/// async fn deliver(ingress: &EventIngress, verified: VerifiedEvent) {
+///     let admission = ingress.admit(verified).await;
+///     match admission.status {
+///         AdmissionStatus::Accepted | AdmissionStatus::Duplicate => {
+///             if let Some(mut receipt) = admission.receipt { println!("{:?}", receipt.wait().await.stage); }
+///         }
+///         _ => { if let Some(error) = admission.error { eprintln!("{error}"); } }
+///     }
+///     // No HTTP success response should imply durable handler completion unless the receipt proves it.
+/// }
+/// ```
 pub struct Admission {
+    /// Immediate admission result; acceptance does not mean execution completed.
     pub status: AdmissionStatus,
+    /// Independent per-event processing receipt, when available.
     pub receipt: Option<EventReceipt>,
+    /// Original structured admission failure, if present.
     pub error: Option<YappinError>,
 }
 impl Admission {
@@ -148,33 +308,102 @@ impl Admission {
 /// bot/store is required; this trait is not a distributed execution lease.
 #[derive(Clone, Serialize, Deserialize)]
 #[non_exhaustive]
+/// # Example
+///
+/// ```rust
+/// use rappin::{IngressStore, IngressRecovery, Result};
+/// async fn recover(storage: &dyn IngressStore, bot: uuid::Uuid) -> Result<IngressRecovery> {
+///     // Hold this consumer's exclusive lease. The SDK does not create a distributed lease.
+///     storage.load(bot).await
+/// }
+/// ```
 pub struct IngressRecord {
+    /// Authenticated bot namespace owning this record.
     pub bot_id: Uuid,
+    /// Immutable original admitted payload; storage may contain sensitive event data.
     pub event: Event,
+    /// Persisted processing stage, durability and original error.
     pub status: ReceiptStatus,
     #[serde(default)]
+    /// Original verified source, when saved by the store.
     pub source: Option<IngressSource>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[non_exhaustive]
+/// One atomic recovery snapshot for a single bot/store owner.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{IngressStore, IngressRecovery, Result};
+/// async fn recover(storage: &dyn IngressStore, bot: uuid::Uuid) -> Result<IngressRecovery> {
+///     // Hold this consumer's exclusive lease. The SDK does not create a distributed lease.
+///     storage.load(bot).await
+/// }
+/// ```
 pub struct IngressRecovery {
+    /// Authoritative durable polling checkpoint, not a webhook delivery watermark.
     pub polling_checkpoint: Option<u64>,
+    /// Retained immutable events and processing receipts.
     pub records: Vec<IngressRecord>,
     #[serde(default)]
+    /// Durable unresolved/resolved conflict evidence retained under the store contract.
     pub conflicts: Vec<IngressConflict>,
     #[serde(default)]
+    /// Separate immutable audit records for approved completed-envelope exceptions.
     pub timestamp_reconciliations: Vec<TimestampReconciliation>,
     #[serde(default)]
+    /// Separate immutable audit records for explicit failed/uncertain-work retirement.
     pub event_retirements: Vec<EventRetirement>,
 }
 #[async_trait::async_trait]
+/// Application-owned atomic durable receipt/checkpoint storage. Implement the persistence contract; backend/transaction/lease choices remain application-owned.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{IngressStore, IngressRecovery, Result};
+/// async fn recover(storage: &dyn IngressStore, bot: uuid::Uuid) -> Result<IngressRecovery> {
+///     // Hold this consumer's exclusive lease. The SDK does not create a distributed lease.
+///     storage.load(bot).await
+/// }
+/// ```
 pub trait IngressStore: Send + Sync + 'static {
+    /// Load a consistent bot-scoped recovery snapshot under the consumer's exclusive lease.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{IngressStore, IngressRecovery, Result};
+    /// async fn recover(storage: &dyn IngressStore, bot: uuid::Uuid) -> Result<IngressRecovery> {
+    ///     // Hold this consumer's exclusive lease. The SDK does not create a distributed lease.
+    ///     storage.load(bot).await
+    /// }
+    /// ```
     async fn load(&self, bot_id: Uuid) -> Result<IngressRecovery>;
+    /// Atomically persist an event/stage transition; Started must be durable before any handler/collector/ack effects.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{IngressStore, Result};
+    /// async fn persist(storage: &dyn IngressStore, record: rappin::IngressRecord) -> Result<()> {
+    ///     storage.record(record).await
+    /// }
+    /// ```
     async fn record(&self, record: IngressRecord) -> Result<()>;
     /// Persist a separate bounded, content-free conflict record. Return Durable
     /// only after an atomic durable write. Recovery must load unresolved reports.
     /// Existing stores retain compatibility; durable conflict recovery requires
     /// overriding this hook rather than claiming the default is persistent.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{IngressStore, Result};
+    /// async fn persist(storage: &dyn IngressStore, conflict: rappin::IngressConflict) -> Result<()> {
+    ///     storage.record_conflict(conflict).await.map(|durability| { println!("{durability:?}"); })
+    /// }
+    /// ```
     async fn record_conflict(&self, _conflict: IngressConflict) -> Result<AdmissionDurability> {
         Ok(AdmissionDurability::Volatile)
     }
@@ -182,6 +411,14 @@ pub trait IngressStore: Send + Sync + 'static {
     /// `validate_write` against the transaction's current snapshot. Preserve the
     /// original event, receipt, conflicts and checkpoint. Requires an exclusive
     /// consumer lease; approval is unavailable for stores using this default.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{IngressStore, Result};
+    /// async fn persist(storage: &dyn IngressStore, decision: rappin::TimestampReconciliation) -> Result<()> {
+    ///     storage.commit_timestamp_reconciliation(decision).await
+    /// }
+    /// ```
     async fn commit_timestamp_reconciliation(
         &self,
         _decision: TimestampReconciliation,
@@ -192,6 +429,14 @@ pub trait IngressStore: Send + Sync + 'static {
     }
     /// Atomic explicit retirement of failed/uncertain work. Call validate_write
     /// inside the same transaction; preserve original event/error/audit and cursor.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{IngressStore, Result};
+    /// async fn persist(storage: &dyn IngressStore, decision: rappin::EventRetirement) -> Result<()> {
+    ///     storage.commit_event_retirement(decision).await
+    /// }
+    /// ```
     async fn commit_event_retirement(&self, _decision: EventRetirement) -> Result<()> {
         Err(YappinError::Config(
             "atomic event retirement storage is unsupported".into(),
@@ -199,22 +444,52 @@ pub trait IngressStore: Send + Sync + 'static {
     }
     /// Atomically persist an authoritative polling checkpoint. Pruning records
     /// at/below it is permitted only once this checkpoint is durable.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{IngressStore, Result};
+    /// async fn checkpoint(storage: &dyn IngressStore, bot: uuid::Uuid, completed_polling_prefix: u64) -> Result<()> {
+    ///     storage.checkpoint(bot, completed_polling_prefix).await
+    /// }
+    /// ```
     async fn checkpoint(&self, bot_id: Uuid, cursor: u64) -> Result<()>;
 }
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
+/// Bounded shared-admission counters and current ordered checkpoint state.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::IngressStatus;
+/// let status = IngressStatus::default();
+/// assert!(!status.running);
+/// assert_eq!(status.committed_cursor, 0);
+/// ```
 pub struct IngressStatus {
+    /// Whether intake is currently accepting work.
     pub running: bool,
+    /// Current retained claim count.
     pub retained: usize,
+    /// Cumulative new accepted claims.
     pub accepted: u64,
+    /// Cumulative duplicate deliveries suppressed before effects.
     pub duplicates: u64,
+    /// Cumulative contradictory deliveries observed.
     pub conflicts: u64,
+    /// Cumulative admission rejections due to bounded capacity.
     pub full: u64,
+    /// Latest authoritative polling coverage received; not proof of processing completion.
     pub polling_watermark: u64,
+    /// Last successfully persisted ordered polling checkpoint.
     pub committed_cursor: u64,
+    /// Completed claims beyond an earlier checkpoint barrier.
     pub completed_uncommitted: usize,
+    /// Claims whose processing has not established completion.
     pub unresolved: usize,
+    /// Conflicts waiting for polling/explicit recovery evidence.
     pub pending_conflicts: usize,
+    /// Cumulative reports omitted by the bounded diagnostic inventory.
     pub conflict_reports_dropped: u64,
 }
 // Constructed only by the canonical batch prepass. Keep the event/hash bound
@@ -257,6 +532,21 @@ struct Inner {
 /// A cloneable ingress for the running pipeline. Admission is bounded and never
 /// waits for execution. Without an IngressStore every receipt is volatile.
 #[derive(Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::{EventIngress, AdmissionStatus, webhook::VerifiedEvent};
+/// async fn deliver(ingress: &EventIngress, verified: VerifiedEvent) {
+///     let admission = ingress.admit(verified).await;
+///     match admission.status {
+///         AdmissionStatus::Accepted | AdmissionStatus::Duplicate => {
+///             if let Some(mut receipt) = admission.receipt { println!("{:?}", receipt.wait().await.stage); }
+///         }
+///         _ => { if let Some(error) = admission.error { eprintln!("{error}"); } }
+///     }
+///     // No HTTP success response should imply durable handler completion unless the receipt proves it.
+/// }
+/// ```
 pub struct EventIngress(Arc<Inner>);
 pub(super) struct ClaimedEvent {
     pub event: Event,
@@ -307,6 +597,16 @@ impl EventIngress {
         }
         Ok(())
     }
+    /// Read shared cumulative counters and current checkpoint barriers.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::EventIngress;
+    /// fn inspect(ingress: &EventIngress, event_id: u64) {
+    ///     println!("{:?}", ingress.status());
+    /// }
+    /// ```
     pub fn status(&self) -> IngressStatus {
         let s = self.0.state.lock().unwrap();
         let mut result = s.status.clone();
@@ -328,6 +628,15 @@ impl EventIngress {
             .count();
         result
     }
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{EventIngress, Result};
+    /// async fn ready(ingress: &EventIngress) -> Result<()> {
+    ///     // Run concurrently with the bot; this waits for authenticated startup/recovery.
+    ///     ingress.wait_ready().await
+    /// }
+    /// ```
     pub async fn wait_ready(&self) -> Result<()> {
         loop {
             let changed = self.0.changed.notified();
@@ -343,6 +652,21 @@ impl EventIngress {
             changed.await;
         }
     }
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{EventIngress, AdmissionStatus, webhook::VerifiedEvent};
+    /// async fn deliver(ingress: &EventIngress, verified: VerifiedEvent) {
+    ///     let admission = ingress.admit(verified).await;
+    ///     match admission.status {
+    ///         AdmissionStatus::Accepted | AdmissionStatus::Duplicate => {
+    ///             if let Some(mut receipt) = admission.receipt { println!("{:?}", receipt.wait().await.stage); }
+    ///         }
+    ///         _ => { if let Some(error) = admission.error { eprintln!("{error}"); } }
+    ///     }
+    ///     // No HTTP success response should imply durable handler completion unless the receipt proves it.
+    /// }
+    /// ```
     pub async fn admit(&self, verified: crate::webhook::VerifiedEvent) -> Admission {
         let sender = {
             let s = self.0.state.lock().unwrap();
@@ -457,6 +781,16 @@ impl EventIngress {
             }
         }
     }
+    /// Find a retained event receipt without claiming or replaying it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::EventIngress;
+    /// fn inspect(ingress: &EventIngress, event_id: u64) {
+    ///     if let Some(receipt) = ingress.receipt(event_id) { println!("{:?}", receipt.status()); }
+    /// }
+    /// ```
     pub fn receipt(&self, event_id: u64) -> Option<EventReceipt> {
         self.0
             .state
@@ -545,6 +879,15 @@ impl EventIngress {
     }
     /// Bounded content-free reports, including resolved conflicts. No event values
     /// or arbitrary object keys are retained in these diagnostics.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::EventIngress;
+    /// fn inspect(ingress: &EventIngress, event_id: u64) {
+    ///     let conflicts = ingress.conflicts();
+    ///     println!("Retained conflicts: {}", conflicts.len());
+    /// }
+    /// ```
     pub fn conflicts(&self) -> Vec<IngressConflict> {
         self.0
             .state
@@ -1669,6 +2012,15 @@ impl Drop for ClaimGuard {
     }
 }
 impl BotHandle {
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Bot, IngressConfig, IngressAdmissionPolicy};
+    /// let mut config = IngressConfig::default();
+    /// config.admission_policy = IngressAdmissionPolicy::PollingOnly;
+    /// let bot = Bot::builder("unused-documentation-token").shared_ingress(config).build();
+    /// assert!(bot.handle().ingress().is_some());
+    /// ```
     pub fn ingress(&self) -> Option<EventIngress> {
         self.inner.ingress.clone()
     }
@@ -1695,6 +2047,15 @@ impl Drop for ConflictGuard {
 
 /// Canonical SDK Event content address (maximum 16 MiB). This is not proof of
 /// authentication or remote mutation success; bot identity is a separate scope.
+/// # Example
+///
+/// ```rust
+/// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":42,"type":"test","data":{}}))?;
+/// let digest = rappin::canonical_event_fingerprint(&event)?;
+/// assert_eq!(digest.len(), 64);
+/// // A content address is not authentication, idempotency or proof of remote success.
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub fn canonical_event_fingerprint(event: &Event) -> Result<String> {
     Ok(hex(&event_fingerprint(event, 16 * 1024 * 1024)?))
 }

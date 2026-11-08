@@ -101,7 +101,7 @@ argument binding, receipts and reconciliation.
 
 Public APIs (no optional feature for native commands):
 
-```rust,ignore
+```text
 OperationId::new(value: impl Into<String>) -> Result<OperationId>
 OperationId::MAX_BYTES // 128
 OperationId::as_str(&self) -> &str

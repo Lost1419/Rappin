@@ -5,44 +5,110 @@ use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// Runtime argument validation rules; parsing remains pure and quote-aware.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::commands::{ArgumentSchema, ArgumentType, CommandSchema, DynamicCommandSpec};
+/// let schema = CommandSchema {
+///     name: "roll".into(), description: "Roll a die".into(), aliases: vec!["dice".into()],
+///     arguments: vec![ArgumentSchema {
+///         name: "sides".into(), description: "Die sides".into(),
+///         kind: ArgumentType::Integer { min: Some(1), max: Some(100) }, required: true, rest: false,
+///     }],
+/// };
+/// schema.validate()?;
+/// assert_eq!(schema.parse("20")?["sides"], 20);
+/// assert!(schema.parse("101").is_err());
+/// assert_eq!(schema.info().usage(), "/roll <sides>");
+/// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
+///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
+/// });
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub enum ArgumentType {
     /// A catalogue argument schema. Strings remain strings; other values use a
     /// quoted JSON token. Validation uses the catalogue's supported schema subset.
     Schema {
+        /// Supported JSON Schema subset from the public capability catalogue.
         schema: Value,
     },
+    /// Decoded string with Unicode character bounds.
     String {
         #[serde(default)]
+        /// Inclusive minimum Unicode character count.
         min_length: usize,
+        /// Optional inclusive maximum Unicode character count.
         max_length: Option<usize>,
     },
+    /// Signed 64-bit integer with inclusive bounds.
     Integer {
+        /// Optional inclusive integer minimum.
         min: Option<i64>,
+        /// Optional inclusive integer maximum.
         max: Option<i64>,
     },
+    /// Finite floating-point number with inclusive bounds.
     Number {
+        /// Optional inclusive finite-number minimum.
         min: Option<f64>,
+        /// Optional inclusive finite-number maximum.
         max: Option<f64>,
     },
+    /// Boolean token accepted by the runtime parser.
     Boolean,
+    /// User UUID or mention; does not establish access or existence.
     UserId,
+    /// Channel UUID or mention; scope and authorization remain separate.
     ChannelId,
+    /// Positive human duration converted to seconds.
     Duration {
+        /// Optional inclusive minimum duration in seconds.
         min_seconds: Option<u64>,
+        /// Optional inclusive positive maximum duration in seconds.
         max_seconds: Option<u64>,
     },
+    /// One of a nonempty set of exact literal strings.
     Choice {
+        /// Nonempty unique accepted literal strings.
         values: Vec<String>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// One ordered runtime command argument.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::commands::{ArgumentSchema, ArgumentType, CommandSchema, DynamicCommandSpec};
+/// let schema = CommandSchema {
+///     name: "roll".into(), description: "Roll a die".into(), aliases: vec!["dice".into()],
+///     arguments: vec![ArgumentSchema {
+///         name: "sides".into(), description: "Die sides".into(),
+///         kind: ArgumentType::Integer { min: Some(1), max: Some(100) }, required: true, rest: false,
+///     }],
+/// };
+/// schema.validate()?;
+/// assert_eq!(schema.parse("20")?["sides"], 20);
+/// assert!(schema.parse("101").is_err());
+/// assert_eq!(schema.info().usage(), "/roll <sides>");
+/// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
+///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
+/// });
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub struct ArgumentSchema {
+    /// Unique argument key used in parsed values and help.
     pub name: String,
     #[serde(default)]
+    /// Human-readable argument help.
     pub description: String,
+    /// Validation/parsing rule for this argument.
     pub kind: ArgumentType,
     #[serde(default = "required")]
+    /// Whether omission is rejected; required arguments precede optional ones.
     pub required: bool,
     /// Consume remaining tokens as one string; permitted only on the last string argument.
     #[serde(default)]
@@ -53,18 +119,67 @@ fn required() -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Serializable command definition with shared parsing, validation and help.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::commands::{ArgumentSchema, ArgumentType, CommandSchema, DynamicCommandSpec};
+/// let schema = CommandSchema {
+///     name: "roll".into(), description: "Roll a die".into(), aliases: vec!["dice".into()],
+///     arguments: vec![ArgumentSchema {
+///         name: "sides".into(), description: "Die sides".into(),
+///         kind: ArgumentType::Integer { min: Some(1), max: Some(100) }, required: true, rest: false,
+///     }],
+/// };
+/// schema.validate()?;
+/// assert_eq!(schema.parse("20")?["sides"], 20);
+/// assert!(schema.parse("101").is_err());
+/// assert_eq!(schema.info().usage(), "/roll <sides>");
+/// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
+///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
+/// });
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub struct CommandSchema {
+    /// Canonical local command path.
     pub name: String,
+    /// Description advertised to the platform and shown in help.
     pub description: String,
     #[serde(default)]
+    /// Additional paths selecting the same installed binding.
     pub aliases: Vec<String>,
     #[serde(default)]
+    /// Ordered argument definitions used for parsing and help.
     pub arguments: Vec<ArgumentSchema>,
 }
 
+/// Ordered map of parsed named argument values; omitted optional arguments are absent.
 pub type CommandValues = std::collections::BTreeMap<String, Value>;
 
 impl CommandSchema {
+    /// Generate help/registration metadata from the same runtime schema.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::commands::{ArgumentSchema, ArgumentType, CommandSchema, DynamicCommandSpec};
+    /// let schema = CommandSchema {
+    ///     name: "roll".into(), description: "Roll a die".into(), aliases: vec!["dice".into()],
+    ///     arguments: vec![ArgumentSchema {
+    ///         name: "sides".into(), description: "Die sides".into(),
+    ///         kind: ArgumentType::Integer { min: Some(1), max: Some(100) }, required: true, rest: false,
+    ///     }],
+    /// };
+    /// schema.validate()?;
+    /// assert_eq!(schema.parse("20")?["sides"], 20);
+    /// assert!(schema.parse("101").is_err());
+    /// assert_eq!(schema.info().usage(), "/roll <sides>");
+    /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
+    ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
+    /// });
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn info(&self) -> CommandInfo {
         CommandInfo {
             name: self.name.clone(),
@@ -81,6 +196,28 @@ impl CommandSchema {
                 .collect(),
         }
     }
+    /// Validate names, argument ordering, rest placement and bounds without executing a handler.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::commands::{ArgumentSchema, ArgumentType, CommandSchema, DynamicCommandSpec};
+    /// let schema = CommandSchema {
+    ///     name: "roll".into(), description: "Roll a die".into(), aliases: vec!["dice".into()],
+    ///     arguments: vec![ArgumentSchema {
+    ///         name: "sides".into(), description: "Die sides".into(),
+    ///         kind: ArgumentType::Integer { min: Some(1), max: Some(100) }, required: true, rest: false,
+    ///     }],
+    /// };
+    /// schema.validate()?;
+    /// assert_eq!(schema.parse("20")?["sides"], 20);
+    /// assert!(schema.parse("101").is_err());
+    /// assert_eq!(schema.info().usage(), "/roll <sides>");
+    /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
+    ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
+    /// });
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn validate(&self) -> Result<()> {
         self.info().validate()?;
         let definition = |reason: &str| YappinError::from(CommandError::Definition(reason.into()));
@@ -140,6 +277,26 @@ impl CommandSchema {
         Ok(())
     }
     /// Parsing is pure, quote-aware and validates the schema before any handler executes.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::commands::{ArgumentSchema, ArgumentType, CommandSchema, DynamicCommandSpec};
+    /// let schema = CommandSchema {
+    ///     name: "roll".into(), description: "Roll a die".into(), aliases: vec!["dice".into()],
+    ///     arguments: vec![ArgumentSchema {
+    ///         name: "sides".into(), description: "Die sides".into(),
+    ///         kind: ArgumentType::Integer { min: Some(1), max: Some(100) }, required: true, rest: false,
+    ///     }],
+    /// };
+    /// schema.validate()?;
+    /// assert_eq!(schema.parse("20")?["sides"], 20);
+    /// assert!(schema.parse("101").is_err());
+    /// assert_eq!(schema.info().usage(), "/roll <sides>");
+    /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
+    ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
+    /// });
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn parse(&self, input: &str) -> Result<CommandValues> {
         self.validate()?;
         let tokens = tokenize(input)?;
@@ -266,21 +423,109 @@ impl CommandSchema {
     }
 }
 
+/// Runtime schema and checks bound to the normal installed command pipeline.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::commands::{ArgumentSchema, ArgumentType, CommandSchema, DynamicCommandSpec};
+/// let schema = CommandSchema {
+///     name: "roll".into(), description: "Roll a die".into(), aliases: vec!["dice".into()],
+///     arguments: vec![ArgumentSchema {
+///         name: "sides".into(), description: "Die sides".into(),
+///         kind: ArgumentType::Integer { min: Some(1), max: Some(100) }, required: true, rest: false,
+///     }],
+/// };
+/// schema.validate()?;
+/// assert_eq!(schema.parse("20")?["sides"], 20);
+/// assert!(schema.parse("101").is_err());
+/// assert_eq!(schema.info().usage(), "/roll <sides>");
+/// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
+///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
+/// });
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub struct DynamicCommandSpec {
     schema: CommandSchema,
     checks: Vec<Arc<dyn CommandCheck>>,
 }
 impl DynamicCommandSpec {
+    /// Create a runtime binding; registration validates its definition.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::commands::{ArgumentSchema, ArgumentType, CommandSchema, DynamicCommandSpec};
+    /// let schema = CommandSchema {
+    ///     name: "roll".into(), description: "Roll a die".into(), aliases: vec!["dice".into()],
+    ///     arguments: vec![ArgumentSchema {
+    ///         name: "sides".into(), description: "Die sides".into(),
+    ///         kind: ArgumentType::Integer { min: Some(1), max: Some(100) }, required: true, rest: false,
+    ///     }],
+    /// };
+    /// schema.validate()?;
+    /// assert_eq!(schema.parse("20")?["sides"], 20);
+    /// assert!(schema.parse("101").is_err());
+    /// assert_eq!(schema.info().usage(), "/roll <sides>");
+    /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
+    ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
+    /// });
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn new(schema: CommandSchema) -> Self {
         Self {
             schema,
             checks: vec![],
         }
     }
+    /// Append a normal command check, re-evaluated at execution.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::commands::{ArgumentSchema, ArgumentType, CommandSchema, DynamicCommandSpec};
+    /// let schema = CommandSchema {
+    ///     name: "roll".into(), description: "Roll a die".into(), aliases: vec!["dice".into()],
+    ///     arguments: vec![ArgumentSchema {
+    ///         name: "sides".into(), description: "Die sides".into(),
+    ///         kind: ArgumentType::Integer { min: Some(1), max: Some(100) }, required: true, rest: false,
+    ///     }],
+    /// };
+    /// schema.validate()?;
+    /// assert_eq!(schema.parse("20")?["sides"], 20);
+    /// assert!(schema.parse("101").is_err());
+    /// assert_eq!(schema.info().usage(), "/roll <sides>");
+    /// let command = DynamicCommandSpec::new(schema).check(rappin::commands::Check::server_only()).bind(|ctx, values| async move {
+    ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
+    /// });
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn check(mut self, check: impl CommandCheck) -> Self {
         self.checks.push(Arc::new(check));
         self
     }
+    /// Bind parsed named JSON values to a normal native handler.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::commands::{ArgumentSchema, ArgumentType, CommandSchema, DynamicCommandSpec};
+    /// let schema = CommandSchema {
+    ///     name: "roll".into(), description: "Roll a die".into(), aliases: vec!["dice".into()],
+    ///     arguments: vec![ArgumentSchema {
+    ///         name: "sides".into(), description: "Die sides".into(),
+    ///         kind: ArgumentType::Integer { min: Some(1), max: Some(100) }, required: true, rest: false,
+    ///     }],
+    /// };
+    /// schema.validate()?;
+    /// assert_eq!(schema.parse("20")?["sides"], 20);
+    /// assert!(schema.parse("101").is_err());
+    /// assert_eq!(schema.info().usage(), "/roll <sides>");
+    /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
+    ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
+    /// });
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn bind<F, Fut>(self, handler: F) -> Result<RegisteredCommand>
     where
         F: Fn(MessageContext, CommandValues) -> Fut + Send + Sync + 'static,

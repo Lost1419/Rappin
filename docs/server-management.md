@@ -7,7 +7,7 @@ test servers.** Rappin exposes them without assuming that a bot has access.
 Permission errors from Yapin remain visible to the caller.
 
 For independently evaluated requester/bot hierarchy checks, explicit owner/admin
-rules and single-attempt role deletion, see [availability and role hierarchy](availability-and-hierarchy.md).
+rules and single-attempt role deletion, see [availability and role hierarchy](https://github.com/Lost1419/Rappin/blob/main/docs/availability-and-hierarchy.md).
 
 The API reference and bundled upstream OpenAPI specification now contain
 these endpoints and their response schemas. Schema discovery uses this upstream

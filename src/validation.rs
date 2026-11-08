@@ -181,6 +181,14 @@ fn component(
     Ok(())
 }
 /// Validates the bot message or callback limits without making a network request.
+/// # Example
+///
+/// ```rust
+/// use rappin::validation::validate_message;
+/// validate_message(&serde_json::json!({"content":"Hello"}), true)?;
+/// assert!(validate_message(&serde_json::json!({"content":"x".repeat(2001)}), true).is_err());
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub fn validate_message(value: &Value, creating: bool) -> Result<()> {
     text(&value["content"], "content", 2000)?;
     embeds(&value["embeds"], 5, 10)?;
@@ -232,16 +240,43 @@ pub fn validate_message(value: &Value, creating: bool) -> Result<()> {
 }
 
 impl crate::CreateMessage {
+    /// Check typed payload bounds before an API call.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let body = rappin::CreateMessage::new("Hello");
+    /// body.validate()?;
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn validate(&self) -> Result<()> {
         validate_message(&serde_json::to_value(self)?, true)
     }
 }
 impl crate::EditMessage {
+    /// Check typed payload bounds before an API call.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let body = rappin::EditMessage::new().content("Updated");
+    /// body.validate()?;
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn validate(&self) -> Result<()> {
         validate_message(&serde_json::to_value(self)?, false)
     }
 }
 impl crate::InteractionCallback {
+    /// Check typed payload bounds before an API call.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let body = rappin::InteractionCallback::ephemeral("Received");
+    /// body.validate()?;
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn validate(&self) -> Result<()> {
         use crate::InteractionCallbackType::*;
         if self.kind == Ack {
@@ -259,6 +294,14 @@ impl crate::InteractionCallback {
     }
 }
 /// Split long output on Unicode character boundaries, preferring newlines or spaces.
+/// # Example
+///
+/// ```rust
+/// let text = "a".repeat(2500);
+/// let parts = rappin::split_message(&text);
+/// assert_eq!(parts.concat(), text);
+/// assert!(parts.iter().all(|part| part.chars().count() <= 2000));
+/// ```
 pub fn split_message(content: &str) -> Vec<String> {
     let mut result = Vec::new();
     let mut rest = content;
@@ -280,6 +323,12 @@ pub fn split_message(content: &str) -> Vec<String> {
 }
 
 /// Channel webhooks have different limits and only accept link buttons.
+/// # Example
+///
+/// ```rust
+/// rappin::validation::validate_webhook(&serde_json::json!({"content":"Build complete"}))?;
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub fn validate_webhook(value: &Value) -> Result<()> {
     text(&value["content"], "content", 2000)?;
     text(&value["username"], "username", 80)?;
@@ -450,6 +499,13 @@ fn select(value: &Value, path: &str, ids: &mut HashSet<String>) -> Result<()> {
     Ok(())
 }
 /// Validate normalized or documented Discord-wrapper modal inputs offline.
+/// # Example
+///
+/// ```rust
+/// let modal = rappin::Modal::new("feedback", "Feedback").input(rappin::TextInput::paragraph("comment", "Comment"));
+/// rappin::validation::validate_modal(&serde_json::to_value(modal)?)?;
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub fn validate_modal(value: &Value) -> Result<()> {
     required_text(&value["custom_id"], "modal.custom_id", 100)?;
     required_text(&value["title"], "modal.title", 45)?;

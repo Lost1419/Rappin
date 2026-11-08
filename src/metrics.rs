@@ -35,6 +35,13 @@ use std::time::Duration;
 /// The metrics are available via the `/metrics` endpoint when using the
 /// `metrics_exporter_prometheus` crate's built-in server, or you can use
 /// `PrometheusBuilder` directly for custom configuration.
+/// # Example
+///
+/// ```no_run
+/// // Requires Cargo feature metrics; install a global recorder only once.
+/// rappin::metrics::install_prometheus()?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn install_prometheus() -> Result<(), Box<dyn std::error::Error>> {
     let builder = PrometheusBuilder::new();
     builder.install()?;
@@ -44,6 +51,13 @@ pub fn install_prometheus() -> Result<(), Box<dyn std::error::Error>> {
 /// Install with an optional `namespace` global label and histogram bucket bounds.
 /// An empty namespace adds no label. Buckets are seconds, finite, nonnegative,
 /// strictly increasing and nonempty when supplied. Existing metric names remain.
+/// # Example
+///
+/// ```no_run
+/// // Requires Cargo feature metrics; install a global recorder only once.
+/// rappin::metrics::install_prometheus_with_config("bot", Some(vec![0.05, 0.1, 0.5, 1.0]))?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub fn install_prometheus_with_config(
     namespace: impl Into<String>,
     buckets: Option<Vec<f64>>,
@@ -82,6 +96,14 @@ fn configured_builder(
 /// clients must be aggregated before publishing; values are not per-call deltas.
 /// Cumulative durations are gauges ending in `_seconds_total`, not distributions.
 /// Use final request observations separately for latency histograms.
+/// # Example
+///
+/// ```rust
+/// use rappin::diagnostics::RequestMetrics;
+/// fn export(snapshot: &RequestMetrics) {
+///     rappin::metrics::record_request_metrics(snapshot);
+/// }
+/// ```
 pub fn record_request_metrics(m: &crate::diagnostics::RequestMetrics) {
     counter!("rappin_requests_started_total").absolute(m.started);
     counter!("rappin_requests_completed_total").absolute(m.completed);
@@ -105,6 +127,14 @@ pub fn record_request_metrics(m: &crate::diagnostics::RequestMetrics) {
 /// and rate-limit wait are cumulative for that call. Do not repeatedly export
 /// `last_request()` or pass every intermediate retry observation to this helper;
 /// use RequestEvent::attempt_duration for individual-attempt latency analysis.
+/// # Example
+///
+/// ```rust
+/// use rappin::diagnostics::RequestObservation;
+/// fn export(snapshot: &RequestObservation) {
+///     rappin::metrics::record_request_observation(snapshot);
+/// }
+/// ```
 pub fn record_request_observation(obs: &crate::diagnostics::RequestObservation) {
     let method = obs.method.clone();
     let route = obs.route.clone();
@@ -138,6 +168,14 @@ pub fn record_request_observation(obs: &crate::diagnostics::RequestObservation) 
 }
 
 /// Publish current transport state. Repeated snapshots do not create transition counts.
+/// # Example
+///
+/// ```rust
+/// use rappin::diagnostics::TransportStatus;
+/// fn export(snapshot: &TransportStatus) {
+///     rappin::metrics::record_transport_status(snapshot);
+/// }
+/// ```
 pub fn record_transport_status(status: &crate::diagnostics::TransportStatus) {
     for (mode, label) in [
         (crate::diagnostics::TransportMode::Polling, "polling"),
@@ -203,6 +241,14 @@ pub fn record_transport_status(status: &crate::diagnostics::TransportStatus) {
 }
 
 /// Publish cumulative availability totals and current state for one aggregate series.
+/// # Example
+///
+/// ```rust
+/// use rappin::availability::AvailabilityStatus;
+/// fn export(snapshot: &AvailabilityStatus) {
+///     rappin::metrics::record_availability_status(snapshot);
+/// }
+/// ```
 pub fn record_availability_status(status: &crate::availability::AvailabilityStatus) {
     for (state, label) in [
         (crate::availability::AvailabilityState::Idle, "idle"),

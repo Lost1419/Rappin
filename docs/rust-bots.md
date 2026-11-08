@@ -161,10 +161,12 @@ Polling is the default and needs no public HTTP endpoint. To prefer WebSocket
 delivery, enable the `gateway` feature and select the default gateway:
 
 ```toml
-rappin-rs = { version = "0.1.28", features = ["gateway"] }
+rappin-rs = { version = "0.1.29", features = ["gateway"] }
 ```
 
 ```rust,no_run
+# #[cfg(feature = "gateway")]
+# mod gateway_example {
 use rappin::prelude::*;
 
 #[tokio::main]
@@ -180,6 +182,8 @@ async fn main() -> Result<()> {
         .build();
     bot.run().await
 }
+# }
+# fn main() {}
 ```
 
 Run the same flow with `cargo run --features gateway --example gateway_bot`.
@@ -268,11 +272,21 @@ accepts an EventFilter for other flows. Each wait is bounded to five minutes and
 also subject to WorkerProject's handler timeout, which includes queueing and API
 work. Waits count toward the 128 requests per invocation budget. In-flight old
 workers can finish their existing waits during reload; subscriptions do not migrate
-into the new process. Worker protocol v3 adds structured errors and parent-owned
-permission lookups; the host still accepts v1/v2 workers. Rebuild newer workers
-with a compatible host. See [shared SDK workflows](sdk-workflows.md) for runtime
-command schemas, registration preflight and shared native/worker helpers.
+into the new process. Structured errors and parent-owned permission lookups are
+available from protocol v3. The current host accepts v1–v8; ordinary new worker
+handlers use v4. Upgrade the parent before enabling newer worker capabilities.
 
-See [hot-reloading](hot-reloading.md) and `examples/hot_cog_worker.rs`. There is no
+| Worker opt-in | Minimum parent protocol |
+| --- | --- |
+| `on_message` fallible server-message listener | v5 |
+| `single_attempt_api()` / `api_once` | v6 |
+| `ui_api()` / `on_ui_interaction` | v7 |
+| `operation_identity()` | v8 |
+
+Enabling one capability does not implicitly enable the others. See
+[shared SDK workflows](https://github.com/Lost1419/Rappin/blob/main/docs/sdk-workflows.md) for runtime command schemas, registration
+preflight and shared native/worker helpers.
+
+See [hot-reloading](https://github.com/Lost1419/Rappin/blob/main/docs/hot-reloading.md) and `examples/hot_cog_worker.rs`. There is no
 JavaScript-style manager hierarchy, hidden resource fetching, general middleware
 pipeline, or advanced voice player added by these APIs.

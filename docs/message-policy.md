@@ -163,5 +163,5 @@ The gate controls command/listener dispatch, not raw intake, cache maintenance o
 `EventHub` collectors, which receive authenticated events before dispatch. Use
 appropriate collector filters and application authorization for those workflows.
 Authentication, transport, preparation, cursor and storage errors do not enter the
-message failure callback. See [handler failures](handler-failures.md) for ordered
+message failure callback. See [handler failures](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md) for ordered
 checkpoint and recovery details shared with commands/buttons.

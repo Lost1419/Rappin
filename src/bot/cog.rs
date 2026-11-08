@@ -1,3 +1,4 @@
+//! Native modular commands, buttons and listeners with runtime installation/replacement.
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -9,22 +10,47 @@ use crate::client::Client;
 use crate::error::Result;
 use crate::models::{MemberJoinEvent, MemberLeaveEvent};
 
+/// Shared Send asynchronous native command handler returning explicit completion or a structured failure.
 pub type CommandHandlerFn =
     Arc<dyn Fn(MessageContext) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync>;
 
+/// Shared Send asynchronous native interaction handler returning explicit completion or a structured failure.
 pub type ButtonHandlerFn = Arc<
     dyn Fn(InteractionContext) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync,
 >;
 
 /// A command defined within a cog.
 #[derive(Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::bot::cog::{CogCommand, CogButton};
+/// let command = CogCommand::new("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) });
+/// let button = CogButton::new("confirm:", |ctx| async move { ctx.ephemeral("Confirmed").await });
+/// assert_eq!(command.name, "ping");
+/// assert_eq!(button.prefix, "confirm:");
+/// ```
 pub struct CogCommand {
+    /// Canonical local command name.
     pub name: String,
+    /// Description advertised with the command.
     pub description: String,
+    /// Shared native asynchronous command handler.
     pub handler: CommandHandlerFn,
 }
 
 impl CogCommand {
+    /// Bind a native handler to local command metadata.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::bot::cog::{CogCommand, CogButton};
+    /// let command = CogCommand::new("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) });
+    /// let button = CogButton::new("confirm:", |ctx| async move { ctx.ephemeral("Confirmed").await });
+    /// assert_eq!(command.name, "ping");
+    /// assert_eq!(button.prefix, "confirm:");
+    /// ```
     pub fn new<F, Fut>(name: impl Into<String>, description: impl Into<String>, handler: F) -> Self
     where
         F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
@@ -38,6 +64,13 @@ impl CogCommand {
     }
 
     /// Creates a command with an automatic rate limit cooldown.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::bot::cog::CogCommand;
+    /// use rappin::cooldown::Cooldown;
+    /// let command = CogCommand::with_cooldown("ping", "Check connectivity", Cooldown::user(std::time::Duration::from_secs(5)), |ctx| async move { ctx.reply("pong").await?; Ok(()) });
+    /// ```
     pub fn with_cooldown<F, Fut>(
         name: impl Into<String>,
         description: impl Into<String>,
@@ -69,12 +102,34 @@ impl CogCommand {
 
 /// A button handler defined within a cog.
 #[derive(Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::bot::cog::{CogCommand, CogButton};
+/// let command = CogCommand::new("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) });
+/// let button = CogButton::new("confirm:", |ctx| async move { ctx.ephemeral("Confirmed").await });
+/// assert_eq!(command.name, "ping");
+/// assert_eq!(button.prefix, "confirm:");
+/// ```
 pub struct CogButton {
+    /// Custom-ID prefix selecting this button handler.
     pub prefix: String,
+    /// Shared native asynchronous interaction handler.
     pub handler: ButtonHandlerFn,
 }
 
 impl CogButton {
+    /// Bind a native interaction handler to a custom-ID prefix.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::bot::cog::{CogCommand, CogButton};
+    /// let command = CogCommand::new("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) });
+    /// let button = CogButton::new("confirm:", |ctx| async move { ctx.ephemeral("Confirmed").await });
+    /// assert_eq!(command.name, "ping");
+    /// assert_eq!(button.prefix, "confirm:");
+    /// ```
     pub fn new<F, Fut>(prefix: impl Into<String>, handler: F) -> Self
     where
         F: Fn(InteractionContext) -> Fut + Send + Sync + 'static,
@@ -94,20 +149,86 @@ impl CogButton {
 /// Replacing a native Cog uses code already linked into the bot. For edited Rust source,
 /// enable `hot-reload` and use `crate::hot_reload::WorkerCog` in a separate Rust binary.
 #[async_trait]
+/// # Example
+///
+/// ```rust
+/// use async_trait::async_trait;
+/// use rappin::{Cog, MessageContext, MessageDisposition, Result};
+/// struct Greetings;
+/// #[async_trait]
+/// impl Cog for Greetings {
+///     fn name(&self) -> &str { "greetings" }
+///     async fn on_message_result(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
+///         if ctx.content() == "hello" { ctx.reply("Hello!").await?; }
+///         Ok(MessageDisposition::Continue)
+///     }
+/// }
+/// ```
 pub trait Cog: Send + Sync + 'static {
     /// Typed commands retain their parsing, checks and generated help when installed or reloaded.
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Module;
+    /// #[async_trait]
+    /// impl Cog for Module {
+    ///     fn name(&self) -> &str { "module" }
+    ///     fn registered_commands(&self) -> Vec<rappin::RegisteredCommand> { vec![rappin::CommandSpec::<()>::new("status", "Show status").bind(|ctx, ()| async move { ctx.reply("Ready").await?; Ok(()) })] }
+    /// }
+    /// ```
     fn registered_commands(&self) -> Vec<crate::commands::RegisteredCommand> {
         vec![]
     }
     /// Unique identifier for this cog (e.g. "moderation", "fun", "music").
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::{Cog, MessageContext, MessageDisposition, Result};
+    /// struct Greetings;
+    /// #[async_trait]
+    /// impl Cog for Greetings {
+    ///     fn name(&self) -> &str { "greetings" }
+    ///     async fn on_message_result(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
+    ///         if ctx.content() == "hello" { ctx.reply("Hello!").await?; }
+    ///         Ok(MessageDisposition::Continue)
+    ///     }
+    /// }
+    /// ```
     fn name(&self) -> &str;
 
     /// Commands exposed by this cog.
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Module;
+    /// #[async_trait]
+    /// impl Cog for Module {
+    ///     fn name(&self) -> &str { "module" }
+    ///     fn commands(&self) -> Vec<rappin::bot::cog::CogCommand> { vec![rappin::bot::cog::CogCommand::new("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) })] }
+    /// }
+    /// ```
     fn commands(&self) -> Vec<CogCommand> {
         Vec::new()
     }
 
     /// Button prefix handlers exposed by this cog.
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Module;
+    /// #[async_trait]
+    /// impl Cog for Module {
+    ///     fn name(&self) -> &str { "module" }
+    ///     fn buttons(&self) -> Vec<rappin::bot::cog::CogButton> { vec![rappin::bot::cog::CogButton::new("confirm:", |ctx| async move { ctx.ephemeral("Confirmed").await })] }
+    /// }
+    /// ```
     fn buttons(&self) -> Vec<CogButton> {
         Vec::new()
     }
@@ -115,28 +236,105 @@ pub trait Cog: Send + Sync + 'static {
     /// Optional condition/permission check evaluated before any command in this cog runs.
     ///
     /// If this returns `false`, the command will not be executed.
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Module;
+    /// #[async_trait]
+    /// impl Cog for Module {
+    ///     fn name(&self) -> &str { "module" }
+    ///     async fn check(&self, ctx: &rappin::MessageContext) -> bool { ctx.server_id().is_some() }
+    /// }
+    /// ```
     async fn check(&self, _ctx: &MessageContext) -> bool {
         true
     }
 
     /// Hook executed when the cog is loaded into the bot.
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Module;
+    /// #[async_trait]
+    /// impl Cog for Module {
+    ///     fn name(&self) -> &str { "module" }
+    ///     async fn on_load(&self, _client: &rappin::Client) -> rappin::Result<()> { tracing::info!("Cog loaded"); Ok(()) }
+    /// }
+    /// ```
     async fn on_load(&self, _client: &Client) -> Result<()> {
         Ok(())
     }
 
     /// Hook executed when the cog is unloaded from the bot.
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Module;
+    /// #[async_trait]
+    /// impl Cog for Module {
+    ///     fn name(&self) -> &str { "module" }
+    ///     async fn on_unload(&self, _client: &rappin::Client) -> rappin::Result<()> { tracing::info!("Cog unloaded"); Ok(()) }
+    /// }
+    /// ```
     async fn on_unload(&self, _client: &Client) -> Result<()> {
         Ok(())
     }
 
     /// Optional message listener hook.
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Module;
+    /// #[async_trait]
+    /// impl Cog for Module {
+    ///     fn name(&self) -> &str { "module" }
+    ///     async fn on_message(&self, ctx: &rappin::MessageContext) { tracing::debug!(message = %ctx.message_id(), "Message observed"); }
+    /// }
+    /// ```
     async fn on_message(&self, _ctx: &MessageContext) {}
     /// Fallible server-message listener. The default calls the legacy observer.
     /// Override this for required I/O; errors enter the bot's message failure policy.
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::{Cog, MessageContext, MessageDisposition, Result};
+    /// struct Greetings;
+    /// #[async_trait]
+    /// impl Cog for Greetings {
+    ///     fn name(&self) -> &str { "greetings" }
+    ///     async fn on_message_result(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
+    ///         if ctx.content() == "hello" { ctx.reply("Hello!").await?; }
+    ///         Ok(MessageDisposition::Continue)
+    ///     }
+    /// }
+    /// ```
     async fn on_message_result(&self, ctx: &MessageContext) -> Result<super::MessageDisposition> {
         self.on_message(ctx).await;
         Ok(super::MessageDisposition::Continue)
     }
+    /// Fallible reaction listener; errors retain event completion barriers.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Observer;
+    /// #[async_trait]
+    /// impl Cog for Observer {
+    ///     fn name(&self) -> &str { "observer" }
+    ///     async fn on_reaction_add(&self, _client: &rappin::Client, _event: &rappin::ReactionEvent) -> rappin::Result<()> { tracing::debug!("Event observed"); Ok(()) }
+    /// }
+    /// ```
     async fn on_reaction_add(
         &self,
         _client: &Client,
@@ -144,6 +342,20 @@ pub trait Cog: Send + Sync + 'static {
     ) -> crate::Result<()> {
         Ok(())
     }
+    /// Fallible reaction listener; errors retain event completion barriers.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Observer;
+    /// #[async_trait]
+    /// impl Cog for Observer {
+    ///     fn name(&self) -> &str { "observer" }
+    ///     async fn on_reaction_remove(&self, _client: &rappin::Client, _event: &rappin::ReactionEvent) -> rappin::Result<()> { tracing::debug!("Event observed"); Ok(()) }
+    /// }
+    /// ```
     async fn on_reaction_remove(
         &self,
         _client: &Client,
@@ -152,30 +364,129 @@ pub trait Cog: Send + Sync + 'static {
         Ok(())
     }
     /// Incoming DM; separate from server message/command dispatch.
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Module;
+    /// #[async_trait]
+    /// impl Cog for Module {
+    ///     fn name(&self) -> &str { "module" }
+    ///     async fn on_dm(&self, ctx: &rappin::MessageContext) -> rappin::Result<()> { ctx.reply("DM received").await?; Ok(()) }
+    /// }
+    /// ```
     async fn on_dm(&self, _ctx: &MessageContext) -> crate::Result<()> {
         Ok(())
     }
 
     /// Fallible extended event hook; requires opt-in interactive_events on the parent.
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Module;
+    /// #[async_trait]
+    /// impl Cog for Module {
+    ///     fn name(&self) -> &str { "module" }
+    ///     async fn on_ui_interaction(&self, ctx: &rappin::UiInteractionContext) -> rappin::Result<()> { ctx.respond_ui(rappin::InteractionCallbackType::Ephemeral, &rappin::UiMessageBody::new("Received")).await }
+    /// }
+    /// ```
     async fn on_ui_interaction(&self, _ctx: &crate::UiInteractionContext) -> crate::Result<()> {
         Ok(())
     }
 
     /// Optional interaction listener hook.
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Module;
+    /// #[async_trait]
+    /// impl Cog for Module {
+    ///     fn name(&self) -> &str { "module" }
+    ///     async fn on_interaction(&self, ctx: &rappin::InteractionContext) { tracing::debug!(interaction = ctx.interaction_id(), "Interaction observed"); }
+    /// }
+    /// ```
     async fn on_interaction(&self, _ctx: &InteractionContext) {}
 
     /// Optional member join hook.
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Observer;
+    /// #[async_trait]
+    /// impl Cog for Observer {
+    ///     fn name(&self) -> &str { "observer" }
+    ///     async fn on_member_join(&self, _client: &rappin::Client, _event: &rappin::MemberJoinEvent) { tracing::debug!("Event observed"); }
+    /// }
+    /// ```
     async fn on_member_join(&self, _client: &Client, _event: &MemberJoinEvent) {}
 
     /// Optional member leave hook.
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Observer;
+    /// #[async_trait]
+    /// impl Cog for Observer {
+    ///     fn name(&self) -> &str { "observer" }
+    ///     async fn on_member_leave(&self, _client: &rappin::Client, _event: &rappin::MemberLeaveEvent) { tracing::debug!("Event observed"); }
+    /// }
+    /// ```
     async fn on_member_leave(&self, _client: &Client, _event: &MemberLeaveEvent) {}
     /// Optional invite-create listener (Manage Server; test servers only).
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Observer;
+    /// #[async_trait]
+    /// impl Cog for Observer {
+    ///     fn name(&self) -> &str { "observer" }
+    ///     async fn on_invite_create(&self, _client: &rappin::Client, _event: &rappin::InviteEvent) { tracing::debug!("Event observed"); }
+    /// }
+    /// ```
     async fn on_invite_create(&self, _client: &Client, _event: &crate::InviteEvent) {}
     /// Optional invite-delete listener (Manage Server; test servers only).
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rappin::Cog;
+    /// struct Observer;
+    /// #[async_trait]
+    /// impl Cog for Observer {
+    ///     fn name(&self) -> &str { "observer" }
+    ///     async fn on_invite_delete(&self, _client: &rappin::Client, _event: &rappin::InviteEvent) { tracing::debug!("Event observed"); }
+    /// }
+    /// ```
     async fn on_invite_delete(&self, _client: &Client, _event: &crate::InviteEvent) {}
 }
 
 /// Builder for dynamically creating a [`Cog`] without implementing the full trait manually.
+/// # Example
+///
+/// ```rust
+/// use rappin::{Cog, CogBuilder, CommandSpec};
+/// use rappin::cooldown::Cooldown;
+/// use std::time::Duration;
+/// let cog = CogBuilder::new("utilities")
+///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) })
+///     .command_spec(CommandSpec::<()>::new("status", "Show status"), |ctx, ()| async move { ctx.reply("Ready").await?; Ok(()) })
+///     .registered_command(CommandSpec::<()>::new("version", "Show version").bind(|ctx, ()| async move { ctx.reply("v1").await?; Ok(()) }))
+///     .command_with_cooldown("limited", "Rate limited command", Cooldown::user(Duration::from_secs(5)), |ctx| async move { ctx.reply("Accepted").await?; Ok(()) })
+///     .button("utilities:", |ctx| async move { ctx.ephemeral("Clicked").await })
+///     .build();
+/// assert_eq!(cog.name(), "utilities");
+/// ```
 pub struct CogBuilder {
     name: String,
     commands: Vec<CogCommand>,
@@ -184,6 +495,21 @@ pub struct CogBuilder {
 }
 
 impl CogBuilder {
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Cog, CogBuilder, CommandSpec};
+    /// use rappin::cooldown::Cooldown;
+    /// use std::time::Duration;
+    /// let cog = CogBuilder::new("utilities")
+    ///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) })
+    ///     .command_spec(CommandSpec::<()>::new("status", "Show status"), |ctx, ()| async move { ctx.reply("Ready").await?; Ok(()) })
+    ///     .registered_command(CommandSpec::<()>::new("version", "Show version").bind(|ctx, ()| async move { ctx.reply("v1").await?; Ok(()) }))
+    ///     .command_with_cooldown("limited", "Rate limited command", Cooldown::user(Duration::from_secs(5)), |ctx| async move { ctx.reply("Accepted").await?; Ok(()) })
+    ///     .button("utilities:", |ctx| async move { ctx.ephemeral("Clicked").await })
+    ///     .build();
+    /// assert_eq!(cog.name(), "utilities");
+    /// ```
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -193,6 +519,21 @@ impl CogBuilder {
         }
     }
 
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Cog, CogBuilder, CommandSpec};
+    /// use rappin::cooldown::Cooldown;
+    /// use std::time::Duration;
+    /// let cog = CogBuilder::new("utilities")
+    ///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) })
+    ///     .command_spec(CommandSpec::<()>::new("status", "Show status"), |ctx, ()| async move { ctx.reply("Ready").await?; Ok(()) })
+    ///     .registered_command(CommandSpec::<()>::new("version", "Show version").bind(|ctx, ()| async move { ctx.reply("v1").await?; Ok(()) }))
+    ///     .command_with_cooldown("limited", "Rate limited command", Cooldown::user(Duration::from_secs(5)), |ctx| async move { ctx.reply("Accepted").await?; Ok(()) })
+    ///     .button("utilities:", |ctx| async move { ctx.ephemeral("Clicked").await })
+    ///     .build();
+    /// assert_eq!(cog.name(), "utilities");
+    /// ```
     pub fn command<F, Fut>(
         mut self,
         name: impl Into<String>,
@@ -207,6 +548,21 @@ impl CogBuilder {
             .push(CogCommand::new(name, description, handler));
         self
     }
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Cog, CogBuilder, CommandSpec};
+    /// use rappin::cooldown::Cooldown;
+    /// use std::time::Duration;
+    /// let cog = CogBuilder::new("utilities")
+    ///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) })
+    ///     .command_spec(CommandSpec::<()>::new("status", "Show status"), |ctx, ()| async move { ctx.reply("Ready").await?; Ok(()) })
+    ///     .registered_command(CommandSpec::<()>::new("version", "Show version").bind(|ctx, ()| async move { ctx.reply("v1").await?; Ok(()) }))
+    ///     .command_with_cooldown("limited", "Rate limited command", Cooldown::user(Duration::from_secs(5)), |ctx| async move { ctx.reply("Accepted").await?; Ok(()) })
+    ///     .button("utilities:", |ctx| async move { ctx.ephemeral("Clicked").await })
+    ///     .build();
+    /// assert_eq!(cog.name(), "utilities");
+    /// ```
     pub fn command_spec<A, F, Fut>(
         mut self,
         spec: crate::commands::CommandSpec<A>,
@@ -220,12 +576,44 @@ impl CogBuilder {
         self.registered.push(spec.bind(handler));
         self
     }
+    /// Add a pre-bound typed or runtime command without modifying its parsing/check metadata.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Cog, CogBuilder, CommandSpec};
+    /// use rappin::cooldown::Cooldown;
+    /// use std::time::Duration;
+    /// let cog = CogBuilder::new("utilities")
+    ///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) })
+    ///     .command_spec(CommandSpec::<()>::new("status", "Show status"), |ctx, ()| async move { ctx.reply("Ready").await?; Ok(()) })
+    ///     .registered_command(CommandSpec::<()>::new("version", "Show version").bind(|ctx, ()| async move { ctx.reply("v1").await?; Ok(()) }))
+    ///     .command_with_cooldown("limited", "Rate limited command", Cooldown::user(Duration::from_secs(5)), |ctx| async move { ctx.reply("Accepted").await?; Ok(()) })
+    ///     .button("utilities:", |ctx| async move { ctx.ephemeral("Clicked").await })
+    ///     .build();
+    /// assert_eq!(cog.name(), "utilities");
+    /// ```
     pub fn registered_command(mut self, command: crate::RegisteredCommand) -> Self {
         self.registered.push(command);
         self
     }
 
     /// Registers a cog command with an automatic rate limit cooldown.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Cog, CogBuilder, CommandSpec};
+    /// use rappin::cooldown::Cooldown;
+    /// use std::time::Duration;
+    /// let cog = CogBuilder::new("utilities")
+    ///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) })
+    ///     .command_spec(CommandSpec::<()>::new("status", "Show status"), |ctx, ()| async move { ctx.reply("Ready").await?; Ok(()) })
+    ///     .registered_command(CommandSpec::<()>::new("version", "Show version").bind(|ctx, ()| async move { ctx.reply("v1").await?; Ok(()) }))
+    ///     .command_with_cooldown("limited", "Rate limited command", Cooldown::user(Duration::from_secs(5)), |ctx| async move { ctx.reply("Accepted").await?; Ok(()) })
+    ///     .button("utilities:", |ctx| async move { ctx.ephemeral("Clicked").await })
+    ///     .build();
+    /// assert_eq!(cog.name(), "utilities");
+    /// ```
     pub fn command_with_cooldown<F, Fut>(
         mut self,
         name: impl Into<String>,
@@ -246,6 +634,21 @@ impl CogBuilder {
         self
     }
 
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Cog, CogBuilder, CommandSpec};
+    /// use rappin::cooldown::Cooldown;
+    /// use std::time::Duration;
+    /// let cog = CogBuilder::new("utilities")
+    ///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) })
+    ///     .command_spec(CommandSpec::<()>::new("status", "Show status"), |ctx, ()| async move { ctx.reply("Ready").await?; Ok(()) })
+    ///     .registered_command(CommandSpec::<()>::new("version", "Show version").bind(|ctx, ()| async move { ctx.reply("v1").await?; Ok(()) }))
+    ///     .command_with_cooldown("limited", "Rate limited command", Cooldown::user(Duration::from_secs(5)), |ctx| async move { ctx.reply("Accepted").await?; Ok(()) })
+    ///     .button("utilities:", |ctx| async move { ctx.ephemeral("Clicked").await })
+    ///     .build();
+    /// assert_eq!(cog.name(), "utilities");
+    /// ```
     pub fn button<F, Fut>(mut self, prefix: impl Into<String>, handler: F) -> Self
     where
         F: Fn(InteractionContext) -> Fut + Send + Sync + 'static,
@@ -255,6 +658,21 @@ impl CogBuilder {
         self
     }
 
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Cog, CogBuilder, CommandSpec};
+    /// use rappin::cooldown::Cooldown;
+    /// use std::time::Duration;
+    /// let cog = CogBuilder::new("utilities")
+    ///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) })
+    ///     .command_spec(CommandSpec::<()>::new("status", "Show status"), |ctx, ()| async move { ctx.reply("Ready").await?; Ok(()) })
+    ///     .registered_command(CommandSpec::<()>::new("version", "Show version").bind(|ctx, ()| async move { ctx.reply("v1").await?; Ok(()) }))
+    ///     .command_with_cooldown("limited", "Rate limited command", Cooldown::user(Duration::from_secs(5)), |ctx| async move { ctx.reply("Accepted").await?; Ok(()) })
+    ///     .button("utilities:", |ctx| async move { ctx.ephemeral("Clicked").await })
+    ///     .build();
+    /// assert_eq!(cog.name(), "utilities");
+    /// ```
     pub fn build(self) -> DynamicCog {
         DynamicCog {
             name: self.name,
@@ -265,6 +683,23 @@ impl CogBuilder {
     }
 }
 
+/// A native cog built from registered commands and button routes.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{Cog, CogBuilder, CommandSpec};
+/// use rappin::cooldown::Cooldown;
+/// use std::time::Duration;
+/// let cog = CogBuilder::new("utilities")
+///     .command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await?; Ok(()) })
+///     .command_spec(CommandSpec::<()>::new("status", "Show status"), |ctx, ()| async move { ctx.reply("Ready").await?; Ok(()) })
+///     .registered_command(CommandSpec::<()>::new("version", "Show version").bind(|ctx, ()| async move { ctx.reply("v1").await?; Ok(()) }))
+///     .command_with_cooldown("limited", "Rate limited command", Cooldown::user(Duration::from_secs(5)), |ctx| async move { ctx.reply("Accepted").await?; Ok(()) })
+///     .button("utilities:", |ctx| async move { ctx.ephemeral("Clicked").await })
+///     .build();
+/// assert_eq!(cog.name(), "utilities");
+/// ```
 pub struct DynamicCog {
     name: String,
     commands: Vec<CogCommand>,

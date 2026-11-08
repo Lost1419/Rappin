@@ -1,3 +1,4 @@
+//! Original message/interaction contexts with shared API, reply helpers and authenticated invocation provenance.
 use std::sync::Arc;
 
 use uuid::Uuid;
@@ -14,23 +15,58 @@ use super::BotHandle;
 
 /// Context provided to command and message handlers.
 #[derive(Clone)]
+/// # Example
+///
+/// ```no_run
+/// use rappin::{MessageContext, Result};
+/// async fn status(ctx: MessageContext) -> Result<()> {
+///     println!("Message {} by {} in {}", ctx.message_id(), ctx.author_id(), ctx.channel_id());
+///     ctx.reply("Ready").await?;
+///     Ok(())
+/// }
+/// ```
 pub struct MessageContext {
+    /// Shared authenticated client for this dispatch.
     pub client: Arc<Client>,
+    /// Original message identity and scope; changing it does not create checked-invocation authority.
     pub event: MessageEvent,
+    /// Matched local command name, if dispatch found one.
     pub command: Option<String>,
+    /// Raw argument text after the matched command path.
     pub args: String,
+    /// Decoded tokens when quoting is valid; legacy whitespace fallback on malformed input. Use Arguments/FromArgs for validated parsing.
     pub argv: Vec<String>,
+    /// Control handle when constructed by a running bot.
     pub bot: Option<BotHandle>,
 }
 
 impl MessageContext {
     /// Active consumer operation key. None for legacy explicit dispatch and
     /// outside the authenticated task. This is metadata, never permission proof.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::MessageContext;
+    /// fn inspect(ctx: &MessageContext) {
+    ///     let id = ctx.operation_id();
+    ///     // A local journal label only; it does not make remote requests idempotent.
+    ///     println!("Operation: {:?}", id);
+    /// }
+    /// ```
     pub fn operation_id(&self) -> Option<super::OperationId> {
         super::invocation::operation_id(self)
     }
 
     /// Register before posting a question, then await the returned collector after sending it.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::MessageContext;
+    /// fn waiter(ctx: &MessageContext) {
+    ///     let builder = ctx.replies();
+    ///     // Register the waiter before posting a prompt to avoid a response race.
+    /// }
+    /// ```
     pub fn replies(&self) -> crate::collectors::CollectorBuilder<MessageEvent> {
         self.client
             .events()
@@ -38,6 +74,17 @@ impl MessageContext {
             .channel(self.channel_id())
             .author(self.author_id())
     }
+    /// Collect matching component events from the running bot's event hub.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::MessageContext;
+    /// fn waiter(ctx: &MessageContext, message: uuid::Uuid) {
+    ///     let builder = ctx.component_events(message);
+    ///     // Register the waiter before posting a prompt to avoid a response race.
+    /// }
+    /// ```
     pub fn component_events(
         &self,
         message: Uuid,
@@ -49,6 +96,17 @@ impl MessageContext {
             .author(self.author_id())
             .message(message)
     }
+    /// Construct a context for direct helper use. Checked invocation still requires the original framework-authenticated task and cannot be enabled by this constructor.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Client, MessageContext, MessageEvent};
+    /// use std::sync::Arc;
+    /// fn context(client: Arc<Client>, event: MessageEvent) -> MessageContext {
+    ///     MessageContext::new(client, event, None, String::new(), None)
+    /// }
+    /// ```
     pub fn new(
         client: Arc<Client>,
         event: MessageEvent,
@@ -70,11 +128,23 @@ impl MessageContext {
     }
 
     /// Access the bot handle to manage cogs or bot state dynamically.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::MessageContext;
+    /// fn inspect(ctx: &MessageContext) { if let Some(handle) = ctx.bot() { println!("Draining: {}", handle.is_draining()); } }
+    /// ```
     pub fn bot(&self) -> Option<&BotHandle> {
         self.bot.as_ref()
     }
 
     /// Access the bot's in-memory cache.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::MessageContext;
+    /// fn inspect(ctx: &MessageContext) { let cache = ctx.cache().clone(); }
+    /// ```
     pub fn cache(&self) -> &crate::cache::Cache {
         self.client.cache()
     }
@@ -82,6 +152,15 @@ impl MessageContext {
     /// Checks if this command invocation hits the specified cooldown.
     ///
     /// Returns `Some(remaining_duration)` if rate limited, or `None` if allowed.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{MessageContext, cooldown::Cooldown};
+    /// async fn admit(ctx: &MessageContext, cooldown: &Cooldown) -> bool {
+    ///     // A successful check consumes the configured bucket.
+    ///     ctx.check_cooldown(cooldown).await.is_none()
+    /// }
+    /// ```
     pub async fn check_cooldown(
         &self,
         cooldown: &crate::cooldown::Cooldown,
@@ -90,31 +169,81 @@ impl MessageContext {
     }
 
     /// ID of the message.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::MessageContext;
+    /// fn inspect(ctx: &MessageContext) {
+    ///     println!("Message: {}", ctx.message_id());
+    /// }
+    /// ```
     pub fn message_id(&self) -> Uuid {
         self.event.id
     }
 
     /// ID of the channel where the message was sent.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::MessageContext;
+    /// fn inspect(ctx: &MessageContext) {
+    ///     println!("Channel: {}", ctx.channel_id());
+    /// }
+    /// ```
     pub fn channel_id(&self) -> Uuid {
         self.event.channel_id
     }
 
     /// Server ID if this message was sent in a server channel.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::MessageContext;
+    /// fn inspect(ctx: &MessageContext) {
+    ///     if let Some(server) = ctx.server_id() { println!("Server: {server}"); }
+    /// }
+    /// ```
     pub fn server_id(&self) -> Option<Uuid> {
         self.event.server_id
     }
 
     /// Author user ID.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::MessageContext;
+    /// fn inspect(ctx: &MessageContext) {
+    ///     println!("Requester: {}", ctx.author_id());
+    /// }
+    /// ```
     pub fn author_id(&self) -> Uuid {
         self.event.author_id
     }
 
     /// Text content of the message.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::MessageContext;
+    /// fn inspect(ctx: &MessageContext) {
+    ///     let normalized = ctx.content().trim();
+    ///     assert!(normalized.len() <= ctx.content().len());
+    /// }
+    /// ```
     pub fn content(&self) -> &str {
         self.event.content.as_deref().unwrap_or_default()
     }
 
     /// Author mention string (`<@author_id>`).
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::MessageContext;
+    /// fn inspect(ctx: &MessageContext) {
+    ///     let mention = ctx.author_mention();
+    ///     println!("{mention}");
+    /// }
+    /// ```
     pub fn author_mention(&self) -> String {
         format!("<@{}>", self.event.author_id)
     }
@@ -137,6 +266,15 @@ impl MessageContext {
     }
 
     /// Replies with a fully customized message (e.g. with embeds or buttons).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{MessageContext, Result};
+    /// async fn handle(ctx: &MessageContext) -> Result<()> {
+    ///     let receipt = ctx.reply_with(rappin::CreateMessage::new("Rich reply").embed(rappin::Embed::new().title("Status"))).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn reply_with(&self, mut message: CreateMessage) -> Result<Message> {
         if message.reply_to.is_none() {
             message.reply_to = Some(self.event.id);
@@ -164,6 +302,15 @@ impl MessageContext {
     }
 
     /// Posts a Components V2 layout message in the channel.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{MessageContext, Result};
+    /// async fn handle(ctx: &MessageContext) -> Result<()> {
+    ///     let receipt = ctx.send_layout([rappin::Container::new().add(rappin::TextDisplay::new("Status"))]).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn send_layout(
         &self,
         components: impl IntoIterator<Item = impl Into<Component>>,
@@ -174,6 +321,15 @@ impl MessageContext {
     }
 
     /// Adds a reaction to this message.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{MessageContext, Result};
+    /// async fn handle(ctx: &MessageContext) -> Result<()> {
+    ///     let receipt = ctx.react("✅").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn react(&self, emoji: &str) -> Result<()> {
         self.client
             .add_reaction(self.event.channel_id, self.event.id, emoji)
@@ -181,6 +337,15 @@ impl MessageContext {
     }
 
     /// Deletes this message.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{MessageContext, Result};
+    /// async fn handle(ctx: &MessageContext) -> Result<()> {
+    ///     let receipt = ctx.delete().await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn delete(&self) -> Result<()> {
         self.client
             .delete_message(self.event.channel_id, self.event.id)
@@ -242,9 +407,21 @@ impl MessageContext {
 
 /// Context provided to button click / interaction handlers.
 #[derive(Clone)]
+/// # Example
+///
+/// ```no_run
+/// use rappin::{InteractionContext, Result};
+/// async fn clicked(ctx: InteractionContext) -> Result<()> {
+///     if ctx.custom_id() == "confirm" { ctx.ephemeral("Confirmed").await?; }
+///     Ok(())
+/// }
+/// ```
 pub struct InteractionContext {
+    /// Parent authenticated API client.
     pub client: Arc<Client>,
+    /// Original interaction, including its sensitive callback credential.
     pub event: InteractionEvent,
+    /// Bot control handle when dispatched by the framework.
     pub bot: Option<BotHandle>,
 }
 
@@ -256,27 +433,80 @@ impl InteractionContext {
             .await
     }
 
+    /// Read local acknowledgement tracking for this interaction.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{InteractionContext, Result};
+    /// async fn clicked(ctx: &InteractionContext) -> Result<()> {
+    ///     let result = ctx.response_state().await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn response_state(&self) -> Result<crate::interactions::InteractionState> {
         self.client.interaction_state(&self.event).await
     }
+    /// Alias for silent acknowledgement; follow with an eligible callback as documented.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{InteractionContext, Result};
+    /// async fn clicked(ctx: &InteractionContext) -> Result<()> {
+    ///     let result = ctx.defer().await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn defer(&self) -> Result<()> {
         self.ack().await
     }
+    /// Construct a context using the original verified interaction and shared client.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Client, InteractionContext, InteractionEvent};
+    /// use std::sync::Arc;
+    /// fn context(client: Arc<Client>, event: InteractionEvent) -> InteractionContext {
+    ///     InteractionContext::new(client, event, None)
+    /// }
+    /// ```
     pub fn new(client: Arc<Client>, event: InteractionEvent, bot: Option<BotHandle>) -> Self {
         Self { client, event, bot }
     }
 
     /// Access the bot handle to manage cogs or bot state dynamically.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::InteractionContext;
+    /// fn inspect(ctx: &InteractionContext) { if let Some(handle) = ctx.bot() { println!("Draining: {}", handle.is_draining()); } }
+    /// ```
     pub fn bot(&self) -> Option<&BotHandle> {
         self.bot.as_ref()
     }
 
     /// Access the bot's in-memory cache.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::InteractionContext;
+    /// fn inspect(ctx: &InteractionContext) { let cache = ctx.cache().clone(); }
+    /// ```
     pub fn cache(&self) -> &crate::cache::Cache {
         self.client.cache()
     }
 
     /// Updates the interaction message with a new page from a paginator.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{InteractionContext, paginator::Paginator, Result};
+    /// async fn next_page(ctx: &InteractionContext, pages: &Paginator) -> Result<()> {
+    ///     ctx.update_paginator(pages, 1).await
+    /// }
+    /// ```
     pub async fn update_paginator(
         &self,
         paginator: &crate::paginator::Paginator,
@@ -287,36 +517,95 @@ impl InteractionContext {
     }
 
     /// The interaction ID.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::InteractionContext;
+    /// fn inspect(ctx: &InteractionContext) {
+    ///     println!("Interaction: {}", ctx.interaction_id());
+    /// }
+    /// ```
     pub fn interaction_id(&self) -> &str {
         &self.event.id
     }
 
     /// The interaction security token.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::InteractionContext;
+    /// fn inspect(ctx: &InteractionContext) {
+    ///     let callback_credential = ctx.token();
+    ///     // Supply only to the matching callback endpoint; never log or persist it.
+    ///     assert!(!callback_credential.is_empty());
+    /// }
+    /// ```
     pub fn token(&self) -> &str {
         &self.event.token
     }
 
     /// The custom_id on the clicked button.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::InteractionContext;
+    /// fn inspect(ctx: &InteractionContext) {
+    ///     if ctx.custom_id() == "confirm" { println!("Confirmation route"); }
+    /// }
+    /// ```
     pub fn custom_id(&self) -> &str {
         self.event.custom_id.as_deref().unwrap_or_default()
     }
 
     /// User ID of the person who clicked.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::InteractionContext;
+    /// fn inspect(ctx: &InteractionContext) {
+    ///     if let Some(user) = ctx.user_id() { println!("Requester: {user}"); }
+    /// }
+    /// ```
     pub fn user_id(&self) -> Option<Uuid> {
         self.event.user_id
     }
 
     /// Channel ID where the button was clicked.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::InteractionContext;
+    /// fn inspect(ctx: &InteractionContext) {
+    ///     if let Some(channel) = ctx.channel_id() { println!("Channel: {channel}"); }
+    /// }
+    /// ```
     pub fn channel_id(&self) -> Option<Uuid> {
         self.event.channel_id
     }
 
     /// Server ID where the button was clicked.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::InteractionContext;
+    /// fn inspect(ctx: &InteractionContext) {
+    ///     if let Some(server) = ctx.server_id() { println!("Server: {server}"); }
+    /// }
+    /// ```
     pub fn server_id(&self) -> Option<Uuid> {
         self.event.server_id
     }
 
     /// Mention string for the interacting user.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::InteractionContext;
+    /// fn inspect(ctx: &InteractionContext) {
+    ///     let mention = ctx.user_mention();
+    ///     println!("{mention}");
+    /// }
+    /// ```
     pub fn user_mention(&self) -> String {
         if let Some(uid) = self.event.user_id {
             format!("<@{}>", uid)
@@ -326,6 +615,15 @@ impl InteractionContext {
     }
 
     /// Posts a new public reply in the channel.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{InteractionContext, Result};
+    /// async fn clicked(ctx: &InteractionContext) -> Result<()> {
+    ///     let result = ctx.reply("Public reply").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn reply(&self, content: impl Into<String>) -> Result<()> {
         let callback = InteractionCallback::reply(content);
         self.respond(&callback).await
@@ -366,12 +664,30 @@ impl InteractionContext {
     }
 
     /// Acknowledges the interaction silently ("got it").
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{InteractionContext, Result};
+    /// async fn clicked(ctx: &InteractionContext) -> Result<()> {
+    ///     let result = ctx.ack().await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn ack(&self) -> Result<()> {
         let callback = InteractionCallback::ack();
         self.respond(&callback).await
     }
 
     /// Replies with a Components V2 layout.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{InteractionContext, Result};
+    /// async fn clicked(ctx: &InteractionContext) -> Result<()> {
+    ///     let result = ctx.reply_layout([rappin::Container::new().add(rappin::TextDisplay::new("Ready"))]).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn reply_layout(
         &self,
         components: impl IntoIterator<Item = impl Into<Component>>,
@@ -381,6 +697,15 @@ impl InteractionContext {
     }
 
     /// Updates the message with a Components V2 layout.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{InteractionContext, Result};
+    /// async fn clicked(ctx: &InteractionContext) -> Result<()> {
+    ///     let result = ctx.update_layout([rappin::Container::new().add(rappin::TextDisplay::new("Updated"))]).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn update_layout(
         &self,
         components: impl IntoIterator<Item = impl Into<Component>>,

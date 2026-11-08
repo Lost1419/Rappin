@@ -8,28 +8,65 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Sensitive user authorization response; Debug is deliberately redacted and serialization still contains credentials.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::oauth2::OAuth2Token;
+/// fn expiry(token: &OAuth2Token) -> Option<std::time::Duration> {
+///     token.expires_in.map(std::time::Duration::from_secs)
+/// }
+/// ```
 pub struct OAuth2Token {
+    /// Sensitive user bearer credential; never log it.
     pub access_token: String,
     #[serde(default)]
+    /// Token type reported by the OAuth server.
     pub token_type: String,
     #[serde(default)]
+    /// Access-token lifetime in seconds, when supplied.
     pub expires_in: Option<u64>,
     /// Reserved for API evolution; Yapin currently does not issue refresh tokens.
     #[serde(default)]
     pub refresh_token: Option<String>,
     #[serde(default)]
+    /// Granted scope string, when supplied.
     pub scope: Option<String>,
 }
 /// Identity returned directly by /api/oauth/me.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// # Example
+///
+/// ```rust
+/// let user: rappin::oauth2::OAuth2User = serde_json::from_value(serde_json::json!({"id":uuid::Uuid::nil(),"username":"river","display_name":null,"avatar_url":null}))?;
+/// assert_eq!(user.username, "river");
+/// # Ok::<(), serde_json::Error>(())
+/// ```
 pub struct OAuth2User {
+    /// Authorized user UUID.
     pub id: uuid::Uuid,
+    /// Current user name.
     pub username: String,
+    /// Optional display name.
     pub display_name: Option<String>,
+    /// Optional user avatar URL.
     pub avatar_url: Option<String>,
 }
 /// Keep the verifier private in the login session and send only its challenge to authorize.
 #[derive(Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::oauth2::{OAuth2Client, Pkce};
+/// let client = OAuth2Client::public("example-client-id", "http://localhost:3000/callback");
+/// let pkce = Pkce::new();
+/// let state = uuid::Uuid::new_v4().to_string();
+/// let authorize = client.authorization_url_pkce(&state, &pkce);
+/// assert!(authorize.contains("code_challenge_method=S256"));
+/// assert!(!authorize.contains(pkce.verifier()));
+/// // Keep state and verifier in the login session; verify returned state before exchanging code.
+/// ```
 pub struct Pkce {
     verifier: String,
 }
@@ -39,6 +76,20 @@ impl Default for Pkce {
     }
 }
 impl Pkce {
+    /// Generate a fresh private verifier for one login session.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::oauth2::{OAuth2Client, Pkce};
+    /// let client = OAuth2Client::public("example-client-id", "http://localhost:3000/callback");
+    /// let pkce = Pkce::new();
+    /// let state = uuid::Uuid::new_v4().to_string();
+    /// let authorize = client.authorization_url_pkce(&state, &pkce);
+    /// assert!(authorize.contains("code_challenge_method=S256"));
+    /// assert!(!authorize.contains(pkce.verifier()));
+    /// // Keep state and verifier in the login session; verify returned state before exchanging code.
+    /// ```
     pub fn new() -> Self {
         Self {
             verifier: format!(
@@ -48,6 +99,17 @@ impl Pkce {
             ),
         }
     }
+    /// Restore a login-session verifier after validating its 43 through 128 unreserved ASCII characters.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::oauth2::Pkce;
+    /// let original = Pkce::new();
+    /// let restored = Pkce::from_verifier(original.verifier())?;
+    /// assert_eq!(restored.challenge(), original.challenge());
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn from_verifier(verifier: impl Into<String>) -> Result<Self> {
         let verifier = verifier.into();
         if !(43..=128).contains(&verifier.len())
@@ -62,14 +124,56 @@ impl Pkce {
         }
         Ok(Self { verifier })
     }
+    /// Borrow the private verifier; do not include it in authorization URLs or logs.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::oauth2::{OAuth2Client, Pkce};
+    /// let client = OAuth2Client::public("example-client-id", "http://localhost:3000/callback");
+    /// let pkce = Pkce::new();
+    /// let state = uuid::Uuid::new_v4().to_string();
+    /// let authorize = client.authorization_url_pkce(&state, &pkce);
+    /// assert!(authorize.contains("code_challenge_method=S256"));
+    /// assert!(!authorize.contains(pkce.verifier()));
+    /// // Keep state and verifier in the login session; verify returned state before exchanging code.
+    /// ```
     pub fn verifier(&self) -> &str {
         &self.verifier
     }
+    /// Return the S256 URL-safe challenge for the verifier.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::oauth2::{OAuth2Client, Pkce};
+    /// let client = OAuth2Client::public("example-client-id", "http://localhost:3000/callback");
+    /// let pkce = Pkce::new();
+    /// let state = uuid::Uuid::new_v4().to_string();
+    /// let authorize = client.authorization_url_pkce(&state, &pkce);
+    /// assert!(authorize.contains("code_challenge_method=S256"));
+    /// assert!(!authorize.contains(pkce.verifier()));
+    /// // Keep state and verifier in the login session; verify returned state before exchanging code.
+    /// ```
     pub fn challenge(&self) -> String {
         URL_SAFE_NO_PAD.encode(Sha256::digest(self.verifier.as_bytes()))
     }
 }
 #[derive(Clone)]
+/// OAuth authorization-code client; user authorization tokens are separate from bot tokens.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::oauth2::{OAuth2Client, Pkce};
+/// let client = OAuth2Client::public("example-client-id", "http://localhost:3000/callback");
+/// let pkce = Pkce::new();
+/// let state = uuid::Uuid::new_v4().to_string();
+/// let authorize = client.authorization_url_pkce(&state, &pkce);
+/// assert!(authorize.contains("code_challenge_method=S256"));
+/// assert!(!authorize.contains(pkce.verifier()));
+/// // Keep state and verifier in the login session; verify returned state before exchanging code.
+/// ```
 pub struct OAuth2Client {
     client_id: String,
     client_secret: String,
@@ -78,6 +182,16 @@ pub struct OAuth2Client {
     http: reqwest::Client,
 }
 impl OAuth2Client {
+    /// Configure a confidential application. Keep the client secret on the server; use public plus PKCE for desktop/mobile apps.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::oauth2::OAuth2Client;
+    /// fn configured(client_id: String, client_secret: String) -> OAuth2Client {
+    ///     OAuth2Client::new(client_id, client_secret, "https://example.com/oauth/callback")
+    /// }
+    /// ```
     pub fn new(
         client_id: impl Into<String>,
         client_secret: impl Into<String>,
@@ -96,14 +210,51 @@ impl OAuth2Client {
         }
     }
     /// Public desktop/mobile applications authenticate with PKCE and no secret.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::oauth2::{OAuth2Client, Pkce};
+    /// let client = OAuth2Client::public("example-client-id", "http://localhost:3000/callback");
+    /// let pkce = Pkce::new();
+    /// let state = uuid::Uuid::new_v4().to_string();
+    /// let authorize = client.authorization_url_pkce(&state, &pkce);
+    /// assert!(authorize.contains("code_challenge_method=S256"));
+    /// assert!(!authorize.contains(pkce.verifier()));
+    /// // Keep state and verifier in the login session; verify returned state before exchanging code.
+    /// ```
     pub fn public(client_id: impl Into<String>, redirect_uri: impl Into<String>) -> Self {
         Self::new(client_id, "", redirect_uri)
     }
+    /// Override the website origin for an explicitly trusted host; redirects remain disabled.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::oauth2::{OAuth2Client, Pkce};
+    /// let client = OAuth2Client::public("example-client-id", "http://localhost:3000/callback");
+    /// let pkce = Pkce::new();
+    /// let state = uuid::Uuid::new_v4().to_string();
+    /// let authorize = client.authorization_url_pkce(&state, &pkce);
+    /// assert!(authorize.contains("code_challenge_method=S256"));
+    /// assert!(!authorize.contains(pkce.verifier()));
+    /// // Keep state and verifier in the login session; verify returned state before exchanging code.
+    /// let client = client.base_url("https://www.yapin.gg");
+    /// ```
     pub fn base_url(mut self, base: impl Into<String>) -> Self {
         self.base_url = base.into().trim_end_matches('/').into();
         self
     }
     /// Yapin supports only the identify scope. Validate returned state against your login session.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::oauth2::OAuth2Client;
+    /// let client = OAuth2Client::public("example-client-id", "http://localhost:3000/callback");
+    /// let state = uuid::Uuid::new_v4().to_string();
+    /// let url = client.authorization_url(&["identify"], Some(&state));
+    /// assert!(url.contains("scope=identify"));
+    /// // Public clients must use authorization_url_pkce for the actual login flow.
+    /// ```
     pub fn authorization_url(&self, scopes: &[&str], state: Option<&str>) -> String {
         let mut query = url::form_urlencoded::Serializer::new(String::new());
         query
@@ -116,6 +267,20 @@ impl OAuth2Client {
         }
         format!("{}/oauth/authorize?{}", self.base_url, query.finish())
     }
+    /// Create an identify authorization URL with S256 PKCE and caller-owned CSRF state.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::oauth2::{OAuth2Client, Pkce};
+    /// let client = OAuth2Client::public("example-client-id", "http://localhost:3000/callback");
+    /// let pkce = Pkce::new();
+    /// let state = uuid::Uuid::new_v4().to_string();
+    /// let authorize = client.authorization_url_pkce(&state, &pkce);
+    /// assert!(authorize.contains("code_challenge_method=S256"));
+    /// assert!(!authorize.contains(pkce.verifier()));
+    /// // Keep state and verifier in the login session; verify returned state before exchanging code.
+    /// ```
     pub fn authorization_url_pkce(&self, state: &str, pkce: &Pkce) -> String {
         format!(
             "{}&code_challenge={}&code_challenge_method=S256",
@@ -123,9 +288,33 @@ impl OAuth2Client {
             pkce.challenge()
         )
     }
+    /// Exchange a confidential-app authorization code; the caller must verify callback state first.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{oauth2::OAuth2Client, Result};
+    /// async fn complete(client: &OAuth2Client, code: &str) -> Result<()> {
+    ///     let response = client.exchange_code(code).await?;
+    ///     // Store credentials only in application-owned protected session storage.
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn exchange_code(&self, code: &str) -> Result<OAuth2Token> {
         self.exchange(code, None).await
     }
+    /// Exchange the code with the verifier bound to its login session; verify callback state first.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{oauth2::OAuth2Client, Result};
+    /// async fn complete(client: &OAuth2Client, code: &str, pkce: &rappin::oauth2::Pkce) -> Result<()> {
+    ///     let response = client.exchange_code_pkce(code, pkce).await?;
+    ///     // Store credentials only in application-owned protected session storage.
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn exchange_code_pkce(&self, code: &str, pkce: &Pkce) -> Result<OAuth2Token> {
         self.exchange(code, Some(pkce.verifier())).await
     }
@@ -160,6 +349,18 @@ impl OAuth2Client {
             .map_err(|e| YappinError::Http(e.without_url()))?;
         decode(res, &[&self.client_secret, code, verifier.unwrap_or("")]).await
     }
+    /// Fetch /api/oauth/me using a user access token with identify scope, not a bot token.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{oauth2::OAuth2Client, Result};
+    /// async fn complete(client: &OAuth2Client, access_token: &str) -> Result<()> {
+    ///     let response = client.get_user_profile(access_token).await?;
+    ///     // Store credentials only in application-owned protected session storage.
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_user_profile(&self, access_token: &str) -> Result<OAuth2User> {
         let res = self
             .http

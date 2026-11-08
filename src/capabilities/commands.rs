@@ -6,15 +6,37 @@ use crate::{
 use std::{future::Future, sync::Arc};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Persistable mapping from command arguments to validated operation metadata.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::OperationCommandBinding;
+/// let binding: OperationCommandBinding = serde_json::from_value(serde_json::json!({
+///     "operation":"send_message", "name":"announce", "description":"Post an announcement",
+///     "fixed_arguments":{"channel":uuid::Uuid::nil()},
+///     "parameters":[{"name":"text", "target":"/content", "required":true, "rest":true}]
+/// }))?;
+/// binding.validate()?;
+/// let schema = binding.command_schema()?;
+/// assert_eq!(schema.info().usage(), "/announce <text>");
+/// let operation = binding.prepare(&schema.parse("Hello everyone")?)?;
+/// assert_eq!(operation.arguments()["content"], "Hello everyone");
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub struct OperationParameter {
+    /// Command argument key.
     pub name: String,
     /// JSON pointer into operation arguments, e.g. /content or /body/content.
     pub target: String,
     #[serde(default = "required")]
+    /// Whether this command parameter must be supplied.
     pub required: bool,
     #[serde(default)]
+    /// Consume remaining tokens as one final string argument.
     pub rest: bool,
     #[serde(default)]
+    /// Optional help override; otherwise use capability schema help.
     pub description: Option<String>,
 }
 fn required() -> bool {
@@ -27,18 +49,58 @@ fn empty_object() -> Value {
 /// Serializable command definition. Store this in the bot's own database;
 /// parsing/help/binding are reconstructed from the current capability metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::OperationCommandBinding;
+/// let binding: OperationCommandBinding = serde_json::from_value(serde_json::json!({
+///     "operation":"send_message", "name":"announce", "description":"Post an announcement",
+///     "fixed_arguments":{"channel":uuid::Uuid::nil()},
+///     "parameters":[{"name":"text", "target":"/content", "required":true, "rest":true}]
+/// }))?;
+/// binding.validate()?;
+/// let schema = binding.command_schema()?;
+/// assert_eq!(schema.info().usage(), "/announce <text>");
+/// let operation = binding.prepare(&schema.parse("Hello everyone")?)?;
+/// assert_eq!(operation.arguments()["content"], "Hello everyone");
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub struct OperationCommandBinding {
+    /// Canonical catalogue operation to validate.
     pub operation: String,
+    /// Installed local command name.
     pub name: String,
+    /// Command advertisement/help text.
     pub description: String,
     #[serde(default)]
+    /// Additional local names selecting this binding.
     pub aliases: Vec<String>,
     #[serde(default = "empty_object")]
+    /// Trusted fixed operation fields; they cannot overlap parameter targets.
     pub fixed_arguments: Value,
     #[serde(default)]
+    /// Ordered command parameters mapped through JSON pointers.
     pub parameters: Vec<OperationParameter>,
 }
 impl OperationCommandBinding {
+    /// Reconstruct parsing/help from current metadata and reject overlapping or unbound required fields.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::OperationCommandBinding;
+    /// let binding: OperationCommandBinding = serde_json::from_value(serde_json::json!({
+    ///     "operation":"send_message", "name":"announce", "description":"Post an announcement",
+    ///     "fixed_arguments":{"channel":uuid::Uuid::nil()},
+    ///     "parameters":[{"name":"text", "target":"/content", "required":true, "rest":true}]
+    /// }))?;
+    /// binding.validate()?;
+    /// let schema = binding.command_schema()?;
+    /// assert_eq!(schema.info().usage(), "/announce <text>");
+    /// let operation = binding.prepare(&schema.parse("Hello everyone")?)?;
+    /// assert_eq!(operation.arguments()["content"], "Hello everyone");
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn command_schema(&self) -> Result<CommandSchema> {
         let capability = capability(&self.operation)
             .ok_or_else(|| YappinError::validation("operation", "unknown operation"))?;
@@ -116,9 +178,45 @@ impl OperationCommandBinding {
         }
         Ok(command)
     }
+    /// Validate the complete binding definition without executing a handler.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::OperationCommandBinding;
+    /// let binding: OperationCommandBinding = serde_json::from_value(serde_json::json!({
+    ///     "operation":"send_message", "name":"announce", "description":"Post an announcement",
+    ///     "fixed_arguments":{"channel":uuid::Uuid::nil()},
+    ///     "parameters":[{"name":"text", "target":"/content", "required":true, "rest":true}]
+    /// }))?;
+    /// binding.validate()?;
+    /// let schema = binding.command_schema()?;
+    /// assert_eq!(schema.info().usage(), "/announce <text>");
+    /// let operation = binding.prepare(&schema.parse("Hello everyone")?)?;
+    /// assert_eq!(operation.arguments()["content"], "Hello everyone");
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn validate(&self) -> Result<()> {
         self.command_schema().map(|_| ())
     }
+    /// Combine parsed values and fixed arguments, then apply canonical typed operation validation.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::OperationCommandBinding;
+    /// let binding: OperationCommandBinding = serde_json::from_value(serde_json::json!({
+    ///     "operation":"send_message", "name":"announce", "description":"Post an announcement",
+    ///     "fixed_arguments":{"channel":uuid::Uuid::nil()},
+    ///     "parameters":[{"name":"text", "target":"/content", "required":true, "rest":true}]
+    /// }))?;
+    /// binding.validate()?;
+    /// let schema = binding.command_schema()?;
+    /// assert_eq!(schema.info().usage(), "/announce <text>");
+    /// let operation = binding.prepare(&schema.parse("Hello everyone")?)?;
+    /// assert_eq!(operation.arguments()["content"], "Hello everyone");
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn prepare(&self, values: &CommandValues) -> Result<ValidatedOperation> {
         self.validate()?;
         let input = capability(&self.operation)
@@ -146,6 +244,18 @@ impl OperationCommandBinding {
             .expect("validated operation")
             .validate(&args)
     }
+    /// Check registration names and ownership without reserving routes or executing actions.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{BotHandle, Result, capabilities::OperationCommandBinding};
+    /// async fn assess(handle: &BotHandle, binding: &OperationCommandBinding) -> Result<()> {
+    ///     let plan = binding.preflight(handle, None).await?;
+    ///     println!("{:?}", plan.routes);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn preflight(
         &self,
         handle: &crate::BotHandle,
@@ -155,6 +265,28 @@ impl OperationCommandBinding {
             .preflight_commands(&[self.command_schema()?.info()], replacing_cog)
             .await
     }
+    /// Create a normal installed command binding; handler-owned authorization remains explicit.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::OperationCommandBinding;
+    /// let binding: OperationCommandBinding = serde_json::from_value(serde_json::json!({
+    ///     "operation":"send_message", "name":"announce", "description":"Post an announcement",
+    ///     "fixed_arguments":{"channel":uuid::Uuid::nil()},
+    ///     "parameters":[{"name":"text", "target":"/content", "required":true, "rest":true}]
+    /// }))?;
+    /// binding.validate()?;
+    /// let schema = binding.command_schema()?;
+    /// assert_eq!(schema.info().usage(), "/announce <text>");
+    /// let operation = binding.prepare(&schema.parse("Hello everyone")?)?;
+    /// assert_eq!(operation.arguments()["content"], "Hello everyone");
+    /// let registered = binding.bind(|ctx, operation| async move {
+    ///     // Assess and execute with a host-derived OperationContext and policy here.
+    ///     ctx.reply(format!("Prepared {}", operation.name())).await?; Ok(())
+    /// })?;
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn bind<F, Fut>(self, handler: F) -> Result<RegisteredCommand>
     where
         F: Fn(MessageContext, ValidatedOperation) -> Fut + Send + Sync + 'static,

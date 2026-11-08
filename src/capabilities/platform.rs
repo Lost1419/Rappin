@@ -25,11 +25,26 @@ pub(super) fn is_platform_operation(name: &str) -> bool {
 /// callers own authorization; server-bound callers should execute the binding.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::capability;
+/// let operation = capability("get_api_version").unwrap().validate(&serde_json::json!({}))?;
+/// let request = operation.api_request()?;
+/// assert_eq!(request.path, "/version");
+/// assert!(request.public);
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub struct OperationRequest {
+    /// HTTP method for this validated request.
     pub method: Method,
+    /// Origin-relative API path.
     pub path: String,
+    /// Optional canonical JSON body.
     pub body: Option<Value>,
+    /// Validated in-memory upload buffers.
     pub files: Vec<UploadFile>,
+    /// Whether dispatch uses the unauthenticated public metadata path.
     pub public: bool,
 }
 impl OperationRequest {
@@ -70,6 +85,18 @@ pub(super) fn files(value: &Value) -> Result<Vec<UploadFile>> {
     Ok(files)
 }
 impl ValidatedOperation {
+    /// Inspect the validated single-request representation for supported operations; this does not assess authority or execute it.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::capability;
+    /// let operation = capability("get_api_version").unwrap().validate(&serde_json::json!({}))?;
+    /// let request = operation.api_request()?;
+    /// assert_eq!(request.path, "/version");
+    /// assert!(request.public);
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn api_request(&self) -> Result<OperationRequest> {
         let id = |key: &str| self.args[key].as_str().unwrap_or_default();
         let (method, path, public) = match self.name() {

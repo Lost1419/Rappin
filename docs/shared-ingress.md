@@ -222,7 +222,7 @@ Queued/Started/Failed/uncertain claims cannot use this completed-only policy.
 
 Existing `IngressStore` implementations continue compiling. The additive hook is:
 
-```rust,ignore
+```text
 async fn record_conflict(&self, conflict: IngressConflict)
     -> Result<AdmissionDurability>;
 ```

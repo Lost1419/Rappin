@@ -51,10 +51,17 @@ contexts, workers and custom adapters:
 | Public metadata | `get_api_version`, `get_api_changelog` |
 
 Emoji names require 2–32 ASCII letters/digits/underscores. Pictures are PNG, GIF
-or WebP up to 1 MiB, supplied as JSON base64/data URLs with
+or WebP. The typed SDK currently enforces a 1 MiB decoded limit. Supply JSON
+base64/data URLs with
 `CreateEmoji::new(name, image)` or as `UploadFile` with `upload_emoji`.
 `EmojiCreateResult { emoji: None, pending: true, .. }` means moderation is pending,
 not a failed write. Do not upload again just because no emoji is returned yet.
+
+The official endpoint description captured on 8 November 2026 advertises up to
+2 MB, while the current typed SDK and upload helpers retain the stricter 1 MiB
+limit. Acceptance above that bound has not been verified. Endpoint descriptions
+still restrict rollout even where tag headings omit “testing”; do not infer
+server eligibility from a tag label. See the [dated API support report](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.28.md).
 
 Create webhooks with `CreateBotWebhook::new(name)` and post a `WebhookMessage`.
 Bot-owned webhook operations use the parent bot's authentication; they do not

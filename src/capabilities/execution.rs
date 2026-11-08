@@ -4,6 +4,18 @@ use uuid::Uuid;
 
 /// Constructed only by catalogue validation, never by deserializing model data.
 #[derive(Debug, Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{capability, CapabilityFilter};
+/// use serde_json::json;
+/// let filter = CapabilityFilter { names: vec!["send_message".into()], library_only: true, ..Default::default() };
+/// let operation = filter.validate("send_message", &json!({"channel":uuid::Uuid::nil(), "content":"Hello"}))?;
+/// assert_eq!(operation.name(), "send_message");
+/// assert!(operation.preview().dry_run);
+/// assert!(operation.preview().authorization.is_none());
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub struct ValidatedOperation {
     pub(super) entry: &'static Capability,
     pub(super) args: Value,
@@ -11,20 +23,79 @@ pub struct ValidatedOperation {
     pub(super) limits: output::Limits,
 }
 #[derive(Debug, Clone, Serialize)]
+/// Sanitized operation data, with explicit preview and authorization evidence.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{capability, CapabilityFilter};
+/// use serde_json::json;
+/// let filter = CapabilityFilter { names: vec!["send_message".into()], library_only: true, ..Default::default() };
+/// let operation = filter.validate("send_message", &json!({"channel":uuid::Uuid::nil(), "content":"Hello"}))?;
+/// assert_eq!(operation.name(), "send_message");
+/// assert!(operation.preview().dry_run);
+/// assert!(operation.preview().authorization.is_none());
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub struct OperationResult {
+    /// Canonical executed operation name.
     pub operation: String,
+    /// Sanitized result envelope or offline preview arguments.
     pub data: Value,
+    /// True for a preview; previews do not assert requester or bot authorization.
     pub dry_run: bool,
     /// None for offline previews; a preview never asserts authorization.
     pub authorization: Option<AuthorizationReport>,
 }
 impl ValidatedOperation {
+    /// Canonical operation name captured by validation.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::{capability, CapabilityFilter};
+    /// use serde_json::json;
+    /// let filter = CapabilityFilter { names: vec!["send_message".into()], library_only: true, ..Default::default() };
+    /// let operation = filter.validate("send_message", &json!({"channel":uuid::Uuid::nil(), "content":"Hello"}))?;
+    /// assert_eq!(operation.name(), "send_message");
+    /// assert!(operation.preview().dry_run);
+    /// assert!(operation.preview().authorization.is_none());
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn name(&self) -> &'static str {
         self.entry.name
     }
+    /// Borrow the validated canonical JSON arguments.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::{capability, CapabilityFilter};
+    /// use serde_json::json;
+    /// let filter = CapabilityFilter { names: vec!["send_message".into()], library_only: true, ..Default::default() };
+    /// let operation = filter.validate("send_message", &json!({"channel":uuid::Uuid::nil(), "content":"Hello"}))?;
+    /// assert_eq!(operation.arguments()["content"], "Hello");
+    /// assert!(operation.preview().dry_run);
+    /// assert!(operation.preview().authorization.is_none());
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn arguments(&self) -> &Value {
         &self.args
     }
+    /// Borrow the source catalogue entry.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::{capability, CapabilityFilter};
+    /// use serde_json::json;
+    /// let filter = CapabilityFilter { names: vec!["send_message".into()], library_only: true, ..Default::default() };
+    /// let operation = filter.validate("send_message", &json!({"channel":uuid::Uuid::nil(), "content":"Hello"}))?;
+    /// assert_eq!(operation.capability().name, "send_message");
+    /// assert!(operation.preview().dry_run);
+    /// assert!(operation.preview().authorization.is_none());
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn capability(&self) -> &'static Capability {
         self.entry
     }
@@ -35,6 +106,20 @@ impl ValidatedOperation {
             .parse()
             .expect("validated UUID")
     }
+    /// Describe planned arguments/write steps without network access or authorization.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::{capability, CapabilityFilter};
+    /// use serde_json::json;
+    /// let filter = CapabilityFilter { names: vec!["send_message".into()], library_only: true, ..Default::default() };
+    /// let operation = filter.validate("send_message", &json!({"channel":uuid::Uuid::nil(), "content":"Hello"}))?;
+    /// assert!(operation.preview().dry_run);
+    /// assert!(operation.preview().dry_run);
+    /// assert!(operation.preview().authorization.is_none());
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn preview(&self) -> OperationResult {
         let mut arguments = self.args.clone();
         if self.name() == "create_emoji" {
@@ -52,6 +137,21 @@ impl ValidatedOperation {
             authorization: None,
         }
     }
+    /// Execute with NoAdditionalAccess; any unresolved external fact blocks execution.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Api, Result, capabilities::{ValidatedOperation, OperationContext, OperationPolicy}};
+    /// async fn execute<A: Api + ?Sized>(api: &A, operation: &ValidatedOperation, context: &OperationContext, policy: &dyn OperationPolicy) -> Result<()> {
+    ///     let report = operation.assess_with_policy(api, context, policy).await?;
+    ///     if !report.allowed() { return Ok(()); } // Show unresolved/denied checks to the caller.
+    ///     // Execution reassesses both principals; assessment is not a reservation.
+    ///     let result = operation.execute(api, context).await?;
+    ///     println!("{} completed", result.operation);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn execute<A: Api + ?Sized>(
         &self,
         api: &A,
@@ -60,6 +160,21 @@ impl ValidatedOperation {
         self.execute_with_policy(api, context, &NoAdditionalAccess)
             .await
     }
+    /// Reassess current requester/bot access and dispatch through Api. The configured client request retry policy still applies. Partial or uncertain failures retain original receipts; no whole-workflow replay is added.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Api, Result, capabilities::{ValidatedOperation, OperationContext, OperationPolicy}};
+    /// async fn execute<A: Api + ?Sized>(api: &A, operation: &ValidatedOperation, context: &OperationContext, policy: &dyn OperationPolicy) -> Result<()> {
+    ///     let report = operation.assess_with_policy(api, context, policy).await?;
+    ///     if !report.allowed() { return Ok(()); } // Show unresolved/denied checks to the caller.
+    ///     // Execution reassesses both principals; assessment is not a reservation.
+    ///     let result = operation.execute_with_policy(api, context, policy).await?;
+    ///     println!("{} completed", result.operation);
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn execute_with_policy<A: Api + ?Sized>(
         &self,
         api: &A,

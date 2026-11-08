@@ -12,15 +12,30 @@ const MAX_FRAME: u64 = 1024 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// # Example
+///
+/// ```rust
+/// use rappin::hot_reload::{WorkerCog, Listener};
+/// let worker = WorkerCog::new("observer").listen(Listener::ReactionAdd, |_ctx| async move { eprintln!("Reaction observed"); Ok(()) });
+/// ```
 pub enum Listener {
+    /// Legacy server-message observer.
     Message,
+    /// Incoming direct-message listener; never server-command dispatch.
     DmMessage,
+    /// Reaction-added listener.
     ReactionAdd,
+    /// Reaction-removed listener.
     ReactionRemove,
+    /// Legacy component interaction observer.
     Interaction,
+    /// Server membership join observer.
     MemberJoin,
+    /// Server membership leave observer.
     MemberLeave,
+    /// Invite creation observer, subject to endpoint permissions/rollout.
     InviteCreate,
+    /// Invite deletion observer, subject to endpoint permissions/rollout.
     InviteDelete,
     /// Opt-in fallible server-message listener with explicit completion.
     /// Appended to preserve the discriminants of existing public variants.
@@ -33,49 +48,105 @@ pub enum Listener {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
+/// # Example
+///
+/// ```rust
+/// use rappin::hot_reload::CogEvent;
+/// fn inspect(event: &CogEvent) {
+///     if let Some(message) = event.message() { eprintln!("Message {}", message.id); }
+///     if let Some(interaction) = event.interaction() { eprintln!("Interaction {}", interaction.id); }
+///     let arguments = event.args();
+///     let tokens = event.argv();
+///     let requester = event.author_id();
+///     let channel = event.channel_id();
+/// }
+/// ```
 pub enum CogEvent {
+    /// Incoming DM with original message identity.
     DmMessage {
+        /// Original authenticated message identity and scope.
         message: MessageEvent,
     },
+    /// Original reaction-added payload.
     ReactionAdd {
+        /// Original typed parent-delivered event.
         event: crate::ReactionEvent,
     },
+    /// Original reaction-removed payload.
     ReactionRemove {
+        /// Original typed parent-delivered event.
         event: crate::ReactionEvent,
     },
+    /// Installed command name/arguments and original authenticated message.
     Command {
+        /// Canonical installed command route.
         command: String,
+        /// Explicit raw command argument string.
         args: String,
+        /// Parent-decoded command tokens.
         argv: Vec<String>,
+        /// Original authenticated message identity and scope.
         message: MessageEvent,
     },
+    /// Matched button prefix and original callback identity.
     Button {
+        /// Matched custom-ID prefix.
         prefix: String,
+        /// Original interaction, including its sensitive callback credential.
         interaction: InteractionEvent,
     },
+    /// Original legacy server message.
     Message {
+        /// Original authenticated message identity and scope.
         message: MessageEvent,
     },
+    /// Original legacy interaction event.
     Interaction {
+        /// Original interaction, including its sensitive callback credential.
         interaction: InteractionEvent,
     },
+    /// Original membership join event.
     MemberJoin {
+        /// Original typed parent-delivered event.
         event: MemberJoinEvent,
     },
+    /// Original membership leave event.
     MemberLeave {
+        /// Original typed parent-delivered event.
         event: MemberLeaveEvent,
     },
+    /// Original invite creation event.
     InviteCreate {
+        /// Original typed parent-delivered event.
         event: crate::InviteEvent,
     },
+    /// Original invite deletion event.
     InviteDelete {
+        /// Original typed parent-delivered event.
         event: crate::InviteEvent,
     },
+    /// Lossless select/modal/command interaction input.
     UiInteraction {
+        /// Original typed parent-delivered event.
         event: crate::UiInteraction,
     },
 }
 impl CogEvent {
+    /// Borrow the original command/message/DM event, when present.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::CogEvent;
+    /// fn inspect(event: &CogEvent) {
+    ///     if let Some(message) = event.message() { eprintln!("Message {}", message.id); }
+    ///     if let Some(interaction) = event.interaction() { eprintln!("Interaction {}", interaction.id); }
+    ///     let arguments = event.args();
+    ///     let tokens = event.argv();
+    ///     let requester = event.author_id();
+    ///     let channel = event.channel_id();
+    /// }
+    /// ```
     pub fn message(&self) -> Option<&MessageEvent> {
         match self {
             Self::Command { message, .. }
@@ -84,6 +155,21 @@ impl CogEvent {
             _ => None,
         }
     }
+    /// Borrow original button or extended UI interaction identity, when present.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::CogEvent;
+    /// fn inspect(event: &CogEvent) {
+    ///     if let Some(message) = event.message() { eprintln!("Message {}", message.id); }
+    ///     if let Some(interaction) = event.interaction() { eprintln!("Interaction {}", interaction.id); }
+    ///     let arguments = event.args();
+    ///     let tokens = event.argv();
+    ///     let requester = event.author_id();
+    ///     let channel = event.channel_id();
+    /// }
+    /// ```
     pub fn interaction(&self) -> Option<&InteractionEvent> {
         match self {
             Self::Button { interaction, .. } | Self::Interaction { interaction } => {
@@ -93,6 +179,21 @@ impl CogEvent {
             _ => None,
         }
     }
+    /// Borrow raw command/UI arguments, or an empty string.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::CogEvent;
+    /// fn inspect(event: &CogEvent) {
+    ///     if let Some(message) = event.message() { eprintln!("Message {}", message.id); }
+    ///     if let Some(interaction) = event.interaction() { eprintln!("Interaction {}", interaction.id); }
+    ///     let arguments = event.args();
+    ///     let tokens = event.argv();
+    ///     let requester = event.author_id();
+    ///     let channel = event.channel_id();
+    /// }
+    /// ```
     pub fn args(&self) -> &str {
         match self {
             Self::Command { args, .. } => args,
@@ -100,12 +201,42 @@ impl CogEvent {
             _ => "",
         }
     }
+    /// Borrow command argument tokens, empty for non-command events.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::CogEvent;
+    /// fn inspect(event: &CogEvent) {
+    ///     if let Some(message) = event.message() { eprintln!("Message {}", message.id); }
+    ///     if let Some(interaction) = event.interaction() { eprintln!("Interaction {}", interaction.id); }
+    ///     let arguments = event.args();
+    ///     let tokens = event.argv();
+    ///     let requester = event.author_id();
+    ///     let channel = event.channel_id();
+    /// }
+    /// ```
     pub fn argv(&self) -> &[String] {
         match self {
             Self::Command { argv, .. } => argv,
             _ => &[],
         }
     }
+    /// Original message, reaction or interaction actor, when available.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::CogEvent;
+    /// fn inspect(event: &CogEvent) {
+    ///     if let Some(message) = event.message() { eprintln!("Message {}", message.id); }
+    ///     if let Some(interaction) = event.interaction() { eprintln!("Interaction {}", interaction.id); }
+    ///     let arguments = event.args();
+    ///     let tokens = event.argv();
+    ///     let requester = event.author_id();
+    ///     let channel = event.channel_id();
+    /// }
+    /// ```
     pub fn author_id(&self) -> Option<uuid::Uuid> {
         if let Self::ReactionAdd { event } | Self::ReactionRemove { event } = self {
             return Some(event.user_id);
@@ -114,6 +245,21 @@ impl CogEvent {
             .map(|m| m.author_id)
             .or_else(|| self.interaction().and_then(|i| i.user_id))
     }
+    /// Original message, reaction or interaction channel, when available.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::hot_reload::CogEvent;
+    /// fn inspect(event: &CogEvent) {
+    ///     if let Some(message) = event.message() { eprintln!("Message {}", message.id); }
+    ///     if let Some(interaction) = event.interaction() { eprintln!("Interaction {}", interaction.id); }
+    ///     let arguments = event.args();
+    ///     let tokens = event.argv();
+    ///     let requester = event.author_id();
+    ///     let channel = event.channel_id();
+    /// }
+    /// ```
     pub fn channel_id(&self) -> Option<uuid::Uuid> {
         if let Self::ReactionAdd { event } | Self::ReactionRemove { event } = self {
             return Some(event.channel_id);

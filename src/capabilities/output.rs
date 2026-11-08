@@ -1,13 +1,45 @@
 //! Shared output bounds.
 use super::*;
 #[derive(Debug, Clone, Default)]
+/// Local output projection/bounds; API cursor semantics still apply.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::output::{Limits, apply, validate};
+/// let limits = Limits { fields: vec!["id".into()], max_items: Some(1), ..Default::default() };
+/// assert!(limits.active());
+/// validate(&limits, Some("channels"))?;
+/// let result = apply(serde_json::json!({"channels":[{"id":"a","name":"A"},{"id":"b","name":"B"}]}), "channels", &limits)?;
+/// assert_eq!(result["channels"].as_array().unwrap().len(), 1);
+/// assert!(result["channels"][0].get("name").is_none());
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub struct Limits {
+    /// Top-level item fields to retain; empty retains all.
     pub fields: Vec<String>,
+    /// Maximum returned rows, subject to safe message timestamp grouping.
     pub max_items: Option<usize>,
+    /// Maximum serialized response size; too small a bound returns an error.
     pub max_bytes: Option<usize>,
+    /// Local offset for collections without API cursor semantics.
     pub offset: Option<usize>,
 }
 impl Limits {
+    /// Whether any projection or bound is configured.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::output::{Limits, apply, validate};
+    /// let limits = Limits { fields: vec!["id".into()], max_items: Some(1), ..Default::default() };
+    /// assert!(limits.active());
+    /// validate(&limits, Some("channels"))?;
+    /// let result = apply(serde_json::json!({"channels":[{"id":"a","name":"A"},{"id":"b","name":"B"}]}), "channels", &limits)?;
+    /// assert_eq!(result["channels"].as_array().unwrap().len(), 1);
+    /// assert!(result["channels"][0].get("name").is_none());
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn active(&self) -> bool {
         !self.fields.is_empty()
             || self.max_items.is_some()
@@ -15,6 +47,20 @@ impl Limits {
             || self.offset.is_some()
     }
 }
+/// Validate collection-only bounds and reject offsets on cursor-based messages/members.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::output::{Limits, apply, validate};
+/// let limits = Limits { fields: vec!["id".into()], max_items: Some(1), ..Default::default() };
+/// assert!(limits.active());
+/// validate(&limits, Some("channels"))?;
+/// let result = apply(serde_json::json!({"channels":[{"id":"a","name":"A"},{"id":"b","name":"B"}]}), "channels", &limits)?;
+/// assert_eq!(result["channels"].as_array().unwrap().len(), 1);
+/// assert!(result["channels"][0].get("name").is_none());
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub fn validate(limits: &Limits, key: Option<&str>) -> Result<()> {
     if !limits.active() {
         return Ok(());
@@ -43,6 +89,20 @@ pub fn validate(limits: &Limits, key: Option<&str>) -> Result<()> {
     }
     Ok(())
 }
+/// Project and bound collection results with continuation metadata; do not split timestamp-equivalent message groups.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::output::{Limits, apply, validate};
+/// let limits = Limits { fields: vec!["id".into()], max_items: Some(1), ..Default::default() };
+/// assert!(limits.active());
+/// validate(&limits, Some("channels"))?;
+/// let result = apply(serde_json::json!({"channels":[{"id":"a","name":"A"},{"id":"b","name":"B"}]}), "channels", &limits)?;
+/// assert_eq!(result["channels"].as_array().unwrap().len(), 1);
+/// assert!(result["channels"][0].get("name").is_none());
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub fn apply(mut data: Value, key: &str, limits: &Limits) -> Result<Value> {
     if !limits.active() {
         return Ok(data);

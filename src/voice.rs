@@ -9,14 +9,39 @@ use std::{
 use tokio::{io::AsyncWriteExt, process::Command};
 use uuid::Uuid;
 #[derive(Clone, Debug)]
+/// Trusted local voice bridge dependencies and playback deadline; requires the voice feature.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::voice::VoiceOptions;
+/// let options = VoiceOptions::new("./vendor/yapin-sdk.mjs", "./node_modules");
+/// assert_eq!(options.timeout, std::time::Duration::from_secs(3600));
+/// // The SDK file, Node packages and ffmpeg must be trusted installed dependencies.
+/// ```
 pub struct VoiceOptions {
+    /// Trusted local official Yapin SDK module path.
     pub sdk: PathBuf,
+    /// Directory containing the required Node/LiveKit dependencies.
     pub node_modules: PathBuf,
+    /// Node executable path; defaults to node on PATH.
     pub node: PathBuf,
+    /// ffmpeg executable path selected at construction.
     pub ffmpeg: PathBuf,
+    /// Maximum playback/bridge lifetime; defaults to one hour.
     pub timeout: Duration,
 }
 impl VoiceOptions {
+    /// Configure trusted SDK/package paths; prefer local ffmpeg-static when present, otherwise ffmpeg on PATH.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::voice::VoiceOptions;
+    /// let options = VoiceOptions::new("./vendor/yapin-sdk.mjs", "./node_modules");
+    /// assert_eq!(options.timeout, std::time::Duration::from_secs(3600));
+    /// // The SDK file, Node packages and ffmpeg must be trusted installed dependencies.
+    /// ```
     pub fn new(sdk: impl Into<PathBuf>, node_modules: impl Into<PathBuf>) -> Self {
         let node_modules = node_modules.into();
         let local_ffmpeg = node_modules.join("ffmpeg-static").join(if cfg!(windows) {
@@ -41,6 +66,15 @@ impl VoiceOptions {
 impl Client {
     /// Joins, publishes one encrypted audio track, waits for playout and leaves, including on failure.
     /// This helper needs neither bot.run() nor command synchronization. Audio is decoded locally.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Client, Result, voice::VoiceOptions};
+    /// use uuid::Uuid;
+    /// async fn play(client: &Client, server: Uuid, channel: Uuid, file: &std::path::Path, options: &VoiceOptions) -> Result<()> {
+    ///     client.play_audio(server, channel, file, options).await
+    /// }
+    /// ```
     pub async fn play_audio(
         &self,
         server: Uuid,

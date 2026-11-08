@@ -38,7 +38,7 @@ edition = "2021"
 default-run = "my-bot"
 
 [dependencies]
-rappin = { package = "rappin-rs", version = "0.1.21", features = ["hot-reload"] }
+rappin = { package = "rappin-rs", version = "0.1.29", features = ["hot-reload"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -242,7 +242,7 @@ Worker-local memory starts fresh each generation. Keep durable state in a databa
 
 Default limits are a five-minute build, ten-second startup, and 120-second handler invocation, including time queued behind another invocation in that worker. Customize the public `WorkerProject::{build_timeout, startup_timeout, handler_timeout}` fields before loading. IPC frames are limited to 1 MiB, with at most 128 API requests per invocation.
 
-Runtime crashes, protocol errors, and handler timeouts follow the bot's normal handler-error policy; they are not silently retried or automatically restarted. Reload the worker to recover an invalid connection. A timed-out write may already have reached the API, so check its outcome before retrying. Failed event batches retain the normal cursor/replay behavior. Cog listener errors are logged, as with the existing listener API.
+Runtime crashes, protocol errors, and handler timeouts follow the bot's normal handler-error policy; they are not silently retried or automatically restarted. Reload the worker to recover an invalid connection. A timed-out write may already have reached the API, so check its outcome before retrying. Failed event batches retain the normal cursor/replay behavior. Fallible cog listeners propagate failures through the message or event failure policy; incomplete work retains its checkpoint barrier. Legacy infallible observer hooks still return `()`. See [handler failures](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md) and [message gates](https://github.com/Lost1419/Rappin/blob/main/docs/message-policy.md).
 
 ## Credential boundary
 
@@ -255,17 +255,22 @@ Worker code, dependencies, Cargo configuration, and build scripts must be truste
 The 0.1.7 worker SDK adds `command_typed` / `WorkerContext::parse`, live help
 metadata, `prompt_for_reply`, and `wait_for_event`. The parent registers prompt
 waiters before posting and owns the authenticated transport. See the
-[Rust workflow guide](rust-bots.md#hot-workers) for bounds, cancellation, and
+[Rust workflow guide](https://github.com/Lost1419/Rappin/blob/main/docs/rust-bots.md#hot-workers) for bounds, cancellation, and
 protocol compatibility. The worker example includes `roll` and `question`.
 
 ### API 1.2 worker transport
 
 Protocol v4 adds public metadata reads, fixed 64 KiB upload chunks, DM listeners
 and reaction listeners. Total upload data stays bounded to 12 MiB; ordinary frames
-remain 1 MiB. New parents accept v1–v3 workers; rebuild both binaries when upgrading
-workers. DM and native cog reaction hooks return Result and leave failed processing
+remain 1 MiB. The current parent accepts protocol v1–v8 workers; newer capabilities
+require corresponding parent support. Upgrade the parent before enabling them.
+DM and native cog reaction hooks return Result and leave failed processing
 uncommitted. See [API 1.2 workflows](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.2.md).
 
 For fallible natural-language handlers, use `WorkerCog::on_message` and the parent
-[message-failure policy](message-policy.md). This opt-in uses protocol v5; existing
+[message-failure policy](https://github.com/Lost1419/Rappin/blob/main/docs/message-policy.md). This opt-in uses protocol v5; existing
 handlers retain protocol v4, and new parents continue accepting older workers.
+
+Additional opt-ins use protocol v6 for single-attempt API requests, v7 for select/modal
+interaction APIs, and v8 for consumer operation identities. See [API 1.3 interactions](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.3.md),
+[checked invocation](https://github.com/Lost1419/Rappin/blob/main/docs/checked-invocation.md), and the protocol table in the [Rust bot guide](https://github.com/Lost1419/Rappin/blob/main/docs/rust-bots.md).

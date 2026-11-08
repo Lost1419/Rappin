@@ -13,7 +13,17 @@ use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+/// Opt-in connection-scoped JSON request deadline; separate from server-advised retry wait budgets.
+///
+/// # Example
+///
+/// ```rust
+/// let mut config = rappin::gateway::GatewayRequestConfig::default();
+/// config.timeout = std::time::Duration::from_secs(10);
+/// assert_eq!(config.timeout.as_secs(), 10);
+/// ```
 pub struct GatewayRequestConfig {
+    /// Maximum queue/admission/response lifetime for a gateway JSON request; defaults to 15 seconds.
     pub timeout: Duration,
 }
 impl Default for GatewayRequestConfig {
@@ -26,23 +36,58 @@ impl Default for GatewayRequestConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Selected JSON request transport; independent of event intake transport.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::gateway::{GatewayRequestStatus, RequestTransport};
+/// fn inspect(status: &GatewayRequestStatus) {
+///     println!("{:?}, in flight {}, uncertain {}", status.selected, status.in_flight, status.uncertain_completions);
+///     if let Some(cause) = &status.last_disconnect { println!("Disconnect: {cause}"); }
+/// }
+/// ```
 pub enum RequestTransport {
+    /// HTTPS JSON request path.
     Https,
+    /// Live WebSocket JSON request correlation path.
     Gateway,
 }
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+/// Shared cumulative request counters and current gateway capability/connection state.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::gateway::{GatewayRequestStatus, RequestTransport};
+/// fn inspect(status: &GatewayRequestStatus) {
+///     println!("{:?}, in flight {}, uncertain {}", status.selected, status.in_flight, status.uncertain_completions);
+///     if let Some(cause) = &status.last_disconnect { println!("Disconnect: {cause}"); }
+/// }
+/// ```
 pub struct GatewayRequestStatus {
+    /// Whether gateway JSON requests were explicitly enabled.
     pub enabled: bool,
+    /// Whether the connection advertised request support.
     pub capability: bool,
+    /// Whether a request-capable socket is currently connected.
     pub connected: bool,
+    /// Currently selected JSON request transport.
     pub selected: RequestTransport,
+    /// Requests currently admitted to the gateway path.
     pub in_flight: usize,
+    /// Cumulative frames submitted to the socket.
     pub submitted: u64,
+    /// Cumulative request completions observed by the gateway path.
     pub completed: u64,
+    /// Cumulative requests rejected before socket submission.
     pub admission_rejected: u64,
+    /// Cumulative responses without a matching live correlation.
     pub unknown_responses: u64,
+    /// Cumulative submitted requests whose remote outcome was not established.
     pub uncertain_completions: u64,
+    /// Cumulative response duration; not an individual request latency distribution.
     pub response_time: Duration,
     /// Last connection termination, separate from a request response deadline.
     pub last_disconnect: Option<crate::RemoteError>,

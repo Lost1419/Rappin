@@ -1,3 +1,13 @@
+//! # Example
+//!
+//! ```rust
+//! use rappin::AvailabilityPolicy;
+//! use std::time::Duration;
+//! let policy = AvailabilityPolicy::new(5, Duration::from_secs(120))?
+//!     .backoff(Duration::from_millis(500), Duration::from_secs(10))?
+//!     .jitter_percent(20)?;
+//! # Ok::<(), rappin::YappinError>(())
+//! ```
 //! Opt-in availability budgets for startup and event-intake reads.
 use crate::{RemoteError, Result, YappinError};
 use serde::{Deserialize, Serialize};
@@ -6,6 +16,18 @@ use tokio::{sync::watch, time::Instant};
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+/// Opt-in retry budget for read-only startup and event intake. It does not retry handlers or mutations and is separate from the client's server-advised wait budget.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::AvailabilityPolicy;
+/// use std::time::Duration;
+/// let policy = AvailabilityPolicy::new(5, Duration::from_secs(120))?
+///     .backoff(Duration::from_millis(500), Duration::from_secs(10))?
+///     .jitter_percent(20)?;
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub struct AvailabilityPolicy {
     max_attempts: u32,
     max_elapsed: Duration,
@@ -27,6 +49,16 @@ impl Default for AvailabilityPolicy {
 impl AvailabilityPolicy {
     /// Includes the first attempt. Elapsed time includes requests, shared waits
     /// and backoff; each successful read starts a new availability episode.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::AvailabilityPolicy;
+    /// use std::time::Duration;
+    /// let policy = AvailabilityPolicy::new(5, Duration::from_secs(120))?
+    ///     .backoff(Duration::from_millis(500), Duration::from_secs(10))?
+    ///     .jitter_percent(20)?;
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn new(max_attempts: u32, max_elapsed: Duration) -> Result<Self> {
         if !(1..=1000).contains(&max_attempts)
             || max_elapsed.is_zero()
@@ -43,6 +75,18 @@ impl AvailabilityPolicy {
             ..Self::default()
         })
     }
+    /// Set positive exponential-backoff bounds. The maximum must be at least the initial delay; invalid or unrepresentable durations return a validation error.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::AvailabilityPolicy;
+    /// use std::time::Duration;
+    /// let policy = AvailabilityPolicy::new(5, Duration::from_secs(120))?
+    ///     .backoff(Duration::from_millis(500), Duration::from_secs(10))?
+    ///     .jitter_percent(20)?;
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn backoff(mut self, initial: Duration, maximum: Duration) -> Result<Self> {
         if initial.is_zero() || maximum < initial || Instant::now().checked_add(maximum).is_none() {
             return Err(YappinError::validation(
@@ -55,6 +99,12 @@ impl AvailabilityPolicy {
         Ok(self)
     }
     /// Downward jitter in [base * (1 - percent/100), base], bounded by max_backoff.
+    /// # Example
+    ///
+    /// ```rust
+    /// let policy = rappin::AvailabilityPolicy::default().jitter_percent(0).unwrap();
+    /// assert!(rappin::AvailabilityPolicy::default().jitter_percent(101).is_err());
+    /// ```
     pub fn jitter_percent(mut self, percent: u8) -> Result<Self> {
         if percent > 100 {
             return Err(YappinError::validation(
@@ -88,43 +138,94 @@ impl AvailabilityPolicy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Identifies the startup or intake read being recovered.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(serde_json::to_value(rappin::AvailabilityPhase::StartupIdentity).unwrap(), "startup_identity");
+/// ```
 pub enum AvailabilityPhase {
+    /// Initial bot identity read from GET /me.
     StartupIdentity,
+    /// Initial event probe used when establishing a starting cursor.
     StartupCursor,
+    /// Subsequent polling or gateway intake reads.
     Intake,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Lifecycle state of the current availability episode.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(rappin::AvailabilityState::default(), rappin::AvailabilityState::Idle);
+/// ```
 pub enum AvailabilityState {
     #[default]
+    /// No episode is active or has been reported.
     Idle,
+    /// A read attempt is in progress.
     Reading,
+    /// Recovery is waiting before the next permitted read attempt.
     Waiting,
+    /// The episode completed with a successful read.
     Recovered,
+    /// A configured recovery budget prevented further attempts.
     Exhausted,
+    /// The episode was interrupted by cancellation or shutdown.
     Cancelled,
+    /// The read failed with a cause that this availability policy does not retry.
     Terminal,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Reason an availability episode ended without a successful read.
+///
+/// # Example
+///
+/// ```rust
+/// assert_eq!(serde_json::to_value(rappin::AvailabilityEnd::AttemptLimit).unwrap(), "attempt_limit");
+/// ```
 pub enum AvailabilityEnd {
+    /// The maximum attempt count was reached.
     AttemptLimit,
+    /// The overall episode deadline was reached.
     ElapsedLimit,
+    /// The next required delay would exceed the episode deadline.
     BackoffExceedsDeadline,
+    /// Recovery was cancelled before another successful read.
     Cancelled,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
+/// Serializable recovery failure retaining its budget, read phase and last structured cause. Missing last_error is not an invented HTTP success or status.
+///
+/// # Example
+///
+/// ```rust
+/// let zero = serde_json::json!({"secs":0,"nanos":0});
+/// let failure: rappin::AvailabilityFailure = serde_json::from_value(serde_json::json!({"phase":"intake","reason":"attempt_limit","attempts":5,"elapsed":zero,"backoff_wait":zero,"max_attempts":5,"max_elapsed":{"secs":120,"nanos":0},"last_error":null})).unwrap();
+/// assert_eq!(failure.attempts, failure.max_attempts);
+/// ```
 pub struct AvailabilityFailure {
+    /// Read phase that exhausted or cancelled its availability episode.
     pub phase: AvailabilityPhase,
+    /// Budget or cancellation condition that ended recovery.
     pub reason: AvailabilityEnd,
+    /// Attempts started in this episode, including the first attempt.
     pub attempts: u32,
+    /// Wall-clock elapsed time, including request execution and waits.
     pub elapsed: Duration,
+    /// Time spent in availability backoff, separate from server-advised rate-limit waiting.
     pub backoff_wait: Duration,
+    /// Configured attempt limit for this episode.
     pub max_attempts: u32,
+    /// Configured overall elapsed budget for this episode.
     pub max_elapsed: Duration,
     /// Last observed cause. An aborted in-flight read has no invented HTTP status.
     pub last_error: Option<RemoteError>,
@@ -133,22 +234,45 @@ pub struct AvailabilityFailure {
 /// Snapshot counters remain exact even when latest-only watch notifications coalesce.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
+/// # Example
+///
+/// ```rust
+/// let status = rappin::AvailabilityStatus::default();
+/// assert_eq!(status.total_attempts, 0);
+/// assert_eq!(status.state, rappin::AvailabilityState::Idle);
+/// ```
 pub struct AvailabilityStatus {
+    /// Current or most recent availability read phase.
     pub phase: Option<AvailabilityPhase>,
+    /// Current availability episode state.
     pub state: AvailabilityState,
+    /// Attempts started in the current or most recent episode.
     pub attempts: u32,
+    /// Attempt budget for the current or most recent episode.
     pub max_attempts: u32,
+    /// Elapsed budget for the current or most recent episode.
     pub max_elapsed: Duration,
+    /// Elapsed episode time measured at the last update.
     pub elapsed: Duration,
+    /// Availability-backoff waiting measured in the current episode.
     pub backoff_wait: Duration,
+    /// Next planned availability delay, if recovery is waiting.
     pub next_delay: Option<Duration>,
+    /// Last structured read error, if one has been observed.
     pub last_error: Option<RemoteError>,
+    /// Cumulative availability episodes started.
     pub episodes: u64,
+    /// Cumulative attempts started across episodes.
     pub total_attempts: u64,
+    /// Cumulative retries after initial attempts.
     pub total_retries: u64,
+    /// Cumulative availability-backoff time across episodes.
     pub total_backoff_wait: Duration,
+    /// Cumulative episodes that recovered after a transient failure.
     pub recoveries: u64,
+    /// Cumulative episodes that exhausted their configured budget.
     pub exhaustions: u64,
+    /// Cumulative episodes cancelled by shutdown or cancellation.
     pub cancellations: u64,
 }
 #[derive(Clone)]

@@ -1,14 +1,32 @@
+//! Structured API, command, intake and candidate failures with explicit mutation outcomes.
 use thiserror::Error;
 
 /// Serializable error crossing a worker boundary. Details retain retry/outcome
 /// hints and partial-write receipts; parent transports redact credentials first.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+/// # Example
+///
+/// ```rust
+/// use rappin::YappinError;
+/// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+/// assert_eq!(error.status_code(), Some(429));
+/// assert!(error.is_rate_limit());
+/// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
+/// let remote = error.to_remote();
+/// assert_eq!(remote.to_json()["status"], 429);
+/// // A retry hint does not authorize replaying a handler or uncertain mutation.
+/// ```
 pub struct RemoteError {
+    /// Stable structured error classification.
     pub kind: String,
+    /// Human-readable cause; sanitize application-supplied details before external disclosure.
     pub message: String,
+    /// Original HTTP status when available.
     pub status: Option<u16>,
+    /// Original nonnegative retry advice in seconds, when available.
     pub retry_after: Option<f64>,
     #[serde(flatten)]
+    /// Additional structured cause, outcome, partial receipts and diagnostics preserved through IPC.
     pub details: std::collections::BTreeMap<String, serde_json::Value>,
 }
 impl std::fmt::Display for RemoteError {
@@ -19,6 +37,14 @@ impl std::fmt::Display for RemoteError {
 impl std::error::Error for RemoteError {}
 impl RemoteError {
     /// Recover a bounded report after a worker boundary or failure callback.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::RemoteError;
+    /// fn inspect(error: &RemoteError) {
+    ///     if let Some(report) = error.hot_reload_failure() { println!("{report:?}"); }
+    /// }
+    /// ```
     pub fn hot_reload_failure(&self) -> Option<crate::HotReloadFailure> {
         if let Some(report) = self.details.get("hot_reload") {
             serde_json::from_value(report.clone()).ok()
@@ -32,6 +58,16 @@ impl RemoteError {
             None
         }
     }
+    /// Recover the structured availability report when preserved in supported remote wrappers.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::RemoteError;
+    /// fn inspect(error: &RemoteError) {
+    ///     if let Some(report) = error.availability_failure() { println!("{report:?}"); }
+    /// }
+    /// ```
     pub fn availability_failure(&self) -> Option<crate::AvailabilityFailure> {
         if let Some(value) = self.details.get("availability") {
             serde_json::from_value(value.clone()).ok()
@@ -42,6 +78,20 @@ impl RemoteError {
             None
         }
     }
+    /// Encode original classification/status/retry and extra structured fields.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::YappinError;
+    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// assert_eq!(error.status_code(), Some(429));
+    /// assert!(error.is_rate_limit());
+    /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
+    /// let remote = error.to_remote();
+    /// assert_eq!(remote.to_json()["status"], 429);
+    /// // A retry hint does not authorize replaying a handler or uncertain mutation.
+    /// ```
     pub fn to_json(&self) -> serde_json::Value {
         let mut value = serde_json::Value::Object(self.details.clone().into_iter().collect());
         value["kind"] = self.kind.clone().into();
@@ -63,103 +113,177 @@ impl serde::Serialize for RemoteError {
 /// The error type for operations in the `yappin` crate.
 #[derive(Debug, Error)]
 #[non_exhaustive]
+/// # Example
+///
+/// ```rust
+/// use rappin::YappinError;
+/// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+/// assert_eq!(error.status_code(), Some(429));
+/// assert!(error.is_rate_limit());
+/// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
+/// let remote = error.to_remote();
+/// assert_eq!(remote.to_json()["status"], 429);
+/// // A retry hint does not authorize replaying a handler or uncertain mutation.
+/// ```
 pub enum YappinError {
     #[error("conflicting event payload for event {event_id}", event_id = .conflict.event_id)]
+    /// Conflicting payloads were delivered for the same event identity; original receipts remain retained.
     IngressConflict {
+        /// Bounded conflicting-source/schema evidence, without rewriting the original receipt.
         conflict: Box<crate::IngressConflict>,
     },
     /// Retains consumer metadata around an incomplete checked invocation without
     /// changing the original structured cause or enabling automatic replies.
     #[error("{source}")]
     IdentifiedInvocation {
+        /// Consumer operation key; it supplies no authority or remote idempotency.
         operation_id: crate::OperationId,
         #[source]
+        /// Original incomplete invocation cause.
         source: Box<YappinError>,
     },
     /// An explicitly invoked command did not complete. The outer handler owns
     /// reconciliation; this wrapper never triggers typed-rejection auto-replies.
     #[error("command invocation {command} did not complete ({status:?})")]
     Invocation {
+        /// Explicit installed command that did not complete.
         command: String,
+        /// Not-found, denied or failed disposition.
         status: crate::bot::InvocationStatus,
+        /// Whether arbitrary gate/check/handler code may have produced effects.
         effects_possible: bool,
         #[source]
+        /// Original structured cause when available.
         source: Option<Box<YappinError>>,
     },
     #[error("retry wait budget exhausted after {waited:?} (budget {budget:?}): {source}")]
+    /// The server-advised/shared rate-limit wait budget was exhausted.
     RetryWaitExceeded {
+        /// Total server-advised/shared delay charged to this operation.
         waited: std::time::Duration,
+        /// Configured server-advised/shared wait allowance.
         budget: std::time::Duration,
         #[source]
+        /// Original cause/status/retry hint that exhausted the allowance.
         source: Box<YappinError>,
     },
     #[error("{failure}")]
+    /// Candidate build/startup/protocol/registration/publication failed; inspect its bounded report.
     HotReload {
         #[source]
+        /// Bounded candidate phase, diagnostics and publication state.
         failure: Box<crate::HotReloadFailure>,
     },
     #[error("event processing stopped after cursor {cursor}",cursor=.report.committed_cursor)]
+    /// Intake stopped with incomplete events or checkpoint persistence failure.
     EventProcessing {
+        /// Ordered checkpoint, failed, unprocessed and completed-but-uncommitted evidence.
         report: Box<crate::bot::EventProcessingFailure>,
     },
     #[error(
         "failure callback/reply did not complete: {handling_error}; original failure: {source}"
     )]
+    /// The failure callback or error reply failed as well as the original operation.
     FailureHandling {
+        /// Original invocation failure.
         source: Box<YappinError>,
+        /// Additional failure while replying or running the failure callback.
         handling_error: Box<YappinError>,
     },
     #[error("handler completion is uncertain: {reason}{cause}",cause=.source.as_ref().map(|e|format!(": {e}")).unwrap_or_default())]
+    /// Handler completion became uncertain, including cancellation or panic.
     HandlerInterrupted {
+        /// Reason completion could not be established.
         reason: String,
         #[source]
+        /// Original failure, if one was captured before interruption.
         source: Option<Box<YappinError>>,
     },
     #[error("operation authorization is denied or incomplete: {operation}",operation=.report.operation)]
+    /// Required scoped access was Denied or Unknown.
     OperationAuthorization {
+        /// Independent requester/bot and resource-scope checks.
         report: Box<crate::capabilities::AuthorizationReport>,
     },
     #[error("{resource} search is incomplete after {pages} pages ({scanned} scanned, {matches} candidates); use an ID or a larger search budget")]
+    /// The lookup budget ended before uniqueness/completeness could be established.
     IncompleteSearch {
+        /// Resource family whose search is incomplete.
         resource: String,
+        /// Number of records examined.
         scanned: usize,
+        /// Number of API pages examined.
         pages: usize,
+        /// Continuation cursor when the API supplied one.
         next_cursor: Option<uuid::Uuid>,
+        /// Number of matching candidates found before the search stopped.
         matches: usize,
     },
     #[error(transparent)]
-    Remote(#[from] RemoteError),
+    /// Original structured error returned by an isolated worker.
+    Remote(
+        #[from]
+        #[doc = "Structured worker cause."]
+        RemoteError,
+    ),
     /// A multi-step write stopped after zero or more confirmed successes.
     #[error("write failed at step {failed_step}: {source}")]
     PartialWrite {
+        /// Confirmed successful write receipts; do not replay these steps.
         completed: Vec<serde_json::Value>,
+        /// One-based step at which the workflow stopped.
         failed_step: usize,
         #[source]
+        /// Original failed-step cause, including any unknown mutation outcome.
         source: Box<YappinError>,
     },
     #[error(transparent)]
-    Command(#[from] crate::commands::CommandError),
+    /// Typed command input/policy failure; invalid definitions remain unexpected.
+    Command(
+        #[from]
+        #[doc = "Typed command rejection or definition cause."]
+        crate::commands::CommandError,
+    ),
     #[error(transparent)]
-    Wait(#[from] crate::collectors::WaitError),
+    /// Collector timeout, overflow, closure or invalid subscription options.
+    Wait(
+        #[from]
+        #[doc = "Collector failure classification."]
+        crate::collectors::WaitError,
+    ),
     /// An API error returned by Yapin' servers.
     #[error("API error ({status}): {message}")]
     Api {
+        /// HTTP response status.
         status: u16,
+        /// API error explanation.
         message: String,
+        /// Server retry advice in seconds; not permission to replay uncertain work.
         retry_after: Option<f64>,
     },
 
     /// An HTTP client or transport error.
     #[error("HTTP error: {0}")]
-    Http(#[source] reqwest::Error),
+    Http(
+        #[source]
+        #[doc = "Original HTTP transport error with URL removed by normal conversion."]
+        reqwest::Error,
+    ),
 
     /// A JSON serialization or deserialization error.
     #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
+    Json(
+        #[from]
+        #[doc = "Original JSON encoding/decoding cause."]
+        serde_json::Error,
+    ),
 
     /// Rate limit reached with retry-after header.
     #[error("Rate limited, retry after {retry_after} seconds")]
-    RateLimited { retry_after: f64 },
+    RateLimited {
+        #[doc = "Server-advised delay in seconds."]
+        retry_after: f64,
+    },
 
     /// The provided bot token is invalid or unauthorized.
     #[error("Invalid bot token: unauthorized (401)")]
@@ -167,19 +291,36 @@ pub enum YappinError {
 
     /// Missing or invalid configuration.
     #[error("Configuration error: {0}")]
-    Config(String),
+    Config(#[doc = "Configuration failure explanation."] String),
 
     /// Invalid request payload, detected before making an HTTP request.
     #[error("Invalid {field}: {message}")]
-    Validation { field: String, message: String },
+    Validation {
+        #[doc = "Field or definition path rejected before dispatch."]
+        field: String,
+        #[doc = "Local validation explanation."]
+        message: String,
+    },
 
     /// A generic I/O error.
     #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(
+        #[from]
+        #[doc = "Original filesystem or I/O cause."]
+        std::io::Error,
+    ),
 }
 
 impl YappinError {
     /// Recover bounded ingress diagnostics from native, remote, or pipeline errors.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::YappinError;
+    /// fn inspect(error: &YappinError) {
+    ///     if let Some(report) = error.ingress_conflict() { println!("{report:?}"); }
+    /// }
+    /// ```
     pub fn ingress_conflict(&self) -> Option<crate::IngressConflict> {
         fn find(value: &serde_json::Value, remaining: usize) -> Option<crate::IngressConflict> {
             if remaining == 0 {
@@ -200,6 +341,16 @@ impl YappinError {
         }
         find(&self.to_json(), 16)
     }
+    /// Recover bounded availability diagnostics from supported native/remote wrappers.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::YappinError;
+    /// fn inspect(error: &YappinError) {
+    ///     if let Some(report) = error.availability_failure() { println!("{report:?}"); }
+    /// }
+    /// ```
     pub fn availability_failure(&self) -> Option<crate::AvailabilityFailure> {
         match self {
             Self::IdentifiedInvocation { source, .. } => source.availability_failure(),
@@ -213,6 +364,18 @@ impl YappinError {
         }
     }
     /// Returns the HTTP status code associated with this error, if available.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::YappinError;
+    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// assert_eq!(error.status_code(), Some(429));
+    /// assert!(error.is_rate_limit());
+    /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
+    /// let remote = error.to_remote();
+    /// assert_eq!(remote.to_json()["status"], 429);
+    /// // A retry hint does not authorize replaying a handler or uncertain mutation.
+    /// ```
     pub fn status_code(&self) -> Option<u16> {
         match self {
             Self::IdentifiedInvocation { source, .. } => source.status_code(),
@@ -262,6 +425,18 @@ impl YappinError {
     }
 
     /// Returns the suggested retry wait duration if this error was caused by a rate limit.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::YappinError;
+    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// assert_eq!(error.status_code(), Some(429));
+    /// assert!(error.is_rate_limit());
+    /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
+    /// let remote = error.to_remote();
+    /// assert_eq!(remote.to_json()["status"], 429);
+    /// // A retry hint does not authorize replaying a handler or uncertain mutation.
+    /// ```
     pub fn retry_after(&self) -> Option<std::time::Duration> {
         match self {
             Self::IdentifiedInvocation { source, .. } => return source.retry_after(),
@@ -307,6 +482,14 @@ impl YappinError {
         std::time::Duration::try_from_secs_f64(seconds).ok()
     }
 
+    /// Construct a structured local validation failure before making an HTTP request.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let error = rappin::YappinError::validation("content", "must not be empty");
+    /// assert_eq!(error.to_json()["field"], "content");
+    /// ```
     pub fn validation(field: impl Into<String>, message: impl Into<String>) -> Self {
         Self::Validation {
             field: field.into(),
@@ -315,6 +498,18 @@ impl YappinError {
     }
 
     /// Stable JSON representation for agents. Transport URLs are intentionally omitted.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::YappinError;
+    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// assert_eq!(error.status_code(), Some(429));
+    /// assert!(error.is_rate_limit());
+    /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
+    /// let remote = error.to_remote();
+    /// assert_eq!(remote.to_json()["status"], 429);
+    /// // A retry hint does not authorize replaying a handler or uncertain mutation.
+    /// ```
     pub fn to_json(&self) -> serde_json::Value {
         match self {
             Self::IngressConflict { conflict } => {
@@ -446,12 +641,34 @@ impl YappinError {
         value
     }
 
+    /// Convert to the serializable structured cause; caller-provided details still need application disclosure policy.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::YappinError;
+    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// assert_eq!(error.status_code(), Some(429));
+    /// assert!(error.is_rate_limit());
+    /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
+    /// let remote = error.to_remote();
+    /// assert_eq!(remote.to_json()["status"], 429);
+    /// // A retry hint does not authorize replaying a handler or uncertain mutation.
+    /// ```
     pub fn to_remote(&self) -> RemoteError {
         serde_json::from_value(self.to_json()).expect("error JSON contains required remote fields")
     }
 
     /// Recover a candidate report from native or structured worker/callback errors.
     /// Does not classify a failed candidate as a completed command.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::YappinError;
+    /// fn inspect(error: &YappinError) {
+    ///     if let Some(report) = error.hot_reload_failure() { println!("{report:?}"); }
+    /// }
+    /// ```
     pub fn hot_reload_failure(&self) -> Option<crate::HotReloadFailure> {
         match self {
             Self::IdentifiedInvocation { source, .. } => source.hot_reload_failure(),
@@ -467,21 +684,59 @@ impl YappinError {
     }
 
     /// Checks if this error is an authorization failure (HTTP 401).
+    /// # Example
+    ///
+    /// ```rust
+    /// let error = rappin::YappinError::Api { status: 401, message: "Example".into(), retry_after: None };
+    /// assert!(error.is_unauthorized());
+    /// ```
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, Self::Unauthorized) || self.status_code() == Some(401)
     }
+    /// Whether this is a direct typed command error or a structured remote command error.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::YappinError;
+    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// assert_eq!(error.status_code(), Some(429));
+    /// assert!(error.is_rate_limit());
+    /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
+    /// let remote = error.to_remote();
+    /// assert_eq!(remote.to_json()["status"], 429);
+    /// // A retry hint does not authorize replaying a handler or uncertain mutation.
+    /// ```
     pub fn is_command_error(&self) -> bool {
         matches!(self, Self::Command(_))
             || matches!(self, Self::Remote(error) if error.kind=="command")
     }
     /// Only recognized typed input/check failures, never definition errors or
     /// legacy remote strings whose classification was lost.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::YappinError;
+    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// assert_eq!(error.status_code(), Some(429));
+    /// assert!(error.is_rate_limit());
+    /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
+    /// let remote = error.to_remote();
+    /// assert_eq!(remote.to_json()["status"], 429);
+    /// // A retry hint does not authorize replaying a handler or uncertain mutation.
+    /// ```
     pub fn is_command_rejection(&self) -> bool {
         matches!(self, Self::Command(error) if error.is_rejection())
             || matches!(self, Self::Remote(error) if error.kind=="command" && matches!(error.details.get("command_kind").and_then(|v|v.as_str()),Some("quoting"|"missing"|"invalid"|"extra"|"denied")))
     }
 
     /// Checks if this error is a permissions failure (HTTP 403 Forbidden).
+    /// # Example
+    ///
+    /// ```rust
+    /// let error = rappin::YappinError::Api { status: 403, message: "Example".into(), retry_after: None };
+    /// assert!(error.is_forbidden());
+    /// ```
     pub fn is_forbidden(&self) -> bool {
         self.status_code() == Some(403)
     }
@@ -505,6 +760,12 @@ impl YappinError {
     }
 
     /// Checks if this error represents a server-side error (HTTP 5xx).
+    /// # Example
+    ///
+    /// ```rust
+    /// let error = rappin::YappinError::Api { status: 503, message: "Example".into(), retry_after: None };
+    /// assert!(error.is_server_error());
+    /// ```
     pub fn is_server_error(&self) -> bool {
         self.status_code()
             .is_some_and(|code| (500..=599).contains(&code))

@@ -1,3 +1,13 @@
+//! Authenticated REST client, optional gateway JSON routing and client-wide observations. Client clones share credentials, caches, rate-limit state and interaction-response ownership. Low-level requests bypass capability authorization; the caller retains responsibility for requester policy.
+//!
+//! # Example
+//!
+//! ```rust
+//! use rappin::Client;
+//! fn configure(token: String) -> Client {
+//!     Client::builder(token).max_retries(0).build()
+//! }
+//! ```
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,6 +62,14 @@ mod platform;
 mod server_features;
 
 /// Builder for constructing a custom [`Client`].
+/// # Example
+///
+/// ```rust
+/// use rappin::Client;
+/// fn configure(token: String) -> Client {
+///     Client::builder(token).max_retries(0).build()
+/// }
+/// ```
 pub struct ClientBuilder {
     token: String,
     base_url: String,
@@ -64,6 +82,15 @@ pub struct ClientBuilder {
 }
 
 impl ClientBuilder {
+    /// Start a client builder using a privately obtained bot token. It does not authenticate until a request is made.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// fn configure(token: String) -> rappin::Client {
+    ///     rappin::ClientBuilder::new(token).build()
+    /// }
+    /// ```
     pub fn new(token: impl Into<String>) -> Self {
         Self {
             token: token.into(),
@@ -77,11 +104,31 @@ impl ClientBuilder {
         }
     }
 
+    /// Select the API base URL and remove trailing slashes. A custom base disables default-origin failover.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Client;
+    /// fn configure(token: String) -> Client {
+    ///     Client::builder(token).base_url("https://www.yapin.gg/api/bot/v1").build()
+    /// }
+    /// ```
     pub fn base_url(mut self, url: impl Into<String>) -> Self {
         self.base_url = url.into().trim_end_matches('/').to_string();
         self
     }
 
+    /// Set the transport retry-attempt budget. Zero permits no extra attempts; this does not make uncertain writes safe to replay.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Client;
+    /// fn configure(token: String) -> Client {
+    ///     Client::builder(token).max_retries(0).build()
+    /// }
+    /// ```
     pub fn max_retries(mut self, retries: u32) -> Self {
         self.max_retries = retries;
         self
@@ -89,6 +136,14 @@ impl ClientBuilder {
 
     /// Total server-advised/shared rate-limit waiting per request, default 30 s.
     /// This is separate from HTTP latency and the retry-attempt limit.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Client;
+    /// fn configure(token: String) -> Client {
+    ///     Client::builder(token).max_retry_wait(std::time::Duration::from_secs(15)).build()
+    /// }
+    /// ```
     pub fn max_retry_wait(mut self, budget: Duration) -> Self {
         self.max_retry_wait = budget;
         self
@@ -96,6 +151,14 @@ impl ClientBuilder {
 
     /// Allow the default Yapin API to fail over to its documented website origin.
     /// Custom base URLs never fail over. Ambiguous writes are never replayed.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Client;
+    /// fn configure(token: String) -> Client {
+    ///     Client::builder(token).api_fallback(false).build()
+    /// }
+    /// ```
     pub fn api_fallback(mut self, enabled: bool) -> Self {
         self.api_fallback = enabled;
         self
@@ -104,6 +167,15 @@ impl ClientBuilder {
     /// Use an application-owned lookup cache, such as Redis or a SQL database.
     /// Takes precedence over the built-in member/role cache; fresh requests still
     /// reach the API. The backend owns expiration, persistence and error policy.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Client, LookupCache};
+    /// use std::sync::Arc;
+    /// fn configure(token: String, backend: Arc<dyn LookupCache>) -> Client {
+    ///     Client::builder(token).lookup_cache_backend(backend).build()
+    /// }
+    /// ```
     pub fn lookup_cache_backend(mut self, backend: Arc<dyn crate::cache::LookupCache>) -> Self {
         self.lookup_backend = Some(backend);
         self
@@ -111,20 +183,62 @@ impl ClientBuilder {
 
     /// Advanced trusted transport override. Configure redirect::Policy::none(), TLS
     /// certificate validation, and safe logging. Custom transports can access credentials.
+    /// # Example
+    ///
+    /// ```rust
+    /// fn configure(token: String) -> rappin::Result<rappin::Client> {
+    ///     let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build()?;
+    ///     Ok(rappin::Client::builder(token).http_client(http).build())
+    /// }
+    /// ```
     pub fn http_client(mut self, client: reqwest::Client) -> Self {
         self.http_client = Some(client);
         self
     }
 
+    /// Use an existing shared cache for this bot identity. Sharing profile state between unrelated bot identities is application-controlled and can produce incorrect snapshots.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Client;
+    /// fn configure(token: String) -> Client {
+    ///     Client::builder(token).cache(std::sync::Arc::new(rappin::Cache::new())).build()
+    /// }
+    /// ```
     pub fn cache(mut self, cache: Arc<Cache>) -> Self {
         self.cache = Some(cache);
         self
     }
+    /// Enable the built-in bounded member/role lookup cache with the selected capacity and TTL. Prefer fresh data for authorization.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Client;
+    /// fn configure(token: String) -> Client {
+    ///     Client::builder(token).lookup_cache(rappin::CachePolicy::new(256, std::time::Duration::from_secs(30))).build()
+    /// }
+    /// ```
     pub fn lookup_cache(mut self, policy: crate::cache::CachePolicy) -> Self {
         self.cache = Some(Arc::new(Cache::with_lookup_policy(policy)));
         self
     }
 
+    /// Construct a Client with shared cache, event hub and request telemetry.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the default reqwest client cannot be created. Supply a prebuilt HTTP client to handle its construction error yourself.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::Client;
+    /// fn configure(token: String) -> Client {
+    ///     Client::builder(token).max_retries(0).build()
+    /// }
+    /// ```
     pub fn build(self) -> Client {
         let http = self.http_client.unwrap_or_else(|| {
             reqwest::Client::builder()
@@ -182,6 +296,14 @@ struct ClientInner {
 
 /// Asynchronous REST client for the Yapin' Bot API.
 #[derive(Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::Client;
+/// fn configure(token: String) -> Client {
+///     Client::builder(token).max_retries(0).build()
+/// }
+/// ```
 pub struct Client {
     inner: Arc<ClientInner>,
 }
@@ -190,6 +312,16 @@ impl Client {
     /// Opt into JSON requests on a negotiated gateway connection. Configure
     /// before connecting; `None` restores HTTPS selection for subsequent calls.
     #[cfg(feature = "gateway")]
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Client, gateway::GatewayRequestConfig};
+    /// fn configure(client: &Client) -> rappin::Result<()> {
+    ///     client.configure_gateway_requests(Some(GatewayRequestConfig::default()))?;
+    ///     // The gateway runner still needs to connect and advertise request support.
+    ///     client.configure_gateway_requests(None)
+    /// }
+    /// ```
     pub fn configure_gateway_requests(
         &self,
         config: Option<crate::gateway::GatewayRequestConfig>,
@@ -197,6 +329,16 @@ impl Client {
         self.inner.gateway_requests.configure(config)
     }
     #[cfg(feature = "gateway")]
+    /// Snapshot the configured gateway request capability, transport and bounded counters. This does not start a connection.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// fn inspect(client: &rappin::Client) {
+    ///     let status = client.gateway_request_status();
+    ///     println!("Gateway request capability: {}", status.capability);
+    /// }
+    /// ```
     pub fn gateway_request_status(&self) -> crate::gateway::GatewayRequestStatus {
         self.inner.gateway_requests.status()
     }
@@ -282,37 +424,114 @@ impl Client {
     }
 
     /// Returns the base URL of the API.
+    /// # Example
+    ///
+    /// ```rust
+    /// fn inspect(token: String) {
+    ///     let client = rappin::Client::new(token);
+    ///     assert_eq!(client.base_url(), rappin::DEFAULT_API_BASE);
+    /// }
+    /// ```
     pub fn base_url(&self) -> &str {
         &self.inner.base_url
     }
 
     /// Current request origin, including any temporary fallback. `base_url()`
     /// continues to report the configured primary URL.
+    /// # Example
+    ///
+    /// ```rust
+    /// fn inspect(token: String) {
+    ///     let client = rappin::Client::new(token);
+    ///     let active = client.active_base_url();
+    ///     assert!(!active.is_empty());
+    /// }
+    /// ```
     pub fn active_base_url(&self) -> String {
         self.inner.failover.base(&self.inner.base_url)
     }
 
     /// Returns a reference to the client's internal in-memory cache.
+    /// # Example
+    ///
+    /// ```rust
+    /// async fn inspect(token: String) {
+    ///     let client = rappin::Client::new(token);
+    ///     let cache = client.cache();
+    ///     let profile = cache.get_me().await;
+    /// }
+    /// ```
     pub fn cache(&self) -> &Cache {
         &self.inner.cache
     }
 
+    /// Borrow the bounded ephemeral event hub. Publishing/observing hub events alone does not dispatch bot handlers or commit durable cursors.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// fn inspect(token: String) -> rappin::Result<()> {
+    ///     let client = rappin::Client::new(token);
+    ///     let subscription = client.events().collect::<rappin::MessageEvent>().timeout(std::time::Duration::from_secs(5)).subscribe()?;
+    ///     drop(subscription);
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn events(&self) -> &crate::collectors::EventHub {
         &self.inner.events
     }
+    /// Return the most recent sanitized attempt observation, or None before an observation exists. Body decoding and end-to-end UI latency are not included.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// fn inspect(token: String) {
+    ///     let client = rappin::Client::new(token);
+    ///     assert!(client.last_request().is_none());
+    /// }
+    /// ```
     pub fn last_request(&self) -> Option<crate::diagnostics::RequestObservation> {
         self.inner.requests.borrow().clone()
     }
+    /// Subscribe to latest-value request observations. Intermediate updates can coalesce; use cumulative metrics for reliable totals.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// fn inspect(token: String) {
+    ///     let client = rappin::Client::new(token);
+    ///     let mut observations = client.subscribe_requests();
+    ///     let latest = observations.borrow_and_update().clone();
+    /// }
+    /// ```
     pub fn subscribe_requests(
         &self,
     ) -> tokio::sync::watch::Receiver<Option<crate::diagnostics::RequestObservation>> {
         self.inner.requests.subscribe()
     }
     /// Exact totals across clones. The legacy watch subscription is latest-only.
+    /// # Example
+    ///
+    /// ```rust
+    /// fn inspect(token: String) {
+    ///     let client = rappin::Client::new(token);
+    ///     let totals = client.request_metrics();
+    ///     assert_eq!(totals.started, 0);
+    /// }
+    /// ```
     pub fn request_metrics(&self) -> crate::diagnostics::RequestMetrics {
         self.inner.request_telemetry.snapshot()
     }
     /// Bounded attempt stream (256 entries); slow readers receive explicit Lagged errors.
+    /// # Example
+    ///
+    /// ```rust
+    /// fn inspect(token: String) {
+    ///     let client = rappin::Client::new(token);
+    ///     let mut observations = client.subscribe_request_events();
+    ///     assert!(matches!(observations.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
+    /// }
+    /// ```
     pub fn subscribe_request_events(
         &self,
     ) -> tokio::sync::broadcast::Receiver<crate::diagnostics::RequestEvent> {
@@ -376,6 +595,16 @@ impl Client {
     }
 
     /// Explicitly choose whether a fresh, bounded member snapshot may satisfy this lookup.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server: Uuid, user: Uuid) -> Result<()> {
+    ///     let response = client.fetch_member(server, user, Freshness::Refresh).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn fetch_member(
         &self,
         server: Uuid,
@@ -393,6 +622,19 @@ impl Client {
         }
         self.get_member(server, user).await
     }
+    /// Fetch roles using the requested freshness policy. Refresh reaches the API; PreferCache can retain grants until the configured cache expires.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server: Uuid) -> Result<()> {
+    ///     let response = client.fetch_roles(server, Freshness::Refresh).await?;
+    ///     // A bot-visible resource snapshot does not independently prove requester access.
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn fetch_roles(
         &self,
         server: Uuid,
@@ -633,6 +875,15 @@ impl Client {
     }
 
     /// Performs a JSON request confined to the configured origin and API prefix.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Client, Result};
+    /// use reqwest::Method;
+    /// async fn read(client: &Client) -> Result<serde_json::Value> {
+    ///     client.request_json::<serde_json::Value, ()>(Method::GET, "/me", None).await
+    /// }
+    /// ```
     pub async fn request_json<T: DeserializeOwned, B: Serialize>(
         &self,
         method: Method,
@@ -806,6 +1057,15 @@ impl Client {
     }
 
     /// Performs a raw binary request, e.g. for avatar and banner updates.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Client, Image, Result};
+    /// use reqwest::Method;
+    /// async fn avatar(client: &Client, png_bytes: Vec<u8>) -> Result<Image> {
+    ///     client.request_binary(Method::PUT, "/me/avatar", png_bytes, "image/png").await
+    /// }
+    /// ```
     pub async fn request_binary<T: DeserializeOwned>(
         &self,
         method: Method,
@@ -871,6 +1131,16 @@ impl Client {
     }
 
     /// Updates the display name or biography of the bot (`PATCH /me`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client) -> Result<()> {
+    ///     let response = client.update_me(&UpdateBotProfile::new().display_name("Helper")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn update_me(&self, req: &UpdateBotProfile) -> Result<BotProfile> {
         if req
             .display_name
@@ -889,12 +1159,32 @@ impl Client {
     }
 
     /// Sets the bot's avatar (`PUT /me/avatar`). Accepts image data and MIME type (e.g. `image/png`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, image_data: Vec<u8>) -> Result<()> {
+    ///     let response = client.set_avatar(image_data, "image/png").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn set_avatar(&self, image_data: Vec<u8>, mime_type: &str) -> Result<Image> {
         self.request_binary(Method::PUT, "/me/avatar", image_data, mime_type)
             .await
     }
 
     /// Removes the bot's avatar (`DELETE /me/avatar`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client) -> Result<()> {
+    ///     let response = client.delete_avatar().await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn delete_avatar(&self) -> Result<()> {
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(Method::DELETE, "/me/avatar", None)
@@ -903,12 +1193,32 @@ impl Client {
     }
 
     /// Sets the bot's profile banner (`PUT /me/banner`). Accepts image data and MIME type.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, image_data: Vec<u8>) -> Result<()> {
+    ///     let response = client.set_banner(image_data, "image/png").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn set_banner(&self, image_data: Vec<u8>, mime_type: &str) -> Result<Image> {
         self.request_binary(Method::PUT, "/me/banner", image_data, mime_type)
             .await
     }
 
     /// Removes the bot's banner (`DELETE /me/banner`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client) -> Result<()> {
+    ///     let response = client.delete_banner().await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn delete_banner(&self) -> Result<()> {
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(Method::DELETE, "/me/banner", None)
@@ -949,6 +1259,16 @@ impl Client {
     // -----------------------------------------------------------------------
 
     /// Retrieves the list of slash commands currently registered for the bot (`GET /commands`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client) -> Result<()> {
+    ///     let response = client.get_commands().await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_commands(&self) -> Result<Vec<Command>> {
         #[derive(Deserialize)]
         struct Resp {
@@ -961,6 +1281,16 @@ impl Client {
     }
 
     /// Replaces the registered slash commands for this bot (`PUT /commands`, up to 100).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client) -> Result<()> {
+    ///     let response = client.set_commands(&[Command::new("ping", "Check the bot")]).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn set_commands(&self, commands: &[Command]) -> Result<Vec<Command>> {
         crate::validation::validate_commands(commands)?;
         #[derive(Serialize)]
@@ -986,6 +1316,18 @@ impl Client {
     /// - `after`: Last event id seen (0 returns no events and newest id as `last`).
     /// - `wait`: Seconds to hold open waiting for events (max 25).
     /// - `max_age`: Skip events older than this many seconds (max 86400).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, handled_cursor: u64) -> Result<()> {
+    ///     let response = client.get_events(Some(handled_cursor), Some(25), None).await?;
+    ///     // This is received delivery, not a committed handled checkpoint.
+    ///     let received_watermark = response.last;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_events(
         &self,
         after: Option<u64>,
@@ -1077,6 +1419,17 @@ impl Client {
     }
 
     /// Fetches roles defined on a server (`GET /servers/{id}/roles`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid) -> Result<()> {
+    ///     let response = client.get_roles(server_id).await?;
+    ///     // A bot-visible resource snapshot does not independently prove requester access.
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_roles(&self, server_id: Uuid) -> Result<Vec<Role>> {
         #[derive(Deserialize)]
         struct Resp {
@@ -1094,6 +1447,16 @@ impl Client {
     }
 
     /// Fetches members of a server (`GET /servers/{id}/members`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid) -> Result<()> {
+    ///     let response = client.get_members(server_id, Some(25), None).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_members(
         &self,
         server_id: Uuid,
@@ -1125,6 +1488,16 @@ impl Client {
     }
 
     /// Fetches one member with roles and timeout status (`GET /servers/{id}/members/{uid}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid, user_id: Uuid) -> Result<()> {
+    ///     let response = client.get_member(server_id, user_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_member(&self, server_id: Uuid, user_id: Uuid) -> Result<MemberDetail> {
         #[derive(Deserialize)]
         struct Resp {
@@ -1148,6 +1521,16 @@ impl Client {
     }
 
     /// Sets or clears a member's nickname (`PATCH /servers/{id}/members/{uid}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid, user_id: Uuid) -> Result<()> {
+    ///     let response = client.set_nickname(server_id, user_id, "River").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn set_nickname(&self, server_id: Uuid, user_id: Uuid, nickname: &str) -> Result<()> {
         if nickname.chars().count() > 32 {
             return Err(YappinError::validation("nickname", "maximum 32 characters"));
@@ -1167,6 +1550,16 @@ impl Client {
     }
 
     /// Gives a role to a server member (`PUT /servers/{id}/members/{uid}/roles/{rid}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid, user_id: Uuid, role_id: Uuid) -> Result<()> {
+    ///     let response = client.add_role(server_id, user_id, role_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn add_role(&self, server_id: Uuid, user_id: Uuid, role_id: Uuid) -> Result<()> {
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
@@ -1182,6 +1575,16 @@ impl Client {
     }
 
     /// Removes a role from a server member (`DELETE /servers/{id}/members/{uid}/roles/{rid}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid, user_id: Uuid, role_id: Uuid) -> Result<()> {
+    ///     let response = client.remove_role(server_id, user_id, role_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn remove_role(&self, server_id: Uuid, user_id: Uuid, role_id: Uuid) -> Result<()> {
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
@@ -1197,6 +1600,16 @@ impl Client {
     }
 
     /// Kicks a member from a server (`POST /servers/{id}/kick`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid, user_id: Uuid) -> Result<()> {
+    ///     let response = client.kick_member(server_id, user_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn kick_member(&self, server_id: Uuid, user_id: Uuid) -> Result<()> {
         #[derive(Serialize)]
         struct Req {
@@ -1213,6 +1626,16 @@ impl Client {
     }
 
     /// Lists active bans in a server (`GET /servers/{id}/bans`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid) -> Result<()> {
+    ///     let response = client.get_bans(server_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_bans(&self, server_id: Uuid) -> Result<Vec<Ban>> {
         #[derive(Deserialize)]
         struct Resp {
@@ -1225,6 +1648,16 @@ impl Client {
     }
 
     /// Bans a user from a server (`POST /servers/{id}/bans`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid, user_id: Uuid) -> Result<()> {
+    ///     let response = client.ban_member(server_id, user_id, Some("Repeated spam")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn ban_member(
         &self,
         server_id: Uuid,
@@ -1246,6 +1679,16 @@ impl Client {
     }
 
     /// Unbans a user from a server (`DELETE /servers/{id}/bans/{uid}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid, user_id: Uuid) -> Result<()> {
+    ///     let response = client.unban_member(server_id, user_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn unban_member(&self, server_id: Uuid, user_id: Uuid) -> Result<()> {
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
@@ -1258,6 +1701,16 @@ impl Client {
     }
 
     /// Times out a server member (`POST /servers/{id}/timeouts`). 0 minutes clears timeout.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid, user_id: Uuid) -> Result<()> {
+    ///     let response = client.timeout_member(server_id, user_id, 10, Some("Repeated spam")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn timeout_member(
         &self,
         server_id: Uuid,
@@ -1287,6 +1740,16 @@ impl Client {
     }
 
     /// Creates a category in a server (`POST /servers/{id}/categories`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid) -> Result<()> {
+    ///     let response = client.create_category(server_id, "Information", Some(0)).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn create_category(
         &self,
         server_id: Uuid,
@@ -1312,6 +1775,16 @@ impl Client {
     }
 
     /// Renames a category (`PATCH /servers/{id}/categories/{cid}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid, category_id: Uuid) -> Result<()> {
+    ///     let response = client.edit_category(server_id, category_id, "Information").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn edit_category(
         &self,
         server_id: Uuid,
@@ -1332,6 +1805,16 @@ impl Client {
     }
 
     /// Deletes a category (`DELETE /servers/{id}/categories/{cid}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid, category_id: Uuid) -> Result<()> {
+    ///     let response = client.delete_category(server_id, category_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn delete_category(&self, server_id: Uuid, category_id: Uuid) -> Result<()> {
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
@@ -1344,6 +1827,16 @@ impl Client {
     }
 
     /// Lists channels and categories in a server (`GET /servers/{id}/channels`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid) -> Result<()> {
+    ///     let response = client.get_server_channels(server_id, Some(ChannelKind::Text)).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_server_channels(
         &self,
         server_id: Uuid,
@@ -1365,6 +1858,16 @@ impl Client {
     }
 
     /// Creates a new channel in a server (`POST /servers/{id}/channels`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid) -> Result<()> {
+    ///     let response = client.create_channel(server_id, &CreateChannelRequest::text("announcements")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn create_channel(
         &self,
         server_id: Uuid,
@@ -1386,6 +1889,16 @@ impl Client {
     }
 
     /// Retrieves current active voice channels and users in a server (`GET /servers/{id}/voice`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid) -> Result<()> {
+    ///     let response = client.get_voice_states(server_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_voice_states(&self, server_id: Uuid) -> Result<Vec<VoiceChannel>> {
         #[derive(Deserialize)]
         struct Resp {
@@ -1398,6 +1911,16 @@ impl Client {
     }
 
     /// Moves a member who is in voice to another voice channel (`POST /servers/{id}/voice/move`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid, user_id: Uuid, channel_id: Uuid) -> Result<()> {
+    ///     let response = client.move_voice_member(server_id, user_id, channel_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn move_voice_member(
         &self,
         server_id: Uuid,
@@ -1414,6 +1937,16 @@ impl Client {
     }
 
     /// Disconnects a user from voice in a server (`POST /servers/{id}/voice/disconnect`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid, user_id: Uuid) -> Result<()> {
+    ///     let response = client.disconnect_voice_member(server_id, user_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn disconnect_voice_member(
         &self,
         server_id: Uuid,
@@ -1458,6 +1991,16 @@ impl Client {
     }
 
     /// Removes the bot from voice in a server (`POST /servers/{id}/voice/leave`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server_id: Uuid) -> Result<()> {
+    ///     let response = client.leave_voice(server_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn leave_voice(&self, server_id: Uuid) -> Result<()> {
         let _: serde_json::Value = self
             .request_json::<serde_json::Value, ()>(
@@ -1474,6 +2017,16 @@ impl Client {
     // -----------------------------------------------------------------------
 
     /// Lists all channels the bot can see across all its servers (`GET /channels`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client) -> Result<()> {
+    ///     let response = client.get_channels(Some(ChannelKind::Text)).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_channels(&self, channel_type: Option<ChannelKind>) -> Result<Vec<Channel>> {
         let path = match channel_type {
             Some(ChannelKind::Text) => "/channels?type=text".to_string(),
@@ -1495,6 +2048,16 @@ impl Client {
     }
 
     /// Fetches a single channel by ID (`GET /channels/{id}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid) -> Result<()> {
+    ///     let response = client.get_channel(channel_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_channel(&self, channel_id: Uuid) -> Result<ChannelRow> {
         #[derive(Deserialize)]
         struct Resp {
@@ -1507,6 +2070,16 @@ impl Client {
     }
 
     /// Modifies a channel (`PATCH /channels/{id}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid) -> Result<()> {
+    ///     let response = client.edit_channel(channel_id, &EditChannelRequest::new().name("announcements")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn edit_channel(
         &self,
         channel_id: Uuid,
@@ -1529,6 +2102,16 @@ impl Client {
     }
 
     /// Deletes a channel (`DELETE /channels/{id}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid) -> Result<()> {
+    ///     let response = client.delete_channel(channel_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn delete_channel(&self, channel_id: Uuid) -> Result<()> {
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
@@ -1542,6 +2125,16 @@ impl Client {
     }
 
     /// Fetches recent messages from a channel (`GET /channels/{id}/messages`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid) -> Result<()> {
+    ///     let response = client.get_messages(channel_id, Some(25), None, None).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_messages(
         &self,
         channel_id: Uuid,
@@ -1576,6 +2169,16 @@ impl Client {
     }
 
     /// Fetches a single message by ID (`GET /channels/{id}/messages/{mid}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid, message_id: Uuid) -> Result<()> {
+    ///     let response = client.get_message(channel_id, message_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_message(
         &self,
         channel_id: Uuid,
@@ -1654,6 +2257,16 @@ impl Client {
     }
 
     /// Edits an existing message sent by the bot (`PATCH /channels/{id}/messages/{mid}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid, message_id: Uuid) -> Result<()> {
+    ///     let response = client.edit_message(channel_id, message_id, &EditMessage::new().content("Updated")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn edit_message(
         &self,
         channel_id: Uuid,
@@ -1678,6 +2291,16 @@ impl Client {
     }
 
     /// Convenience shortcut to update a Components V2 layout message.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid, message_id: Uuid, components: impl IntoIterator<Item = impl Into<Component>>) -> Result<()> {
+    ///     let response = client.edit_layout(channel_id, message_id, components).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn edit_layout(
         &self,
         channel_id: Uuid,
@@ -1689,6 +2312,16 @@ impl Client {
     }
 
     /// Deletes a message (`DELETE /channels/{id}/messages/{mid}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid, message_id: Uuid) -> Result<()> {
+    ///     let response = client.delete_message(channel_id, message_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn delete_message(&self, channel_id: Uuid, message_id: Uuid) -> Result<()> {
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
@@ -1701,6 +2334,16 @@ impl Client {
     }
 
     /// Deletes up to 100 messages at once (`POST /channels/{id}/messages/bulk-delete`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid, message_ids: &[Uuid]) -> Result<()> {
+    ///     let response = client.bulk_delete_messages(channel_id, message_ids).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn bulk_delete_messages(
         &self,
         channel_id: Uuid,
@@ -1722,6 +2365,16 @@ impl Client {
     }
 
     /// Pins a message in a channel (`PUT /channels/{id}/messages/{mid}/pin`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid, message_id: Uuid) -> Result<()> {
+    ///     let response = client.pin_message(channel_id, message_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn pin_message(&self, channel_id: Uuid, message_id: Uuid) -> Result<bool> {
         #[derive(Deserialize)]
         struct Resp {
@@ -1739,6 +2392,16 @@ impl Client {
     }
 
     /// Unpins a message in a channel (`DELETE /channels/{id}/messages/{mid}/pin`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid, message_id: Uuid) -> Result<()> {
+    ///     let response = client.unpin_message(channel_id, message_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn unpin_message(&self, channel_id: Uuid, message_id: Uuid) -> Result<bool> {
         #[derive(Deserialize)]
         struct Resp {
@@ -1756,6 +2419,16 @@ impl Client {
     }
 
     /// Retrieves all reactions on a message (`GET /channels/{id}/messages/{mid}/reactions`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid, message_id: Uuid) -> Result<()> {
+    ///     let response = client.get_reactions(channel_id, message_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_reactions(&self, channel_id: Uuid, message_id: Uuid) -> Result<Vec<Reaction>> {
         #[derive(Deserialize)]
         struct Resp {
@@ -1772,6 +2445,16 @@ impl Client {
     }
 
     /// Adds a reaction to a message (`PUT /channels/{id}/messages/{mid}/reactions/{emoji}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid, message_id: Uuid) -> Result<()> {
+    ///     let response = client.add_reaction(channel_id, message_id, "👍").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn add_reaction(
         &self,
         channel_id: Uuid,
@@ -1793,6 +2476,16 @@ impl Client {
     }
 
     /// Removes the bot's reaction from a message (`DELETE /channels/{id}/messages/{mid}/reactions/{emoji}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel_id: Uuid, message_id: Uuid) -> Result<()> {
+    ///     let response = client.remove_reaction(channel_id, message_id, "👍").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn remove_reaction(
         &self,
         channel_id: Uuid,
@@ -1818,6 +2511,16 @@ impl Client {
     // -----------------------------------------------------------------------
 
     /// Responds to an interaction / button click (`POST /interactions/{id}/{token}/callback`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, interaction_id: &str, token: &str) -> Result<()> {
+    ///     let response = client.respond_interaction(interaction_id, token, &InteractionCallback::ephemeral("Recorded")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn respond_interaction(
         &self,
         interaction_id: &str,
@@ -1847,6 +2550,16 @@ impl Client {
     // -----------------------------------------------------------------------
 
     /// Fetches a user's public profile (`GET /users/{id}`).
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, user_id: Uuid) -> Result<()> {
+    ///     let response = client.get_user(user_id).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_user(&self, user_id: Uuid) -> Result<UserDetail> {
         #[derive(Deserialize)]
         struct Resp {

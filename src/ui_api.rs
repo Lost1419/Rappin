@@ -1,3 +1,14 @@
+//! # Example
+//!
+//! ```rust
+//! use rappin::*;
+//! use uuid::Uuid;
+//! use reqwest::Method;
+//! async fn example(api: &impl Api, channel: Uuid, message: Uuid) -> Result<()> {
+//!     let response = api.get_ui_message(channel, message).await?;
+//!     Ok(())
+//! }
+//! ```
 //! Shared native/worker API 1.3 operations.
 use crate::*;
 use reqwest::Method;
@@ -5,7 +16,33 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 #[async_trait::async_trait]
+/// Extended message, select-menu and modal operations shared by native and worker API adapters. Receiving form/select values requires opt-in UI event routing.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::*;
+/// use uuid::Uuid;
+/// use reqwest::Method;
+/// async fn example(api: &impl Api, channel: Uuid, message: Uuid) -> Result<()> {
+///     let response = api.get_ui_message(channel, message).await?;
+///     Ok(())
+/// }
+/// ```
 pub trait UiApiExt: Api {
+    /// Read custom emojis used in one message, retaining platform image URLs and server-membership metadata. Platform scope, access and rollout still apply.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, channel: Uuid, message: Uuid) -> Result<()> {
+    ///     let response = api.get_message_emojis(channel, message).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     async fn get_message_emojis(&self, channel: Uuid, message: Uuid) -> Result<MessageEmojis> {
         Ok(serde_json::from_value(
             self.request(
@@ -16,6 +53,19 @@ pub trait UiApiExt: Api {
             .await?,
         )?)
     }
+    /// Read a page of messages with lossless UI component trees. Limit must be 1 through 100; before and after are mutually exclusive.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, channel: Uuid) -> Result<()> {
+    ///     let response = api.get_ui_messages(channel, Some(25), None, None).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     async fn get_ui_messages(
         &self,
         channel: Uuid,
@@ -48,6 +98,19 @@ pub trait UiApiExt: Api {
             self.request(Method::GET, &path, None).await?,
         )?)
     }
+    /// Read one message without discarding extended or unknown component fields.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, channel: Uuid, message: Uuid) -> Result<()> {
+    ///     let response = api.get_ui_message(channel, message).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     async fn get_ui_message(&self, channel: Uuid, message: Uuid) -> Result<UiMessage> {
         let value = self
             .request(
@@ -58,6 +121,21 @@ pub trait UiApiExt: Api {
             .await?;
         Ok(serde_json::from_value(value["message"].clone())?)
     }
+    /// Validate and send an extended message body. This low-level helper does not assess requester authorization or application approval.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, channel: Uuid) -> Result<()> {
+    ///     let menu = SelectMenu::new("fruit").option(SelectOption::new("Apple", "apple"));
+    ///     let body = UiMessageBody::new("Choose fruit").component(menu.row());
+    ///     let response = api.send_ui_message(channel, &body).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     async fn send_ui_message(&self, channel: Uuid, body: &UiMessageBody) -> Result<UiMessage> {
         body.validate(true)?;
         let mut value = json!(body);
@@ -71,6 +149,20 @@ pub trait UiApiExt: Api {
             .await?;
         Ok(serde_json::from_value(response["message"].clone())?)
     }
+    /// Validate and edit an extended message body, preserving omission versus explicit null clearing. Reply targets cannot be changed by edits.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, channel: Uuid, message: Uuid) -> Result<()> {
+    ///     let body = UiMessageBody::new("Updated");
+    ///     let response = api.edit_ui_message(channel, message, &body).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     async fn edit_ui_message(
         &self,
         channel: Uuid,
@@ -89,6 +181,20 @@ pub trait UiApiExt: Api {
             .await?;
         Ok(serde_json::from_value(response["message"].clone())?)
     }
+    /// Open a validated modal as an eligible initial interaction response. Opening from a modal submission is rejected; response deadlines and ownership are tracked by supporting adapters.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, event: &InteractionEvent) -> Result<()> {
+    ///     let modal = Modal::new("feedback", "Feedback").input(TextInput::paragraph("comment", "Comment"));
+    ///     let response = api.show_modal(event, &modal).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     async fn show_modal(&self, event: &InteractionEvent, modal: &Modal) -> Result<()> {
         if event.kind.as_deref() == Some("modal_submit") {
             return Err(YappinError::validation(
@@ -106,6 +212,19 @@ pub trait UiApiExt: Api {
         .await?;
         Ok(())
     }
+    /// Send an extended reply, ephemeral response or original-message update. Reply targets, invalid updates, component-bearing ephemeral replies and Ack payloads are rejected before sending. Use existing ack helpers for acknowledgement.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, event: &InteractionEvent) -> Result<()> {
+    ///     let response = api.respond_ui(event, InteractionCallbackType::Ephemeral, &UiMessageBody::new("Recorded")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     async fn respond_ui(
         &self,
         event: &InteractionEvent,
@@ -155,6 +274,17 @@ pub trait UiApiExt: Api {
         Ok(())
     }
     /// Opt-in slash events. Existing set_commands leaves interactions omitted.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api) -> Result<()> {
+    ///     let response = api.set_interaction_commands(&[Command::new("feedback", "Open feedback form")], true).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     async fn set_interaction_commands(
         &self,
         commands: &[Command],
@@ -176,8 +306,18 @@ impl<T: Api + ?Sized> UiApiExt for T {}
 /// Extended context used only by opt-in UI event routing.
 #[derive(Clone)]
 #[non_exhaustive]
+/// # Example
+///
+/// ```no_run
+/// use rappin::{UiInteractionContext, UiMessageBody, InteractionCallbackType, Result};
+/// async fn respond(ctx: UiInteractionContext) -> Result<()> {
+///     ctx.respond_ui(InteractionCallbackType::Ephemeral, &UiMessageBody::new("Recorded")).await
+/// }
+/// ```
 pub struct UiInteractionContext {
+    /// Base interaction context sharing the parent client, response ownership and original interaction scope.
     pub context: InteractionContext,
+    /// Extended values and command metadata from the original interaction event.
     pub data: UiInteraction,
 }
 impl std::ops::Deref for UiInteractionContext {
@@ -216,6 +356,15 @@ impl Api for UiInteractionContext {
     }
 }
 impl UiInteractionContext {
+    /// Construct a context for a verified custom transport. Construction alone does not authenticate the event or establish checked-invocation task provenance.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// fn context(client: std::sync::Arc<rappin::Client>, data: rappin::UiInteraction) -> rappin::UiInteractionContext {
+    ///     rappin::UiInteractionContext::new(client, data, None)
+    /// }
+    /// ```
     pub fn new(
         client: std::sync::Arc<Client>,
         data: UiInteraction,
@@ -226,15 +375,50 @@ impl UiInteractionContext {
             data,
         }
     }
+    /// Parse the original command arguments using FromArgs and reject leftover tokens. This does not interpret modal fields as command arguments.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Arguments, CommandError, FromArgs, UiInteractionContext, Result};
+    /// struct Name(String);
+    /// impl FromArgs for Name {
+    ///     fn parse(args: &mut Arguments) -> std::result::Result<Self, CommandError> { Ok(Self(args.required("name")?)) }
+    /// }
+    /// fn parse(ctx: &UiInteractionContext) -> Result<String> {
+    ///     Ok(ctx.parse::<Name>()?.0)
+    /// }
+    /// ```
     pub fn parse<A: crate::FromArgs>(&self) -> Result<A> {
         let mut arguments = crate::Arguments::new(self.data.args.as_deref().unwrap_or(""))?;
         let parsed = A::parse(&mut arguments)?;
         arguments.finish()?;
         Ok(parsed)
     }
+    /// Open a modal through the shared response/deadline coordinator. A modal requires an eligible initial response and cannot be opened from modal_submit.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{UiInteractionContext, Modal, TextInput, Result};
+    /// async fn form(ctx: &UiInteractionContext) -> Result<()> {
+    ///     let modal = Modal::new("feedback", "Feedback").input(TextInput::paragraph("comment", "Comment"));
+    ///     ctx.show_modal(&modal).await
+    /// }
+    /// ```
     pub async fn show_modal(&self, modal: &Modal) -> Result<()> {
         self.context.show_modal(modal).await
     }
+    /// Send an extended UI response through this context's original interaction identity and shared response ownership.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{UiInteractionContext, UiMessageBody, InteractionCallbackType, Result};
+    /// async fn respond(ctx: &UiInteractionContext) -> Result<()> {
+    ///     ctx.respond_ui(InteractionCallbackType::Ephemeral, &UiMessageBody::new("Recorded")).await
+    /// }
+    /// ```
     pub async fn respond_ui(
         &self,
         kind: InteractionCallbackType,
@@ -244,11 +428,34 @@ impl UiInteractionContext {
     }
 }
 impl InteractionContext {
+    /// Open a modal through the shared response/deadline coordinator. A modal requires an eligible initial response and cannot be opened from modal_submit.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{InteractionContext, Modal, TextInput, Result};
+    /// async fn form(ctx: &InteractionContext) -> Result<()> {
+    ///     let modal = Modal::new("feedback", "Feedback").input(TextInput::paragraph("comment", "Comment"));
+    ///     ctx.show_modal(&modal).await
+    /// }
+    /// ```
     pub async fn show_modal(&self, modal: &Modal) -> Result<()> {
         UiApiExt::show_modal(self, &self.event, modal).await
     }
 }
 impl Client {
+    /// Read custom emoji metadata from one scoped message; the platform enforces access and rollout.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Client, Result};
+    /// async fn inspect(client: &Client, channel: uuid::Uuid, message: uuid::Uuid) -> Result<()> {
+    ///     let result = client.get_message_emojis(channel, message).await?;
+    ///     for emoji in result.emojis { println!("{}: {}", emoji.name, emoji.url); }
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_message_emojis(&self, channel: Uuid, message: Uuid) -> Result<MessageEmojis> {
         UiApiExt::get_message_emojis(self, channel, message).await
     }

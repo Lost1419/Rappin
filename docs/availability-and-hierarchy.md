@@ -36,7 +36,7 @@ The policy applies only to startup `GET /me`, the initial `GET /events` cursor
 probe when there is no saved cursor, and subsequent polling/gateway reads. It
 does not retry cog loading, command synchronization, handlers, cursor writes or
 mutations. Successfully read batches still use the ordered completion/checkpoint
-policy described in [handler failures](handler-failures.md).
+policy described in [handler failures](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md).
 
 One episode covers a read and its recovery attempts. The first attempt counts;
 a successful read ends the episode and the next read gets a new budget. The
@@ -136,7 +136,7 @@ unknown; `RoleHierarchyPolicy` does not manufacture rollout evidence.
 
 ## Native and worker composition
 
-The [runnable example](../examples/role_hierarchy.rs) assesses by default:
+The [runnable example](https://github.com/Lost1419/Rappin/blob/main/examples/role_hierarchy.rs) assesses by default:
 
 ```sh
 YAPPER_BOT_TOKEN=... cargo run --example role_hierarchy -- SERVER REQUESTER ROLE
@@ -151,7 +151,7 @@ issues the DELETE through `Api::request_once`. For a composed host policy, use
 and structured authorization reports propagate; Denied and Unknown both block
 the mutation. No API credentials are needed to validate metadata offline.
 
-The [worker example](../examples/role_hierarchy_worker.rs) assesses a role from
+The [worker example](https://github.com/Lost1419/Rappin/blob/main/examples/role_hierarchy_worker.rs) assesses a role from
 `role-check ROLE_UUID`, using server/requester identities from the message:
 
 ```sh
@@ -179,5 +179,5 @@ deletion or the enclosing command; reconcile the resulting role state first.
 
 No optional feature is required for native policies; `gateway` enables WebSocket
 intake and `hot-reload` enables worker composition. See the existing
-[capability bindings](capability-bindings.md) and [hot reload](hot-reloading.md)
+[capability bindings](https://github.com/Lost1419/Rappin/blob/main/docs/capability-bindings.md) and [hot reload](https://github.com/Lost1419/Rappin/blob/main/docs/hot-reloading.md)
 guides for registration and failure dispositions.

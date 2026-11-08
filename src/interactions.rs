@@ -9,17 +9,52 @@ use std::{
 use tokio::{sync::Mutex as AsyncMutex, time::Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Locally tracked callback phase; this is not authoritative remote reconciliation.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{Client, InteractionEvent, Result};
+/// async fn inspect(client: &Client, event: &InteractionEvent) -> Result<()> {
+///     client.track_interaction(event).await?;
+///     let state = client.interaction_state(event).await?;
+///     println!("{:?}, responses {}", state.phase, state.responses);
+///     // An uncertain response is not permission to submit the same callback again.
+///     Ok(())
+/// }
+/// ```
 pub enum ResponsePhase {
     #[default]
+    /// No initial callback is known to have completed.
     Unanswered,
+    /// A silent acknowledgement completed locally.
     Acknowledged,
+    /// A reply or update completed locally.
     Responded,
+    /// Callback submission failed with an ambiguous outcome; do not replay automatically.
     Uncertain,
+    /// The interaction token is no longer locally eligible for a response.
     Expired,
 }
 #[derive(Debug, Clone, Copy, Default)]
+/// Local acknowledgement/response tracking for one interaction.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{Client, InteractionEvent, Result};
+/// async fn inspect(client: &Client, event: &InteractionEvent) -> Result<()> {
+///     client.track_interaction(event).await?;
+///     let state = client.interaction_state(event).await?;
+///     println!("{:?}, responses {}", state.phase, state.responses);
+///     // An uncertain response is not permission to submit the same callback again.
+///     Ok(())
+/// }
+/// ```
 pub struct InteractionState {
+    /// Current local response disposition.
     pub phase: ResponsePhase,
+    /// Number of successfully completed local callback responses.
     pub responses: u32,
 }
 pub(crate) struct Tracked {
@@ -79,6 +114,18 @@ impl Registry {
 impl crate::Client {
     /// Record the server deadline for a custom-transport interaction before any
     /// callback. Bot intake and interaction contexts call this automatically.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Client, InteractionEvent, Result};
+    /// async fn inspect(client: &Client, event: &InteractionEvent) -> Result<()> {
+    ///     client.track_interaction(event).await?;
+    ///     let state = client.interaction_state(event).await?;
+    ///     println!("{:?}, responses {}", state.phase, state.responses);
+    ///     // An uncertain response is not permission to submit the same callback again.
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn track_interaction(&self, event: &InteractionEvent) -> Result<()> {
         let now = chrono::Utc::now();
         let deadline = event.expires_at.or_else(|| {
@@ -114,6 +161,20 @@ impl crate::Client {
         }
         Ok(())
     }
+    /// Read local callback state; tracking does not prove a remote mutation outcome.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Client, InteractionEvent, Result};
+    /// async fn inspect(client: &Client, event: &InteractionEvent) -> Result<()> {
+    ///     client.track_interaction(event).await?;
+    ///     let state = client.interaction_state(event).await?;
+    ///     println!("{:?}, responses {}", state.phase, state.responses);
+    ///     // An uncertain response is not permission to submit the same callback again.
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn interaction_state(&self, event: &InteractionEvent) -> Result<InteractionState> {
         self.track_interaction(event).await?;
         let entry = self

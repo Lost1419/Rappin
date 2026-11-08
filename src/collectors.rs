@@ -24,30 +24,79 @@ use tokio::{
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+/// Explicit timeout, overflow, closure or subscription rejection; not permission to replay effects.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{Event, collectors::EventHub};
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let hub = EventHub::default();
+/// // Subscribe before publishing a prompt or receiving a matching response.
+/// let mut replies = hub.collect::<Event>().kind("test").limit(1).subscribe()?;
+/// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+/// hub.publish(event);
+/// assert_eq!(replies.next().await?.unwrap().id, 1);
+/// assert!(replies.next().await?.is_none());
+/// # Ok(())
+/// # }
+/// ```
 pub enum WaitError {
     #[error("event wait timed out")]
+    /// Total or idle deadline expired before a matching item arrived.
     Timeout,
     #[error("event subscription overflowed; events were lost")]
+    /// Subscription overflowed; some events were lost.
     Lagged,
     #[error("event source closed or subscription cancelled")]
+    /// Hub closed or the collector was cancelled.
     Closed,
     #[error("event subscription limit reached")]
+    /// The hub's active subscription limit was reached.
     Limit,
     #[error("capacity, timeout and item limit must be positive")]
+    /// A capacity, timeout or item limit is outside supported positive bounds.
     InvalidOptions,
 }
 
 /// Serializable routing criteria, also usable by isolated Rust workers.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// # Example
+///
+/// ```rust
+/// use rappin::collectors::EventFilter;
+/// let criteria = EventFilter { kind: Some("test".into()), ..Default::default() };
+/// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+/// assert!(criteria.matches(&event));
+/// # Ok::<(), serde_json::Error>(())
+/// ```
 pub struct EventFilter {
+    /// Exact event kind; None does not restrict kind.
     pub kind: Option<String>,
+    /// Required data.channel_id, if supplied.
     pub channel_id: Option<Uuid>,
+    /// Required data.server_id, if supplied.
     pub server_id: Option<Uuid>,
+    /// Required message author_id or other event user_id, depending on event kind.
     pub author_id: Option<Uuid>,
+    /// Required message id or interaction message_id, depending on event kind.
     pub message_id: Option<Uuid>,
+    /// Required prefix of interaction custom_id, if supplied.
     pub custom_id_prefix: Option<String>,
 }
 impl EventFilter {
+    /// Test all supplied routing criteria without authenticating the event or claiming its checkpoint.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::collectors::EventFilter;
+    /// let criteria = EventFilter { kind: Some("test".into()), ..Default::default() };
+    /// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+    /// assert!(criteria.matches(&event));
+    /// # Ok::<(), serde_json::Error>(())
+    /// ```
     pub fn matches(&self, event: &Event) -> bool {
         let data = &event.data;
         let is_id = |key: &str, id: Uuid| {
@@ -84,7 +133,29 @@ impl EventFilter {
     }
 }
 
+/// Decode a typed collector value from a raw event; mismatched kinds or invalid data return None.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{Event, collectors::Collectible};
+/// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+/// let copy = Event::from_event(&event).unwrap();
+/// assert_eq!(copy.id, event.id);
+/// # Ok::<(), serde_json::Error>(())
+/// ```
 pub trait Collectible: Clone + Send + Sync + 'static {
+    /// Return a typed copy if this kind/payload is supported; this conversion does not authenticate delivery.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::Collectible};
+    /// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+    /// let copy = Event::from_event(&event).unwrap();
+    /// assert_eq!(copy.id, event.id);
+    /// # Ok::<(), serde_json::Error>(())
+    /// ```
     fn from_event(event: &Event) -> Option<Self>;
 }
 impl Collectible for Event {
@@ -147,6 +218,22 @@ struct Hub {
 }
 /// Fan-out for authenticated events received by a Bot. It never owns a delivery checkpoint.
 #[derive(Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::{Event, collectors::EventHub};
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let hub = EventHub::default();
+/// // Subscribe before publishing a prompt or receiving a matching response.
+/// let mut replies = hub.collect::<Event>().kind("test").limit(1).subscribe()?;
+/// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+/// hub.publish(event);
+/// assert_eq!(replies.next().await?.unwrap().id, 1);
+/// assert!(replies.next().await?.is_none());
+/// # Ok(())
+/// # }
+/// ```
 pub struct EventHub(Arc<Hub>);
 impl Default for EventHub {
     fn default() -> Self {
@@ -158,6 +245,24 @@ impl Default for EventHub {
     }
 }
 impl EventHub {
+    /// Configure a typed subscription; registration occurs on subscribe/wait.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let hub = EventHub::default();
+    /// // Subscribe before publishing a prompt or receiving a matching response.
+    /// let mut replies = hub.collect::<Event>().kind("test").limit(1).subscribe()?;
+    /// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+    /// hub.publish(event);
+    /// assert_eq!(replies.next().await?.unwrap().id, 1);
+    /// assert!(replies.next().await?.is_none());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn collect<T: Collectible>(&self) -> CollectorBuilder<T> {
         CollectorBuilder {
             hub: self.clone(),
@@ -169,6 +274,25 @@ impl EventHub {
             limit: usize::MAX,
         }
     }
+    /// Current number of registered subscriptions; not an event traffic counter.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let hub = EventHub::default();
+    /// // Subscribe before publishing a prompt or receiving a matching response.
+    /// let mut replies = hub.collect::<Event>().kind("test").limit(1).subscribe()?;
+    /// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+    /// assert_eq!(hub.subscriber_count(), 1);
+    /// hub.publish(event);
+    /// assert_eq!(replies.next().await?.unwrap().id, 1);
+    /// assert!(replies.next().await?.is_none());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn subscriber_count(&self) -> usize {
         self.0
             .subscriptions
@@ -177,6 +301,22 @@ impl EventHub {
             .len()
     }
     /// Publish once per received event. Custom transports can use this directly.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let hub = EventHub::default();
+    /// // Subscribe before publishing a prompt or receiving a matching response.
+    /// let mut replies = hub.collect::<Event>().kind("test").limit(1).subscribe()?;
+    /// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+    /// hub.publish(event);
+    /// assert_eq!(replies.next().await?.unwrap().id, 1);
+    /// assert!(replies.next().await?.is_none());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn publish(&self, event: Event) {
         let event = Arc::new(event);
         // User filters run without the registry lock, allowing registration/drop inside a filter.
@@ -249,6 +389,24 @@ impl EventHub {
     }
 }
 
+/// Bounded typed subscription configuration; build it before posting a prompt.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{Event, collectors::EventHub};
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let hub = EventHub::default();
+/// // Subscribe before publishing a prompt or receiving a matching response.
+/// let mut replies = hub.collect::<Event>().kind("test").limit(1).subscribe()?;
+/// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+/// hub.publish(event);
+/// assert_eq!(replies.next().await?.unwrap().id, 1);
+/// assert!(replies.next().await?.is_none());
+/// # Ok(())
+/// # }
+/// ```
 pub struct CollectorBuilder<T: Collectible> {
     hub: EventHub,
     criteria: EventFilter,
@@ -259,55 +417,191 @@ pub struct CollectorBuilder<T: Collectible> {
     limit: usize,
 }
 impl<T: Collectible> CollectorBuilder<T> {
+    /// Replace routing criteria; a typed filter remains independent.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// let hub = EventHub::default();
+    /// let configured = hub.collect::<Event>().criteria(rappin::collectors::EventFilter::default());
+    /// // Call subscribe before sending a prompt; next/wait returns explicit timeout or loss errors.
+    /// ```
     pub fn criteria(mut self, criteria: EventFilter) -> Self {
         self.criteria = criteria;
         self
     }
+    /// Restrict to a channel ID.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// let hub = EventHub::default();
+    /// let configured = hub.collect::<Event>().channel(uuid::Uuid::nil());
+    /// // Call subscribe before sending a prompt; next/wait returns explicit timeout or loss errors.
+    /// ```
     pub fn channel(mut self, id: Uuid) -> Self {
         self.criteria.channel_id = Some(id);
         self
     }
+    /// Restrict to a server ID.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// let hub = EventHub::default();
+    /// let configured = hub.collect::<Event>().server(uuid::Uuid::nil());
+    /// // Call subscribe before sending a prompt; next/wait returns explicit timeout or loss errors.
+    /// ```
     pub fn server(mut self, id: Uuid) -> Self {
         self.criteria.server_id = Some(id);
         self
     }
+    /// Restrict to the message author or interaction user.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// let hub = EventHub::default();
+    /// let configured = hub.collect::<Event>().author(uuid::Uuid::nil());
+    /// // Call subscribe before sending a prompt; next/wait returns explicit timeout or loss errors.
+    /// ```
     pub fn author(mut self, id: Uuid) -> Self {
         self.criteria.author_id = Some(id);
         self
     }
+    /// Restrict to one message ID or interaction target message.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// let hub = EventHub::default();
+    /// let configured = hub.collect::<Event>().message(uuid::Uuid::nil());
+    /// // Call subscribe before sending a prompt; next/wait returns explicit timeout or loss errors.
+    /// ```
     pub fn message(mut self, id: Uuid) -> Self {
         self.criteria.message_id = Some(id);
         self
     }
+    /// Restrict to an exact raw event kind.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// let hub = EventHub::default();
+    /// let configured = hub.collect::<Event>().kind("test");
+    /// // Call subscribe before sending a prompt; next/wait returns explicit timeout or loss errors.
+    /// ```
     pub fn kind(mut self, kind: impl Into<String>) -> Self {
         self.criteria.kind = Some(kind.into());
         self
     }
+    /// Restrict to interaction custom IDs with this prefix.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// let hub = EventHub::default();
+    /// let configured = hub.collect::<Event>().custom_id_prefix("confirm:");
+    /// // Call subscribe before sending a prompt; next/wait returns explicit timeout or loss errors.
+    /// ```
     pub fn custom_id_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.criteria.custom_id_prefix = Some(prefix.into());
         self
     }
+    /// Apply a local pure typed predicate after routing criteria.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// let hub = EventHub::default();
+    /// let configured = hub.collect::<Event>().filter(|event: &rappin::Event| event.id > 0);
+    /// // Call subscribe before sending a prompt; next/wait returns explicit timeout or loss errors.
+    /// ```
     pub fn filter(mut self, filter: impl Fn(&T) -> bool + Send + Sync + 'static) -> Self {
         self.filter = Arc::new(filter);
         self
     }
+    /// Set queue capacity, 1 through 4096; overflow produces Lagged rather than silently dropping results.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// let hub = EventHub::default();
+    /// let configured = hub.collect::<Event>().capacity(32);
+    /// // Call subscribe before sending a prompt; next/wait returns explicit timeout or loss errors.
+    /// ```
     pub fn capacity(mut self, capacity: usize) -> Self {
         self.capacity = capacity;
         self
     }
+    /// Set the positive total subscription lifetime.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// let hub = EventHub::default();
+    /// let configured = hub.collect::<Event>().timeout(std::time::Duration::from_secs(30));
+    /// // Call subscribe before sending a prompt; next/wait returns explicit timeout or loss errors.
+    /// ```
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
     /// Timeout since the last matching event arrived, independent of consumer polling speed.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// let hub = EventHub::default();
+    /// let configured = hub.collect::<Event>().idle_timeout(std::time::Duration::from_secs(10));
+    /// // Call subscribe before sending a prompt; next/wait returns explicit timeout or loss errors.
+    /// ```
     pub fn idle_timeout(mut self, timeout: Duration) -> Self {
         self.idle = Some(timeout);
         self
     }
+    /// Complete after this positive number of matching results.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// let hub = EventHub::default();
+    /// let configured = hub.collect::<Event>().limit(5);
+    /// // Call subscribe before sending a prompt; next/wait returns explicit timeout or loss errors.
+    /// ```
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = limit;
         self
     }
+    /// Register immediately with bounded capacity and deadlines; requires an active Tokio runtime.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let hub = EventHub::default();
+    /// // Subscribe before publishing a prompt or receiving a matching response.
+    /// let mut replies = hub.collect::<Event>().kind("test").limit(1).subscribe()?;
+    /// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+    /// hub.publish(event);
+    /// assert_eq!(replies.next().await?.unwrap().id, 1);
+    /// assert!(replies.next().await?.is_none());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn subscribe(self) -> Result<Collector<T>, WaitError> {
         if self.capacity == 0
             || self.capacity > 4096
@@ -386,12 +680,41 @@ impl<T: Collectible> CollectorBuilder<T> {
             marker: PhantomData,
         })
     }
+    /// Subscribe and await the first match; registration begins when this future is polled.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::{EventHub, WaitError}};
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// let hub = EventHub::default();
+    /// let result = hub.collect::<Event>().timeout(std::time::Duration::from_millis(1)).wait().await;
+    /// assert_eq!(result.unwrap_err(), WaitError::Timeout);
+    /// # }
+    /// ```
     pub async fn wait(self) -> Result<T, WaitError> {
         self.limit(1).subscribe()?.wait().await
     }
 }
 
 /// A bounded Stream. Overflow is an explicit terminal Lagged error, never silent loss.
+/// # Example
+///
+/// ```rust
+/// use rappin::{Event, collectors::EventHub};
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let hub = EventHub::default();
+/// // Subscribe before publishing a prompt or receiving a matching response.
+/// let mut replies = hub.collect::<Event>().kind("test").limit(1).subscribe()?;
+/// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+/// hub.publish(event);
+/// assert_eq!(replies.next().await?.unwrap().id, 1);
+/// assert!(replies.next().await?.is_none());
+/// # Ok(())
+/// # }
+/// ```
 pub struct Collector<T: Collectible> {
     hub: Weak<Hub>,
     id: u64,
@@ -406,9 +729,44 @@ pub struct Collector<T: Collectible> {
 }
 impl<T: Collectible> Unpin for Collector<T> {}
 impl<T: Collectible> Collector<T> {
+    /// Await the next matching value; None means the configured item limit completed. Loss, timeout and closure remain explicit errors.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let hub = EventHub::default();
+    /// // Subscribe before publishing a prompt or receiving a matching response.
+    /// let mut replies = hub.collect::<Event>().kind("test").limit(1).subscribe()?;
+    /// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+    /// hub.publish(event);
+    /// assert_eq!(replies.next().await?.unwrap().id, 1);
+    /// assert!(replies.next().await?.is_none());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn next(&mut self) -> Result<Option<T>, WaitError> {
         StreamExt::next(self).await.transpose()
     }
+    /// Consume the subscription and return its first matching value.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::EventHub};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let hub = EventHub::default();
+    /// // Subscribe before publishing a prompt or receiving a matching response.
+    /// let mut replies = hub.collect::<Event>().kind("test").limit(1).subscribe()?;
+    /// let event: rappin::Event = serde_json::from_value(serde_json::json!({"id":1,"type":"test","data":{}}))?;
+    /// hub.publish(event);
+    /// assert_eq!(replies.wait().await?.id, 1);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn wait(mut self) -> Result<T, WaitError> {
         self.next().await?.ok_or(WaitError::Closed)
     }
@@ -423,6 +781,21 @@ impl<T: Collectible> Collector<T> {
         }
         self.receiver.close();
     }
+    /// Unregister this waiter; subsequent waits report Closed.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{Event, collectors::{EventHub, WaitError}};
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), WaitError> {
+    /// let hub = EventHub::default();
+    /// let mut waiter = hub.collect::<Event>().subscribe()?;
+    /// waiter.cancel();
+    /// assert_eq!(waiter.next().await.unwrap_err(), WaitError::Closed);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn cancel(&mut self) {
         self.state.store(3, Ordering::SeqCst);
         self.unregister();

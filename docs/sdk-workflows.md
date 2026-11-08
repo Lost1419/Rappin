@@ -59,7 +59,7 @@ Worker protocol v3 carries `RemoteError`: kind, message, HTTP status, retry wait
 outcome hints and partial-write details. `YappinError` status/retry helpers work
 on it. Error JSON is redacted before crossing the parent/worker boundary. Legacy
 string fields remain for v1/v2 workers; rebuild workers to obtain structured
-errors. The new host accepts all three versions; older hosts reject v3 workers.
+errors. The current host accepts v1–v8; older hosts reject worker capabilities beyond their supported version. Structured errors arrived in v3; later versions add opt-in behavior. See the [worker compatibility guide](https://github.com/Lost1419/Rappin/blob/main/docs/rust-bots.md#hot-workers).
 Command/button dispatch preserves structured causes across callbacks and worker
 boundaries. Legacy callbacks observe failures; the explicit
 [failure policy](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md) can complete an invocation. Typed worker

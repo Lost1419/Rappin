@@ -18,9 +18,30 @@ struct Origin {
 /// uniqueness, deduplication, permission grant or replay policy is implied.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
+/// # Example
+///
+/// ```rust
+/// use rappin::OperationId;
+/// let id = OperationId::new("request:42:step:1")?;
+/// assert_eq!(id.as_str(), "request:42:step:1");
+/// assert!(OperationId::new("invalid\nkey").is_err());
+/// # Ok::<(), rappin::YappinError>(())
+/// ```
 pub struct OperationId(String);
 impl OperationId {
+    /// Maximum UTF-8 byte length accepted for a consumer operation key.
     pub const MAX_BYTES: usize = 128;
+    /// Validate an opaque consumer key; no authority, uniqueness or remote idempotency is implied.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::OperationId;
+    /// let id = OperationId::new("request:42:step:1")?;
+    /// assert_eq!(id.as_str(), "request:42:step:1");
+    /// assert!(OperationId::new("invalid\nkey").is_err());
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         if value.is_empty() || value.len() > Self::MAX_BYTES || value.chars().any(char::is_control)
@@ -32,6 +53,17 @@ impl OperationId {
         }
         Ok(Self(value))
     }
+    /// Borrow the exact unnormalized UTF-8 key.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::OperationId;
+    /// let id = OperationId::new("request:42:step:1")?;
+    /// assert_eq!(id.as_str(), "request:42:step:1");
+    /// assert!(OperationId::new("invalid\nkey").is_err());
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -89,10 +121,28 @@ pub(super) async fn with_origin<T>(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Completion state of one explicit invocation; incomplete outcomes never imply replay safety.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::{InvocationOutcome, InvocationStatus, Result};
+/// fn propagate(outcome: InvocationOutcome) -> Result<()> {
+///     if outcome.status != InvocationStatus::Completed {
+///         eprintln!("Incomplete {}, operation {:?}, effects possible: {}", outcome.command, outcome.operation_id(), outcome.effects_possible);
+///     }
+///     // Preserve the original cause and leave outer reply/checkpoint ownership explicit.
+///     outcome.into_result()
+/// }
+/// ```
 pub enum InvocationStatus {
+    /// No installed command matched the requested name/alias.
     NotFound,
+    /// A parsing, scope or authorization requirement rejected the invocation.
     Denied,
+    /// The installed handler returned successful completion.
     Completed,
+    /// Preparation became stale, arbitrary code failed, or processing did not complete.
     Failed,
 }
 
@@ -101,16 +151,43 @@ pub enum InvocationStatus {
 #[derive(Debug)]
 #[must_use = "propagate incomplete invocation or explicitly reconcile it"]
 #[non_exhaustive]
+/// # Example
+///
+/// ```rust
+/// use rappin::{InvocationOutcome, InvocationStatus, Result};
+/// fn propagate(outcome: InvocationOutcome) -> Result<()> {
+///     if outcome.status != InvocationStatus::Completed {
+///         eprintln!("Incomplete {}, operation {:?}, effects possible: {}", outcome.command, outcome.operation_id(), outcome.effects_possible);
+///     }
+///     // Preserve the original cause and leave outer reply/checkpoint ownership explicit.
+///     outcome.into_result()
+/// }
+/// ```
 pub struct InvocationOutcome {
+    /// Explicit not-found, denied, completed or failed disposition.
     pub status: InvocationStatus,
+    /// Requested or resolved installed command name.
     pub command: String,
     /// Conservative: arbitrary cog/check/handler code or the message gate ran.
     pub effects_possible: bool,
+    /// Original structured cause when one is available.
     pub error: Option<YappinError>,
     operation_id: Option<OperationId>,
 }
 impl InvocationOutcome {
     /// Consumer operation key, including for rejected/stale/incomplete calls.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{InvocationOutcome, InvocationStatus, Result};
+    /// fn propagate(outcome: InvocationOutcome) -> Result<()> {
+    ///     if outcome.status != InvocationStatus::Completed {
+    ///         eprintln!("Incomplete {}, operation {:?}, effects possible: {}", outcome.command, outcome.operation_id(), outcome.effects_possible);
+    ///     }
+    ///     // Preserve the original cause and leave outer reply/checkpoint ownership explicit.
+    ///     outcome.into_result()
+    /// }
+    /// ```
     pub fn operation_id(&self) -> Option<&OperationId> {
         self.operation_id.as_ref()
     }
@@ -120,6 +197,18 @@ impl InvocationOutcome {
     }
     /// Propagate an incomplete invocation without the normal typed-rejection
     /// auto-reply. The outer failure policy owns reconciliation and checkpointing.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::{InvocationOutcome, InvocationStatus, Result};
+    /// fn propagate(outcome: InvocationOutcome) -> Result<()> {
+    ///     if outcome.status != InvocationStatus::Completed {
+    ///         eprintln!("Incomplete {}, operation {:?}, effects possible: {}", outcome.command, outcome.operation_id(), outcome.effects_possible);
+    ///     }
+    ///     // Preserve the original cause and leave outer reply/checkpoint ownership explicit.
+    ///     outcome.into_result()
+    /// }
+    /// ```
     pub fn into_result(self) -> Result<()> {
         if self.status == InvocationStatus::Completed {
             return Ok(());
@@ -156,13 +245,45 @@ impl InvocationOutcome {
 /// Advisory assessment, never a reservation or an authorization grant.
 #[derive(Clone, Debug, Default)]
 #[non_exhaustive]
+/// # Example
+///
+/// ```no_run
+/// use rappin::{BotHandle, MessageContext, OperationId, Result};
+/// async fn invoke(handle: &BotHandle, ctx: &MessageContext) -> Result<()> {
+///     // Must run in the original authenticated message task, not a synthetic context.
+///     let plan = handle.prepare_invocation_with_operation_id(
+///         ctx, "status", "", OperationId::new("request:42:step:1")?
+///     ).await?;
+///     println!("{} {}: deferred {:?}", plan.command(), plan.arguments(), plan.report().deferred);
+///     assert_eq!(plan.operation_id().map(OperationId::as_str), Some("request:42:step:1"));
+///     // Preparation grants no future authority. Execution rechecks the installed binding.
+///     handle.invoke_prepared(plan).await.into_result()
+/// }
+/// ```
 pub struct PreparationReport {
+    /// Checks established by read-only preparation; these are rechecked during execution.
     pub assessed: Vec<String>,
+    /// Checks or arbitrary application logic that cannot be established during preparation.
     pub deferred: Vec<String>,
 }
 /// Opaque, single-use plan bound to the original event and installed binding.
 /// Execute within the same message task. Unload/replacement requires preparation
 /// again, even if a replacement uses the same name and argument metadata.
+/// # Example
+///
+/// ```no_run
+/// use rappin::{BotHandle, MessageContext, OperationId, Result};
+/// async fn invoke(handle: &BotHandle, ctx: &MessageContext) -> Result<()> {
+///     // Must run in the original authenticated message task, not a synthetic context.
+///     let plan = handle.prepare_invocation_with_operation_id(
+///         ctx, "status", "", OperationId::new("request:42:step:1")?
+///     ).await?;
+///     println!("{} {}: deferred {:?}", plan.command(), plan.arguments(), plan.report().deferred);
+///     assert_eq!(plan.operation_id().map(OperationId::as_str), Some("request:42:step:1"));
+///     // Preparation grants no future authority. Execution rechecks the installed binding.
+///     handle.invoke_prepared(plan).await.into_result()
+/// }
+/// ```
 pub struct PreparedInvocation {
     context: MessageContext,
     requested: String,
@@ -180,15 +301,83 @@ impl std::fmt::Debug for PreparedInvocation {
     }
 }
 impl PreparedInvocation {
+    /// Consumer key retained from preparation, separate from authenticated message identity.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, MessageContext, OperationId, Result};
+    /// async fn invoke(handle: &BotHandle, ctx: &MessageContext) -> Result<()> {
+    ///     // Must run in the original authenticated message task, not a synthetic context.
+    ///     let plan = handle.prepare_invocation_with_operation_id(
+    ///         ctx, "status", "", OperationId::new("request:42:step:1")?
+    ///     ).await?;
+    ///     println!("{} {}: deferred {:?}", plan.command(), plan.arguments(), plan.report().deferred);
+    ///     assert_eq!(plan.operation_id().map(OperationId::as_str), Some("request:42:step:1"));
+    ///     // Preparation grants no future authority. Execution rechecks the installed binding.
+    ///     handle.invoke_prepared(plan).await.into_result()
+    /// }
+    /// ```
     pub fn operation_id(&self) -> Option<&OperationId> {
         self.operation_id.as_ref()
     }
+    /// Read-only assessment, including checks deferred until execution.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, MessageContext, OperationId, Result};
+    /// async fn invoke(handle: &BotHandle, ctx: &MessageContext) -> Result<()> {
+    ///     // Must run in the original authenticated message task, not a synthetic context.
+    ///     let plan = handle.prepare_invocation_with_operation_id(
+    ///         ctx, "status", "", OperationId::new("request:42:step:1")?
+    ///     ).await?;
+    ///     println!("{} {}: deferred {:?}", plan.command(), plan.arguments(), plan.report().deferred);
+    ///     assert_eq!(plan.operation_id().map(OperationId::as_str), Some("request:42:step:1"));
+    ///     // Preparation grants no future authority. Execution rechecks the installed binding.
+    ///     handle.invoke_prepared(plan).await.into_result()
+    /// }
+    /// ```
     pub fn report(&self) -> &PreparationReport {
         &self.report
     }
+    /// Canonical installed command path captured by preparation.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, MessageContext, OperationId, Result};
+    /// async fn invoke(handle: &BotHandle, ctx: &MessageContext) -> Result<()> {
+    ///     // Must run in the original authenticated message task, not a synthetic context.
+    ///     let plan = handle.prepare_invocation_with_operation_id(
+    ///         ctx, "status", "", OperationId::new("request:42:step:1")?
+    ///     ).await?;
+    ///     println!("{} {}: deferred {:?}", plan.command(), plan.arguments(), plan.report().deferred);
+    ///     assert_eq!(plan.operation_id().map(OperationId::as_str), Some("request:42:step:1"));
+    ///     // Preparation grants no future authority. Execution rechecks the installed binding.
+    ///     handle.invoke_prepared(plan).await.into_result()
+    /// }
+    /// ```
     pub fn command(&self) -> &str {
         self.context.command.as_deref().expect("prepared command")
     }
+    /// Original explicit argument string retained for execution.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, MessageContext, OperationId, Result};
+    /// async fn invoke(handle: &BotHandle, ctx: &MessageContext) -> Result<()> {
+    ///     // Must run in the original authenticated message task, not a synthetic context.
+    ///     let plan = handle.prepare_invocation_with_operation_id(
+    ///         ctx, "status", "", OperationId::new("request:42:step:1")?
+    ///     ).await?;
+    ///     println!("{} {}: deferred {:?}", plan.command(), plan.arguments(), plan.report().deferred);
+    ///     assert_eq!(plan.operation_id().map(OperationId::as_str), Some("request:42:step:1"));
+    ///     // Preparation grants no future authority. Execution rechecks the installed binding.
+    ///     handle.invoke_prepared(plan).await.into_result()
+    /// }
+    /// ```
     pub fn arguments(&self) -> &str {
         &self.context.args
     }
@@ -272,6 +461,15 @@ impl BotHandle {
     /// arbitrary checks, cog checks, the message gate, or consuming cooldowns.
     /// Built-in declarative checks and dynamic schemas can be assessed. Custom
     /// CommandCheck::prepare implementations opt into the read-only contract.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, MessageContext, Result};
+    /// async fn invoke(handle: &BotHandle, ctx: &MessageContext) -> Result<()> {
+    ///     let plan = handle.prepare_invocation(ctx, "status", "").await?;
+    ///     handle.invoke_prepared(plan).await.into_result()
+    /// }
+    /// ```
     pub async fn prepare_invocation(
         &self,
         ctx: &MessageContext,
@@ -283,6 +481,21 @@ impl BotHandle {
     }
     /// Prepare with an explicit consumer operation key before any handler runs.
     /// This key supplies no authentication, authorization or deduplication.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, MessageContext, OperationId, Result};
+    /// async fn invoke(handle: &BotHandle, ctx: &MessageContext) -> Result<()> {
+    ///     // Must run in the original authenticated message task, not a synthetic context.
+    ///     let plan = handle.prepare_invocation_with_operation_id(
+    ///         ctx, "status", "", OperationId::new("request:42:step:1")?
+    ///     ).await?;
+    ///     println!("{} {}: deferred {:?}", plan.command(), plan.arguments(), plan.report().deferred);
+    ///     assert_eq!(plan.operation_id().map(OperationId::as_str), Some("request:42:step:1"));
+    ///     // Preparation grants no future authority. Execution rechecks the installed binding.
+    ///     handle.invoke_prepared(plan).await.into_result()
+    /// }
+    /// ```
     pub async fn prepare_invocation_with_operation_id(
         &self,
         ctx: &MessageContext,
@@ -369,6 +582,17 @@ impl BotHandle {
     }
     /// Invoke with fresh normal execution checks. Does not redispatch an event,
     /// run listeners, advance a cursor, retry, or send framework error replies.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, MessageContext, OperationId, Result};
+    /// async fn invoke(handle: &BotHandle, ctx: &MessageContext) -> Result<()> {
+    ///     let outcome = handle.invoke_command(ctx, "status", "").await;
+    ///     if let Some(error) = &outcome.error { eprintln!("{:?}: {}", outcome.status, error); }
+    ///     // No framework error reply/callback was sent by this nested invocation.
+    ///     outcome.into_result()
+    /// }
+    /// ```
     pub async fn invoke_command(
         &self,
         ctx: &MessageContext,
@@ -379,6 +603,17 @@ impl BotHandle {
             .await
     }
     /// Invoke with a consumer-owned operation key; all normal checks still run.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, MessageContext, OperationId, Result};
+    /// async fn invoke(handle: &BotHandle, ctx: &MessageContext) -> Result<()> {
+    ///     let outcome = handle.invoke_command_with_operation_id(ctx, "status", "", OperationId::new("request:42:step:1")?).await;
+    ///     if let Some(error) = &outcome.error { eprintln!("{:?}: {}", outcome.status, error); }
+    ///     // No framework error reply/callback was sent by this nested invocation.
+    ///     outcome.into_result()
+    /// }
+    /// ```
     pub async fn invoke_command_with_operation_id(
         &self,
         ctx: &MessageContext,
@@ -439,6 +674,21 @@ impl BotHandle {
             .await
     }
     /// Execute a single-use plan; reject stale bindings and recheck authorization.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{BotHandle, MessageContext, OperationId, Result};
+    /// async fn invoke(handle: &BotHandle, ctx: &MessageContext) -> Result<()> {
+    ///     // Must run in the original authenticated message task, not a synthetic context.
+    ///     let plan = handle.prepare_invocation_with_operation_id(
+    ///         ctx, "status", "", OperationId::new("request:42:step:1")?
+    ///     ).await?;
+    ///     println!("{} {}: deferred {:?}", plan.command(), plan.arguments(), plan.report().deferred);
+    ///     assert_eq!(plan.operation_id().map(OperationId::as_str), Some("request:42:step:1"));
+    ///     // Preparation grants no future authority. Execution rechecks the installed binding.
+    ///     handle.invoke_prepared(plan).await.into_result()
+    /// }
+    /// ```
     pub async fn invoke_prepared(&self, plan: PreparedInvocation) -> InvocationOutcome {
         let operation_id = plan.operation_id.clone();
         self.invoke_prepared_inner(plan)

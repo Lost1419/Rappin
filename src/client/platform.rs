@@ -29,6 +29,14 @@ impl Client {
             .map_err(|e| crate::security::json_error(e, &[self.inner.token.as_str()]))
     }
     /// Multipart API access, confined to typed message/emoji upload endpoints.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Client, UploadFile, Result};
+    /// async fn upload(client: &Client, channel: uuid::Uuid, file: UploadFile) -> Result<serde_json::Value> {
+    ///     client.request_upload(&format!("/channels/{channel}/messages"), serde_json::json!({"content":"Report"}), &[file]).await
+    /// }
+    /// ```
     pub async fn request_upload(
         &self,
         path: &str,
@@ -113,15 +121,64 @@ impl Client {
             .map_err(|e| crate::security::json_error(e, &[self.inner.token.as_str()]))?;
         Ok(self.redact_credentials(value))
     }
+    /// Read public API/build metadata and official SDK versions without Authorization. The response does not describe the installed Rappin version.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client) -> Result<()> {
+    ///     let response = client.get_api_version().await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_api_version(&self) -> Result<VersionInfo> {
         ApiExt::get_api_version(self).await
     }
+    /// Read the public platform changelog, requesting 1 through 50 entries.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client) -> Result<()> {
+    ///     let response = client.get_api_changelog(10).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_api_changelog(&self, limit: u32) -> Result<ApiChangelog> {
         ApiExt::get_api_changelog(self, limit).await
     }
+    /// Read server custom-emoji inventory and its slot limit.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server: Uuid) -> Result<()> {
+    ///     let response = client.get_emojis(server).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_emojis(&self, server: Uuid) -> Result<EmojisResponse> {
         ApiExt::get_emojis(self, server).await
     }
+    /// Create a server emoji from a validated base64/data-URL image. Local validation currently caps decoded images at 1 MiB; moderation may return a pending result.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server: Uuid, body: &CreateEmoji) -> Result<()> {
+    ///     let response = client.create_emoji(server, body).await?;
+    ///     // Propagate partial errors; inspect moderation-pending success where applicable.
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn create_emoji(
         &self,
         server: Uuid,
@@ -129,6 +186,19 @@ impl Client {
     ) -> Result<EmojiCreateResult> {
         ApiExt::create_emoji(self, server, body).await
     }
+    /// Upload one PNG/GIF/WebP emoji through the shared multipart transport. The current SDK cap is 1 MiB, and pending moderation is not a failed creation.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server: Uuid, file: &UploadFile) -> Result<()> {
+    ///     let response = client.upload_emoji(server, "wave", file).await?;
+    ///     // Propagate partial errors; inspect moderation-pending success where applicable.
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn upload_emoji(
         &self,
         server: Uuid,
@@ -137,6 +207,18 @@ impl Client {
     ) -> Result<EmojiCreateResult> {
         ApiExt::upload_emoji(self, server, name, file).await
     }
+    /// Rename a server emoji after validating its name. The platform enforces Manage Emoji and resource scope.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server: Uuid, emoji: Uuid) -> Result<()> {
+    ///     let response = client.edit_emoji(server, emoji, "wave").await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn edit_emoji(
         &self,
         server: Uuid,
@@ -145,15 +227,63 @@ impl Client {
     ) -> Result<EmojiCreateResult> {
         ApiExt::edit_emoji(self, server, emoji, name).await
     }
+    /// Delete the selected server emoji. An uncertain result must be reconciled rather than replayed automatically.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, server: Uuid, emoji: Uuid) -> Result<()> {
+    ///     let response = client.delete_emoji(server, emoji).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn delete_emoji(&self, server: Uuid, emoji: Uuid) -> Result<()> {
         ApiExt::delete_emoji(self, server, emoji).await
     }
+    /// Read bot-owned webhooks visible in the selected channel.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel: Uuid) -> Result<()> {
+    ///     let response = client.get_channel_webhooks(channel).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_channel_webhooks(&self, channel: Uuid) -> Result<BotWebhooksResponse> {
         ApiExt::get_channel_webhooks(self, channel).await
     }
+    /// Read webhooks owned by the authenticated bot.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client) -> Result<()> {
+    ///     let response = client.get_bot_webhooks().await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn get_bot_webhooks(&self) -> Result<BotWebhooksResponse> {
         ApiExt::get_bot_webhooks(self).await
     }
+    /// Create a bot-owned webhook in a channel after validating its display name.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel: Uuid) -> Result<()> {
+    ///     let response = client.create_bot_webhook(channel, &CreateBotWebhook::new("Notifier")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn create_bot_webhook(
         &self,
         channel: Uuid,
@@ -161,9 +291,33 @@ impl Client {
     ) -> Result<BotWebhook> {
         ApiExt::create_bot_webhook(self, channel, body).await
     }
+    /// Delete a bot-owned webhook by ID. The API enforces ownership and channel permissions.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, webhook: Uuid) -> Result<()> {
+    ///     let response = client.delete_bot_webhook(webhook).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn delete_bot_webhook(&self, webhook: Uuid) -> Result<()> {
         ApiExt::delete_bot_webhook(self, webhook).await
     }
+    /// Post through a bot-owned webhook using bot authentication, preserving confirmed message data on success.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, webhook: Uuid) -> Result<()> {
+    ///     let response = client.post_bot_webhook(webhook, &WebhookMessage { content: Some("Service is online".into()), ..Default::default() }).await?;
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn post_bot_webhook(
         &self,
         webhook: Uuid,
@@ -171,6 +325,17 @@ impl Client {
     ) -> Result<Message> {
         ApiExt::post_bot_webhook(self, webhook, body).await
     }
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// async fn example(client: &Client, channel: Uuid, files: &[UploadFile]) -> Result<()> {
+    ///     let response = client.send_files(channel, &CreateMessage::new("Hello from the bot"), files).await?;
+    ///     // Propagate partial errors; inspect moderation-pending success where applicable.
+    ///     Ok(())
+    /// }
+    /// ```
     pub async fn send_files(
         &self,
         channel: Uuid,

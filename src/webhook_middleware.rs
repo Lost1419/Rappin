@@ -43,6 +43,13 @@ use std::sync::Arc;
 
 /// Configuration for webhook verification middleware.
 #[derive(Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::webhook_middleware::WebhookConfig;
+/// let config = WebhookConfig::new("unused-example-secret", uuid::Uuid::from_u128(1).to_string()).max_body_size(512 * 1024);
+/// assert_eq!(config.max_body_size, 512 * 1024);
+/// ```
 pub struct WebhookConfig {
     /// The webhook secret from the Yapin developer portal.
     pub secret: String,
@@ -54,6 +61,13 @@ pub struct WebhookConfig {
 
 impl WebhookConfig {
     /// Create a new webhook configuration.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::webhook_middleware::WebhookConfig;
+    /// let config = WebhookConfig::new("unused-example-secret", uuid::Uuid::from_u128(1).to_string()).max_body_size(512 * 1024);
+    /// assert_eq!(config.max_body_size, 512 * 1024);
+    /// ```
     pub fn new(secret: impl Into<String>, bot_id: impl Into<String>) -> Self {
         Self {
             secret: secret.into(),
@@ -63,6 +77,13 @@ impl WebhookConfig {
     }
 
     /// Set the maximum body size.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::webhook_middleware::WebhookConfig;
+    /// let config = WebhookConfig::new("unused-example-secret", uuid::Uuid::from_u128(1).to_string()).max_body_size(512 * 1024);
+    /// assert_eq!(config.max_body_size, 512 * 1024);
+    /// ```
     pub fn max_body_size(mut self, bytes: usize) -> Self {
         self.max_body_size = bytes;
         self
@@ -71,8 +92,18 @@ impl WebhookConfig {
 
 /// Error response for webhook verification failures.
 #[derive(Debug)]
+/// # Example
+///
+/// ```rust
+/// use axum::http::StatusCode;
+/// use rappin::webhook_middleware::WebhookError;
+/// let error = WebhookError { status: StatusCode::FORBIDDEN, message: "Invalid webhook signature".into() };
+/// assert_eq!(error.status, StatusCode::FORBIDDEN);
+/// ```
 pub struct WebhookError {
+    /// HTTP rejection status returned by signature/body/identity verification.
     pub status: StatusCode,
+    /// Public failure explanation; do not include credential values.
     pub message: String,
 }
 
@@ -99,6 +130,21 @@ fn yappin_error_to_response(err: YappinError) -> Response {
 /// 3. Verifies the `X-Yapper-Bot` header matches the expected bot ID
 /// 4. Parses the body as an `Event`
 /// 5. Passes the verified event to the handler via request extensions
+/// # Example
+///
+/// ```rust
+/// use axum::{Router, middleware, routing::post};
+/// use rappin::webhook_middleware::{WebhookConfig, verify_middleware, verified_handler};
+/// use std::sync::Arc;
+/// let config = Arc::new(WebhookConfig::new("unused-example-secret", uuid::Uuid::from_u128(1).to_string()));
+/// let app = Router::<()>::new()
+///     .route("/webhook", post(verified_handler(|event| Box::pin(async move {
+///         tracing::debug!(event_id = event.id, "Verified event");
+///         Ok::<(), rappin::YappinError>(())
+///     }))))
+///     .layer(middleware::from_fn_with_state(config, verify_middleware));
+/// // Verification must run before verified_handler; missing extensions otherwise panic.
+/// ```
 pub async fn verify_middleware(
     State(config): State<Arc<WebhookConfig>>,
     mut request: Request,
@@ -171,10 +217,15 @@ pub async fn verify_middleware(
 /// Extract a verified event from request extensions.
 ///
 /// Use this in your handler to get the verified event:
-/// ```ignore
-/// async fn handler(req: Request) -> impl IntoResponse {
-///     let event = webhook_middleware::get_verified_event(&req).unwrap();
-///     // ...
+/// ```rust
+/// use axum::{extract::Request, http::StatusCode};
+/// use rappin::webhook_middleware::get_verified_event;
+/// async fn handler(req: Request) -> StatusCode {
+///     // Install verify_middleware before this handler; never trust caller-supplied extensions.
+///     match get_verified_event(&req) {
+///         Some(event) => { tracing::debug!(event_id = event.id, "Verified delivery"); StatusCode::OK }
+///         None => StatusCode::FORBIDDEN,
+///     }
 /// }
 /// ```
 pub fn get_verified_event(request: &Request) -> Option<&Event> {
@@ -185,6 +236,21 @@ pub fn get_verified_event(request: &Request) -> Option<&Event> {
 ///
 /// This is a convenience function that creates a handler which automatically
 /// extracts the verified event from request extensions.
+/// # Example
+///
+/// ```rust
+/// use axum::{Router, middleware, routing::post};
+/// use rappin::webhook_middleware::{WebhookConfig, verify_middleware, verified_handler};
+/// use std::sync::Arc;
+/// let config = Arc::new(WebhookConfig::new("unused-example-secret", uuid::Uuid::from_u128(1).to_string()));
+/// let app = Router::<()>::new()
+///     .route("/webhook", post(verified_handler(|event| Box::pin(async move {
+///         tracing::debug!(event_id = event.id, "Verified event");
+///         Ok::<(), rappin::YappinError>(())
+///     }))))
+///     .layer(middleware::from_fn_with_state(config, verify_middleware));
+/// // Verification must run before verified_handler; missing extensions otherwise panic.
+/// ```
 pub fn verified_handler<F, R>(
     handler: F,
 ) -> impl Fn(Request) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>> + Clone

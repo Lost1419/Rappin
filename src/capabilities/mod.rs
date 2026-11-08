@@ -21,73 +21,226 @@ pub use schema::{bundled_schema, endpoint_schema, validate_schema};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
+/// Broad capability family for offline inventory filtering.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
+/// let filter = CapabilityFilter {
+///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
+///     ..Default::default()
+/// };
+/// for operation in filtered_catalogue(&filter) {
+///     assert!(!operation.write);
+///     println!("{}: {}", operation.name, operation.description);
+///     // Discovery metadata is not authorization to execute.
+/// }
+/// ```
 pub enum CapabilityDomain {
+    /// Server discovery and metadata.
     Servers,
+    /// Channel/category lookup and management.
     Channels,
+    /// Membership lookup and moderation.
     Members,
+    /// Message history, publishing and interaction operations.
     Messages,
+    /// Role inventory and mutations.
     Roles,
+    /// Server/resource permission management.
     Permissions,
+    /// Event delivery and scheduled events.
     Events,
+    /// Transport and service metadata.
     Diagnostics,
+    /// Custom emoji management.
     Emojis,
+    /// Bot-owned channel webhook operations.
     Webhooks,
+    /// Offline capability/schema discovery.
     Schema,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "argument", rename_all = "snake_case")]
 #[non_exhaustive]
+/// Argument/resource scope a validated binding must establish before execution.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
+/// let filter = CapabilityFilter {
+///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
+///     ..Default::default()
+/// };
+/// for operation in filtered_catalogue(&filter) {
+///     assert!(!operation.write);
+///     println!("{}: {}", operation.name, operation.description);
+///     // Discovery metadata is not authorization to execute.
+/// }
+/// ```
 pub enum OperationScope {
-    Server(&'static str),
-    Channel(&'static str),
-    OptionalServer(&'static str),
+    /// Bind the named server argument to the host server.
+    Server(#[doc = "Argument key carrying the server UUID."] &'static str),
+    /// Resolve the named channel argument and verify its server.
+    Channel(#[doc = "Argument key carrying the channel UUID."] &'static str),
+    /// Bind an optional server filter; execution still enforces the host scope.
+    OptionalServer(#[doc = "Optional server-filter argument key."] &'static str),
+    /// Scope a list response to the host server.
     ServerList,
+    /// No API access is required.
     Offline,
+    /// Public metadata read without bot authentication.
     Public,
+    /// Requires CLI-owned runtime state; not executable by a scoped library binding.
     CliRuntime,
+    /// Requires a global event consumer, not a server-bound command.
     GlobalEvents,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// Runtime context required by a capability.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
+/// let filter = CapabilityFilter {
+///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
+///     ..Default::default()
+/// };
+/// for operation in filtered_catalogue(&filter) {
+///     assert!(!operation.write);
+///     println!("{}: {}", operation.name, operation.description);
+///     // Discovery metadata is not authorization to execute.
+/// }
+/// ```
 pub enum LibrarySupport {
+    /// Supported through the shared Api interface with scoped authorization.
     ScopedApi,
+    /// Pure offline schema/capability operation.
     Offline,
+    /// Requires CLI-specific state or diagnostics.
     CliRuntime,
+    /// Requires global intake and cursor ownership.
     GlobalEventConsumer,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Library support and documented rollout restrictions; not proof of current server eligibility.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
+/// let filter = CapabilityFilter {
+///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
+///     ..Default::default()
+/// };
+/// for operation in filtered_catalogue(&filter) {
+///     assert!(!operation.write);
+///     println!("{}: {}", operation.name, operation.description);
+///     // Discovery metadata is not authorization to execute.
+/// }
+/// ```
 pub struct Availability {
+    /// Whether the pinned endpoint contract restricts this operation to test servers.
     pub test_servers_only: bool,
+    /// Supported execution surface for this operation.
     pub library: LibrarySupport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "permissions", rename_all = "snake_case")]
+/// Server-wide grant rule evaluated independently for requester and bot.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
+/// let filter = CapabilityFilter {
+///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
+///     ..Default::default()
+/// };
+/// for operation in filtered_catalogue(&filter) {
+///     assert!(!operation.write);
+///     println!("{}: {}", operation.name, operation.description);
+///     // Discovery metadata is not authorization to execute.
+/// }
+/// ```
 pub enum PermissionRule {
+    /// No server grant required by this rule; separate scope/external checks still apply.
     NotRequired,
+    /// Require membership in the host server.
     Member,
-    All(Vec<&'static str>),
-    Any(Vec<&'static str>),
-    MessageAuthorOr(&'static str),
+    /// Require every listed server-wide permission.
+    All(#[doc = "Every required server-wide permission name."] Vec<&'static str>),
+    /// Require at least one listed server-wide permission.
+    Any(#[doc = "Alternative server-wide permission names."] Vec<&'static str>),
+    /// Allow the message author or the named permission.
+    MessageAuthorOr(
+        #[doc = "Permission required when the actor is not the message author."] &'static str,
+    ),
+    /// Require that the message belongs to the authenticated bot.
     BotMessageAuthor,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Independent principal grants and additional resource/availability checks.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
+/// let filter = CapabilityFilter {
+///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
+///     ..Default::default()
+/// };
+/// for operation in filtered_catalogue(&filter) {
+///     assert!(!operation.write);
+///     println!("{}: {}", operation.name, operation.description);
+///     // Discovery metadata is not authorization to execute.
+/// }
+/// ```
 pub struct PermissionRequirements {
+    /// Server-wide requirement for the original authenticated requester.
     pub requester: PermissionRule,
+    /// Independent server-wide requirement for the bot.
     pub bot: PermissionRule,
+    /// Effective channel permissions the requester must independently possess.
     pub requester_channel: Vec<&'static str>,
+    /// Effective channel permissions the bot must independently possess.
     pub bot_channel: Vec<&'static str>,
+    /// Facts requiring host policy or additional authoritative evidence.
     pub additional_checks: Vec<ExternalCheck>,
 }
 
 /// Filtering changes the model-visible inventory, never execution authority.
 #[derive(Debug, Clone)]
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
+/// let filter = CapabilityFilter {
+///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
+///     ..Default::default()
+/// };
+/// for operation in filtered_catalogue(&filter) {
+///     assert!(!operation.write);
+///     println!("{}: {}", operation.name, operation.description);
+///     // Discovery metadata is not authorization to execute.
+/// }
+/// ```
 pub struct CapabilityFilter {
+    /// Allowed operation names; an empty vector does not restrict names.
     pub names: Vec<String>,
+    /// Selected families; an empty vector does not restrict domains.
     pub domains: Vec<CapabilityDomain>,
+    /// Some(true) selects writes, Some(false) selects reads, None selects both.
     pub write: Option<bool>,
+    /// Exclude operations requiring CLI/global consumer state.
     pub library_only: bool,
+    /// Include entries marked test-server-only; inclusion is not an availability grant.
     pub include_test_servers: bool,
 }
 impl Default for CapabilityFilter {
@@ -101,12 +254,44 @@ impl Default for CapabilityFilter {
         }
     }
 }
+/// Borrow the shared offline catalogue without authentication, network access or CLI features.
+///
+/// # Example
+///
+/// ```rust
+/// let entries = rappin::capabilities::catalogue();
+/// assert!(!entries.is_empty());
+/// ```
 pub fn catalogue() -> &'static [Capability] {
     catalog::entries()
 }
+/// Look up an exact operation name in the offline catalogue.
+///
+/// # Example
+///
+/// ```rust
+/// let entry = rappin::capabilities::capability("send_message").unwrap();
+/// assert!(entry.write);
+/// ```
 pub fn capability(name: &str) -> Option<&'static Capability> {
     catalogue().iter().find(|c| c.name == name)
 }
+/// Select model-visible metadata without changing execution authority.
+///
+/// # Example
+///
+/// ```rust
+/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
+/// let filter = CapabilityFilter {
+///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
+///     ..Default::default()
+/// };
+/// for operation in filtered_catalogue(&filter) {
+///     assert!(!operation.write);
+///     println!("{}: {}", operation.name, operation.description);
+///     // Discovery metadata is not authorization to execute.
+/// }
+/// ```
 pub fn filtered_catalogue(filter: &CapabilityFilter) -> Vec<&'static Capability> {
     catalogue()
         .iter()
@@ -126,6 +311,18 @@ pub fn filtered_catalogue(filter: &CapabilityFilter) -> Vec<&'static Capability>
 impl CapabilityFilter {
     /// Enforce the host-selected inventory as well as validating the operation.
     /// This remains separate from requester/bot authorization at execution time.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::{capability, CapabilityFilter};
+    /// use serde_json::json;
+    /// let filter = CapabilityFilter { names: vec!["send_message".into()], library_only: true, ..Default::default() };
+    /// let operation = filter.validate("send_message", &json!({"channel":uuid::Uuid::nil(), "content":"Hello"}))?;
+    /// assert_eq!(operation.name(), "send_message");
+    /// assert!(operation.preview().dry_run);
+    /// assert!(operation.preview().authorization.is_none());
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn validate(&self, name: &str, args: &Value) -> Result<ValidatedOperation> {
         let descriptor = filtered_catalogue(self)
             .into_iter()
@@ -139,9 +336,25 @@ impl CapabilityFilter {
         descriptor.validate(args)
     }
 }
+/// Return the shared success/error tool envelope schema.
+///
+/// # Example
+///
+/// ```rust
+/// let schema = rappin::capabilities::output_schema();
+/// assert_eq!(schema["type"], "object");
+/// ```
 pub fn output_schema() -> Value {
     json!({"type":"object","properties":{"ok":{"type":"boolean"},"data":{"type":"object"},"error":{"type":"object"}},"required":["ok"],"additionalProperties":false,"oneOf":[{"properties":{"ok":{"const":true}},"required":["data"]},{"properties":{"ok":{"const":false}},"required":["error"]}]})
 }
+/// Render all catalogue entries as JSON tool definitions; consumers should apply their own operation selection.
+///
+/// # Example
+///
+/// ```rust
+/// let tools = rappin::capabilities::tools();
+/// assert!(tools.iter().any(|tool| tool["name"] == "send_message"));
+/// ```
 pub fn tools() -> Vec<Value> {
     catalogue()
         .iter()
@@ -150,6 +363,14 @@ pub fn tools() -> Vec<Value> {
 }
 
 impl Capability {
+    /// Render canonical input properties, required fields and supported cross-field constraints.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let entry = rappin::capabilities::capability("send_message").unwrap();
+    /// assert_eq!(entry.input_schema()["type"], "object");
+    /// ```
     pub fn input_schema(&self) -> Value {
         let properties: serde_json::Map<String, Value> = self
             .arguments
@@ -173,10 +394,30 @@ impl Capability {
         }
         schema
     }
+    /// Render input/output schemas, hints, scope, permission and availability metadata for one operation.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let entry = rappin::capabilities::capability("send_message").unwrap();
+    /// assert_eq!(entry.tool_definition()["name"], "send_message");
+    /// ```
     pub fn tool_definition(&self) -> Value {
         json!({"name":self.name,"description":self.description,"inputSchema":self.input_schema(),"outputSchema":output_schema(),"annotations":{"readOnlyHint":!self.write,"destructiveHint":self.destructive,"openWorldHint":!matches!(self.availability.library,LibrarySupport::Offline|LibrarySupport::CliRuntime)},"x-rappin-permissions":self.permissions,"x-rappin-availability":self.availability,"x-rappin-scope":self.scope})
     }
     /// Offline, typed validation. The returned binding owns canonical arguments.
+    /// # Example
+    ///
+    /// ```rust
+    /// use rappin::capabilities::{capability, CapabilityFilter};
+    /// use serde_json::json;
+    /// let filter = CapabilityFilter { names: vec!["send_message".into()], library_only: true, ..Default::default() };
+    /// let operation = filter.validate("send_message", &json!({"channel":uuid::Uuid::nil(), "content":"Hello"}))?;
+    /// assert_eq!(operation.name(), "send_message");
+    /// assert!(operation.preview().dry_run);
+    /// assert!(operation.preview().authorization.is_none());
+    /// # Ok::<(), rappin::YappinError>(())
+    /// ```
     pub fn validate(&self, args: &Value) -> Result<ValidatedOperation> {
         validation::validate(self, args)
     }

@@ -76,6 +76,15 @@ pub(crate) fn scrub(text: &str, secrets: &[&str]) -> String {
 }
 /// Redact exact configured credentials in values AND keys, including nested objects.
 /// This is a logging aid, not a sandbox against trusted code that already has the credential.
+/// # Example
+///
+/// ```rust
+/// use rappin::security::redact_json;
+/// let value = serde_json::json!({"message":"contains example-secret", "token":"private"});
+/// let safe = redact_json(value, &["example-secret", "private"]);
+/// assert!(!safe.to_string().contains("example-secret"));
+/// assert!(!safe.to_string().contains("private"));
+/// ```
 pub fn redact_json(value: Value, secrets: &[&str]) -> Value {
     match value {
         Value::String(s) => Value::String(scrub(&s, secrets)),
