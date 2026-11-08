@@ -1,0 +1,4 @@
+interface:
+  display_name: "Yapin API Audit"
+  short_description: "Compare official API evidence and SDK coverage"
+  default_prompt: "Use $yapin-api-audit to check official changes and SDK gaps."

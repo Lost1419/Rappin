@@ -4,6 +4,6 @@
 /node_modules/
 /AGENTS.md
 /skills/rappin-sdk-dev/
-/skills/yapin-api-audit/
+/skills/yapin-api-audit/**/__pycache__/
 
 .DS_Store

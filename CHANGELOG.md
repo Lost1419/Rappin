@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Publish the API-audit skill with checksum-verified crate selection, dated source evidence and JSON/Markdown support reports. Add a 0.1.28 feature review that distinguishes typed, raw, validated, worker and CLI/MCP coverage; stale or unreviewed claims remain Unknown.
 - Standardize runnable examples and guides on `YAPPER_BOT_TOKEN`; missing credentials now fail with a setup error instead of passing a placeholder token to the API.
 - Add a minimal gateway-events example and document its `gateway` feature, polling fallback, and separation from the optional gateway API-request transport.
 - Make CLI installation examples and `make install-local` enable only `cli` by default; gateway transport and voice playback remain explicit additions.

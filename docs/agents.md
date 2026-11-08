@@ -16,6 +16,12 @@ does not automatically replace separately installed copies. Match SDK examples
 to the application's selected dependency; CLI discovery describes its installed
 binary. Skill updates do not require changing an application's SDK dependency.
 
+For platform compatibility checks, use the public
+[yapin-api-audit](../skills/yapin-api-audit/SKILL.md) skill. It compares official
+contracts with a selected published crate and generates version-specific support
+reports. See [API support by release](api-support.md) for the initial reviewed
+matrix and its coverage limits. The skill requires Python 3.11+ and no bot token.
+
 ## CLI setup
 
 Install a binary from this checkout:

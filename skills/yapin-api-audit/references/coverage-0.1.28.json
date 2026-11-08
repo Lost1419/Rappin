@@ -1,0 +1,910 @@
+{
+  "format": 1,
+  "sdk": {
+    "package": "rappin-rs",
+    "version": "0.1.28",
+    "crate_sha256": "88639d2bd8d857039f02906bf28f1f56baa3a880243dfee04bd849055a7c5d83"
+  },
+  "api": {
+    "version": "1.3.0",
+    "openapi_sha256": "1dd36afdb61142dbd034ee85a44b4320338ad4656f7d51fa88b3b9ef623194b5",
+    "developer_text_sha256": "eabba81860eac1a1529d060ddc6b704785e47f89937a3065fa9f6381b232829a"
+  },
+  "reviewed_at": "2026-11-08T01:36:41.480118+00:00",
+  "features": [
+    {
+      "id": "sticker_messages",
+      "title": "Sticker-only server messages",
+      "required_features": {
+        "typed": [],
+        "low_level": [],
+        "validated_bindings": [],
+        "worker": [
+          "hot-reload"
+        ],
+        "cli_mcp": [
+          "cli"
+        ]
+      },
+      "rollout": "Flag stickers; the sticker must belong to the server. It occupies the whole message: content, embeds, components and files stay empty.",
+      "operations": [
+        {
+          "method": "POST",
+          "path": "/channels/{id}/messages"
+        }
+      ],
+      "api_sources": [
+        "https://www.yapin.gg/openapi.json",
+        "https://www.yapin.gg/developers"
+      ],
+      "surfaces": {
+        "typed": {
+          "status": "missing",
+          "reason": "CreateMessage and UiMessageBody have no sticker_id field or typed sticker constructor.",
+          "evidence": [
+            {
+              "path": "src/models/message.rs",
+              "sha256": "2b3201fb63221b708a2a8c20c65467811a862878e89eef869cb7fd3dd5d00759"
+            },
+            {
+              "path": "src/models/ui.rs",
+              "sha256": "24145b251b9c1e6d8600138d5fd55ee58ba479d5d6d76922c7b1187bd64ab663"
+            }
+          ]
+        },
+        "low_level": {
+          "status": "supported",
+          "reason": "Client::request/Api::request can submit raw sticker_id JSON; callers supply exclusivity, UUID, scope and rollout checks. This is request transport support only.",
+          "evidence": [
+            {
+              "path": "src/client.rs",
+              "sha256": "34e48e08d113613696126afd1fda8ff327f80a29b7cef1e8dbce23b40871ef26"
+            },
+            {
+              "path": "src/api.rs",
+              "sha256": "4f49c8d0f77700744b57c747ef1131b7d984c7ff1dc2b773f8e25483891301dd"
+            }
+          ]
+        },
+        "validated_bindings": {
+          "status": "missing",
+          "reason": "send_message parses a typed UiMessageBody and validates against the bundled schema, which lacks sticker_id; there is no safe sticker binding.",
+          "evidence": [
+            {
+              "path": "src/capabilities/validation.rs",
+              "sha256": "172a1684c0cfaf9953f8f7557d7f72dd1209f332e31ced4c755755092f0c12e7"
+            },
+            {
+              "path": "src/capabilities/schema.rs",
+              "sha256": "544fa56971b9dfb9cb6c0187bbef50d611b2e9d692514817231bc41c0dbef0b7"
+            },
+            {
+              "path": "docs/openapi.json",
+              "sha256": "73a51811d7ef5b392c8168b5868813fee2d4be00c360d02dcd86f1d9edf128c8"
+            }
+          ]
+        },
+        "worker": {
+          "status": "partial",
+          "reason": "WorkerContext::api can send raw JSON through the parent. Typed message helpers and validated bindings do not implement sticker semantics. Workers require hot-reload.",
+          "evidence": [
+            {
+              "path": "src/hot_reload/worker.rs",
+              "sha256": "877e47d6ffd6e107e0b8292eeda284aafe997c6307ad61c82fe5a9ff8f0d2c0c"
+            },
+            {
+              "path": "src/models/message.rs",
+              "sha256": "2b3201fb63221b708a2a8c20c65467811a862878e89eef869cb7fd3dd5d00759"
+            }
+          ]
+        },
+        "cli_mcp": {
+          "status": "partial",
+          "reason": "CLI request can submit raw JSON. Named send_message CLI/MCP tools lack a sticker workflow and its validation; MCP has no arbitrary request tool. CLI/MCP compilation requires cli.",
+          "evidence": [
+            {
+              "path": "src/bin/rappin.rs",
+              "sha256": "a9cb06d3097021facc3922f40e8ceb62ef0a022adbd3ee946bc88d5598c456f2"
+            },
+            {
+              "path": "src/bin/rappin_mcp.rs",
+              "sha256": "d26c981c7239ace606a58709e70e5425d0d1f6d1f089ba0956cb3d0ea5d5eb1a"
+            },
+            {
+              "path": "src/capabilities/validation.rs",
+              "sha256": "172a1684c0cfaf9953f8f7557d7f72dd1209f332e31ced4c755755092f0c12e7"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "activities_permission",
+      "title": "use_activities permission",
+      "required_features": {
+        "typed": [],
+        "low_level": [],
+        "validated_bindings": [],
+        "worker": [
+          "hot-reload"
+        ],
+        "cli_mcp": [
+          "cli"
+        ]
+      },
+      "rollout": "Documented role/everyone permission and channel/category override key. Activities remain in testing; no arbitrary-actor effective permission precedence is established.",
+      "operations": [
+        {
+          "method": "POST",
+          "path": "/servers/{id}/roles"
+        },
+        {
+          "method": "PATCH",
+          "path": "/servers/{id}/roles/{rid}"
+        },
+        {
+          "method": "PATCH",
+          "path": "/servers/{id}/roles/everyone"
+        },
+        {
+          "method": "PUT",
+          "path": "/channels/{id}/permissions/{role}"
+        },
+        {
+          "method": "PUT",
+          "path": "/servers/{id}/categories/{cid}/permissions/{role}"
+        }
+      ],
+      "api_sources": [
+        "https://www.yapin.gg/openapi.json",
+        "https://www.yapin.gg/developers"
+      ],
+      "surfaces": {
+        "typed": {
+          "status": "supported",
+          "reason": "Permissions uses string keys, Permission::new accepts names, and PermissionOverride uses string lists. No new enum variant is needed for typed requests.",
+          "evidence": [
+            {
+              "path": "src/models/server_features.rs",
+              "sha256": "9ba6319ba1e3af93dd344845dfb4d81942c5314ad900352a5f607c3dfa9a4924"
+            },
+            {
+              "path": "src/commands.rs",
+              "sha256": "07265b2a2ba0c00ad3abba0df89d45edd57a1424773ac5c265d029128621750f"
+            },
+            {
+              "path": "src/client/server_features.rs",
+              "sha256": "10386f59b804aab7cb81140ba3be574008e6eb003502274645d9129989dbafbe"
+            }
+          ]
+        },
+        "low_level": {
+          "status": "supported",
+          "reason": "Raw JSON preserves the key. Platform authorization still determines access.",
+          "evidence": [
+            {
+              "path": "src/client.rs",
+              "sha256": "34e48e08d113613696126afd1fda8ff327f80a29b7cef1e8dbce23b40871ef26"
+            },
+            {
+              "path": "src/api.rs",
+              "sha256": "4f49c8d0f77700744b57c747ef1131b7d984c7ff1dc2b773f8e25483891301dd"
+            }
+          ]
+        },
+        "validated_bindings": {
+          "status": "partial",
+          "reason": "Role permission dictionaries are extensible, but bundled Override enums omit use_activities; validated channel/category override operations reject this documented key.",
+          "evidence": [
+            {
+              "path": "src/capabilities/schema.rs",
+              "sha256": "544fa56971b9dfb9cb6c0187bbef50d611b2e9d692514817231bc41c0dbef0b7"
+            },
+            {
+              "path": "src/capabilities/validation.rs",
+              "sha256": "172a1684c0cfaf9953f8f7557d7f72dd1209f332e31ced4c755755092f0c12e7"
+            },
+            {
+              "path": "docs/openapi.json",
+              "sha256": "73a51811d7ef5b392c8168b5868813fee2d4be00c360d02dcd86f1d9edf128c8"
+            }
+          ]
+        },
+        "worker": {
+          "status": "partial",
+          "reason": "Shared ApiExt and raw proxy calls can carry the key; validated override bindings retain the old schema restriction. Workers require hot-reload.",
+          "evidence": [
+            {
+              "path": "src/api.rs",
+              "sha256": "4f49c8d0f77700744b57c747ef1131b7d984c7ff1dc2b773f8e25483891301dd"
+            },
+            {
+              "path": "src/hot_reload/worker.rs",
+              "sha256": "877e47d6ffd6e107e0b8292eeda284aafe997c6307ad61c82fe5a9ff8f0d2c0c"
+            },
+            {
+              "path": "src/capabilities/schema.rs",
+              "sha256": "544fa56971b9dfb9cb6c0187bbef50d611b2e9d692514817231bc41c0dbef0b7"
+            }
+          ]
+        },
+        "cli_mcp": {
+          "status": "partial",
+          "reason": "Raw/direct CLI requests can carry the key; named validated override tools inherit the bundled enum gap. CLI/MCP requires cli.",
+          "evidence": [
+            {
+              "path": "src/bin/rappin.rs",
+              "sha256": "a9cb06d3097021facc3922f40e8ceb62ef0a022adbd3ee946bc88d5598c456f2"
+            },
+            {
+              "path": "src/bin/server_features.rs",
+              "sha256": "8d75198e928a8d05e05b90a2ca315b2ae03fa033c168c9969a7bd6da108cdd57"
+            },
+            {
+              "path": "src/capabilities/schema.rs",
+              "sha256": "544fa56971b9dfb9cb6c0187bbef50d611b2e9d692514817231bc41c0dbef0b7"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "select_menus",
+      "title": "Select menus",
+      "required_features": {
+        "typed": [],
+        "low_level": [],
+        "validated_bindings": [],
+        "worker": [
+          "hot-reload"
+        ],
+        "cli_mcp": [
+          "cli"
+        ]
+      },
+      "rollout": "Flag bot_selects; endpoint docs describe test-server rollout. Up to 25 options; a select occupies its action row.",
+      "operations": [
+        {
+          "method": "POST",
+          "path": "/channels/{id}/messages"
+        },
+        {
+          "method": "POST",
+          "path": "/interactions/{id}/{token}/callback"
+        }
+      ],
+      "api_sources": [
+        "https://www.yapin.gg/openapi.json",
+        "https://www.yapin.gg/developers"
+      ],
+      "surfaces": {
+        "typed": {
+          "status": "supported",
+          "reason": "SelectMenu, SelectOption and UiMessageBody builders validate bounds; interactive_events and UI handlers are opt-in for receiving values.",
+          "evidence": [
+            {
+              "path": "src/models/ui.rs",
+              "sha256": "24145b251b9c1e6d8600138d5fd55ee58ba479d5d6d76922c7b1187bd64ab663"
+            },
+            {
+              "path": "src/ui_api.rs",
+              "sha256": "da6db48559e8c2174a8d9804d23fddb3424236d33ac999917f95150711bbe645"
+            },
+            {
+              "path": "src/bot/mod.rs",
+              "sha256": "88f8a03f30979d5835d0277e9ff20526d26ae8193c636664915531058954780f"
+            },
+            {
+              "path": "src/validation.rs",
+              "sha256": "f54eaaa50755e2e6476ac98a7744a97032f82af37ee8cdaeb2c418bb5aa15b9a"
+            }
+          ]
+        },
+        "low_level": {
+          "status": "supported",
+          "reason": "Raw JSON sends and callback requests are available; callers own validation/response state when bypassing helpers.",
+          "evidence": [
+            {
+              "path": "src/client.rs",
+              "sha256": "34e48e08d113613696126afd1fda8ff327f80a29b7cef1e8dbce23b40871ef26"
+            },
+            {
+              "path": "src/api.rs",
+              "sha256": "4f49c8d0f77700744b57c747ef1131b7d984c7ff1dc2b773f8e25483891301dd"
+            }
+          ]
+        },
+        "validated_bindings": {
+          "status": "supported",
+          "reason": "send_message accepts UiMessageBody with select validation and normalization; authorization/availability requirements still apply. This row covers sending selects, not a named callback binding.",
+          "evidence": [
+            {
+              "path": "src/capabilities/validation.rs",
+              "sha256": "172a1684c0cfaf9953f8f7557d7f72dd1209f332e31ced4c755755092f0c12e7"
+            },
+            {
+              "path": "src/capabilities/schema.rs",
+              "sha256": "544fa56971b9dfb9cb6c0187bbef50d611b2e9d692514817231bc41c0dbef0b7"
+            }
+          ]
+        },
+        "worker": {
+          "status": "supported",
+          "reason": "on_ui_interaction or ui_api opts into parent protocol v7 for UI values/callbacks; parent interactive_events must be enabled. Requires hot-reload.",
+          "evidence": [
+            {
+              "path": "src/hot_reload/worker.rs",
+              "sha256": "877e47d6ffd6e107e0b8292eeda284aafe997c6307ad61c82fe5a9ff8f0d2c0c"
+            },
+            {
+              "path": "src/ui_api.rs",
+              "sha256": "da6db48559e8c2174a8d9804d23fddb3424236d33ac999917f95150711bbe645"
+            }
+          ]
+        },
+        "cli_mcp": {
+          "status": "partial",
+          "reason": "Named message tools preserve select payloads. Polling exposes raw events, but CLI/MCP is not the native typed interaction-dispatch runtime. Requires cli.",
+          "evidence": [
+            {
+              "path": "src/capabilities/validation.rs",
+              "sha256": "172a1684c0cfaf9953f8f7557d7f72dd1209f332e31ced4c755755092f0c12e7"
+            },
+            {
+              "path": "src/bin/agent_events.rs",
+              "sha256": "d0e0c5789c6a4bc56fbeaaf7691ce1ab4198ad015098075f7782a4d3b4477185"
+            },
+            {
+              "path": "src/bin/rappin_mcp.rs",
+              "sha256": "d26c981c7239ace606a58709e70e5425d0d1f6d1f089ba0956cb3d0ea5d5eb1a"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "modal_forms",
+      "title": "Modal forms and submissions",
+      "required_features": {
+        "typed": [],
+        "low_level": [],
+        "validated_bindings": [],
+        "worker": [
+          "hot-reload"
+        ],
+        "cli_mcp": [
+          "cli"
+        ]
+      },
+      "rollout": "Flag bot_modals; test-server rollout. Open as an initial eligible interaction response, not from modal_submit; up to five inputs.",
+      "operations": [
+        {
+          "method": "POST",
+          "path": "/interactions/{id}/{token}/callback"
+        }
+      ],
+      "api_sources": [
+        "https://www.yapin.gg/openapi.json",
+        "https://www.yapin.gg/developers"
+      ],
+      "surfaces": {
+        "typed": {
+          "status": "supported",
+          "reason": "Modal/TextInput builders and show_modal coordinate validation, initial response ownership and opt-in UI dispatch.",
+          "evidence": [
+            {
+              "path": "src/models/ui.rs",
+              "sha256": "24145b251b9c1e6d8600138d5fd55ee58ba479d5d6d76922c7b1187bd64ab663"
+            },
+            {
+              "path": "src/ui_api.rs",
+              "sha256": "da6db48559e8c2174a8d9804d23fddb3424236d33ac999917f95150711bbe645"
+            },
+            {
+              "path": "src/validation.rs",
+              "sha256": "f54eaaa50755e2e6476ac98a7744a97032f82af37ee8cdaeb2c418bb5aa15b9a"
+            }
+          ]
+        },
+        "low_level": {
+          "status": "supported",
+          "reason": "Raw interaction callbacks are possible; direct callers must preserve deadline and response ownership.",
+          "evidence": [
+            {
+              "path": "src/api.rs",
+              "sha256": "4f49c8d0f77700744b57c747ef1131b7d984c7ff1dc2b773f8e25483891301dd"
+            },
+            {
+              "path": "src/client.rs",
+              "sha256": "34e48e08d113613696126afd1fda8ff327f80a29b7cef1e8dbce23b40871ef26"
+            }
+          ]
+        },
+        "validated_bindings": {
+          "status": "missing",
+          "reason": "The capability catalogue has no named modal-opening/submission binding; typed UiApiExt is a separate API.",
+          "evidence": [
+            {
+              "path": "src/capabilities/catalog.rs",
+              "sha256": "bf8c758c7a4c7465aef221e13803b73f157672bf47767c9a041d201f4577519c"
+            },
+            {
+              "path": "src/ui_api.rs",
+              "sha256": "da6db48559e8c2174a8d9804d23fddb3424236d33ac999917f95150711bbe645"
+            }
+          ]
+        },
+        "worker": {
+          "status": "supported",
+          "reason": "Opt-in protocol v7 UI forwarding supports modal callbacks and values. Requires hot-reload and a compatible parent; interactive_events is enabled in the parent.",
+          "evidence": [
+            {
+              "path": "src/hot_reload/worker.rs",
+              "sha256": "877e47d6ffd6e107e0b8292eeda284aafe997c6307ad61c82fe5a9ff8f0d2c0c"
+            },
+            {
+              "path": "src/ui_api.rs",
+              "sha256": "da6db48559e8c2174a8d9804d23fddb3424236d33ac999917f95150711bbe645"
+            }
+          ]
+        },
+        "cli_mcp": {
+          "status": "partial",
+          "reason": "CLI request can issue callbacks and event tools expose raw submissions. There is no named MCP modal workflow or native typed CLI dispatcher. Requires cli.",
+          "evidence": [
+            {
+              "path": "src/bin/rappin.rs",
+              "sha256": "a9cb06d3097021facc3922f40e8ceb62ef0a022adbd3ee946bc88d5598c456f2"
+            },
+            {
+              "path": "src/bin/rappin_mcp.rs",
+              "sha256": "d26c981c7239ace606a58709e70e5425d0d1f6d1f089ba0956cb3d0ea5d5eb1a"
+            },
+            {
+              "path": "src/capabilities/catalog.rs",
+              "sha256": "bf8c758c7a4c7465aef221e13803b73f157672bf47767c9a041d201f4577519c"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "message_emoji_lookup",
+      "title": "Custom emojis used in one message",
+      "required_features": {
+        "typed": [],
+        "low_level": [],
+        "validated_bindings": [],
+        "worker": [
+          "hot-reload"
+        ],
+        "cli_mcp": [
+          "cli"
+        ]
+      },
+      "rollout": "Flag bot_emoji_lookup; test-server restriction in endpoint/catalogue. Validate server/message scope and requester/bot access independently.",
+      "operations": [
+        {
+          "method": "GET",
+          "path": "/channels/{id}/messages/{mid}/emojis"
+        }
+      ],
+      "api_sources": [
+        "https://www.yapin.gg/openapi.json",
+        "https://www.yapin.gg/developers"
+      ],
+      "surfaces": {
+        "typed": {
+          "status": "supported",
+          "reason": "Client and UiApiExt expose get_message_emojis and retain typed emoji metadata.",
+          "evidence": [
+            {
+              "path": "src/ui_api.rs",
+              "sha256": "da6db48559e8c2174a8d9804d23fddb3424236d33ac999917f95150711bbe645"
+            },
+            {
+              "path": "src/models/ui.rs",
+              "sha256": "24145b251b9c1e6d8600138d5fd55ee58ba479d5d6d76922c7b1187bd64ab663"
+            }
+          ]
+        },
+        "low_level": {
+          "status": "supported",
+          "reason": "GET through Client/Api is available. A successful bot read does not prove requester authority.",
+          "evidence": [
+            {
+              "path": "src/api.rs",
+              "sha256": "4f49c8d0f77700744b57c747ef1131b7d984c7ff1dc2b773f8e25483891301dd"
+            },
+            {
+              "path": "src/client.rs",
+              "sha256": "34e48e08d113613696126afd1fda8ff327f80a29b7cef1e8dbce23b40871ef26"
+            }
+          ]
+        },
+        "validated_bindings": {
+          "status": "supported",
+          "reason": "get_message_emojis has schema, scoped authorization and rollout requirements. Unestablished checks block execution.",
+          "evidence": [
+            {
+              "path": "src/capabilities/catalog.rs",
+              "sha256": "bf8c758c7a4c7465aef221e13803b73f157672bf47767c9a041d201f4577519c"
+            },
+            {
+              "path": "src/capabilities/platform.rs",
+              "sha256": "7177c304be5207b9f28e888dffdf724867f326cea5d1b1b05e706443511f23ec"
+            },
+            {
+              "path": "src/capabilities/authorization.rs",
+              "sha256": "08bcdfd715e0faa0429668289465646c7efa2b769ed641be6fabe3c97968bdbb"
+            },
+            {
+              "path": "src/capabilities/mod.rs",
+              "sha256": "639cfc6f9f9bfca582f6da4482ac5c46b569084256396fc390ebb56b1d3f9215"
+            }
+          ]
+        },
+        "worker": {
+          "status": "supported",
+          "reason": "Shared UiApiExt/proxy reads preserve typed results. Requires hot-reload; no new worker event protocol is required for this ordinary read.",
+          "evidence": [
+            {
+              "path": "src/ui_api.rs",
+              "sha256": "da6db48559e8c2174a8d9804d23fddb3424236d33ac999917f95150711bbe645"
+            },
+            {
+              "path": "src/api.rs",
+              "sha256": "4f49c8d0f77700744b57c747ef1131b7d984c7ff1dc2b773f8e25483891301dd"
+            },
+            {
+              "path": "src/hot_reload/worker.rs",
+              "sha256": "877e47d6ffd6e107e0b8292eeda284aafe997c6307ad61c82fe5a9ff8f0d2c0c"
+            }
+          ]
+        },
+        "cli_mcp": {
+          "status": "supported",
+          "reason": "platform get_message_emojis and the matching MCP catalogue tool expose the operation. Requires cli.",
+          "evidence": [
+            {
+              "path": "src/capabilities/catalog.rs",
+              "sha256": "bf8c758c7a4c7465aef221e13803b73f157672bf47767c9a041d201f4577519c"
+            },
+            {
+              "path": "src/bin/rappin.rs",
+              "sha256": "a9cb06d3097021facc3922f40e8ceb62ef0a022adbd3ee946bc88d5598c456f2"
+            },
+            {
+              "path": "src/bin/rappin_mcp.rs",
+              "sha256": "d26c981c7239ace606a58709e70e5425d0d1f6d1f089ba0956cb3d0ea5d5eb1a"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "emoji_upload_size",
+      "title": "Emoji creation: documented 2 MB image limit",
+      "required_features": {
+        "typed": [],
+        "low_level": [],
+        "validated_bindings": [],
+        "worker": [
+          "hot-reload"
+        ],
+        "cli_mcp": [
+          "cli"
+        ]
+      },
+      "rollout": "Endpoint description says PNG/GIF/WebP up to 2 MB, Manage Emoji, flag bot_emojis/test servers; tag text drops testing, so use the stricter endpoint restriction until clarified. Platform MB units are not defined here.",
+      "operations": [
+        {
+          "method": "POST",
+          "path": "/servers/{id}/emojis"
+        }
+      ],
+      "api_sources": [
+        "https://www.yapin.gg/openapi.json",
+        "https://www.yapin.gg/developers"
+      ],
+      "surfaces": {
+        "typed": {
+          "status": "partial",
+          "reason": "CreateEmoji and multipart request_upload still cap decoded images at 1,048,576 bytes. Smaller images are supported, the full newly documented range is unavailable.",
+          "evidence": [
+            {
+              "path": "src/models/platform.rs",
+              "sha256": "60b415b2ffaaf368c25019e331433b498b50e4bd889c371d3f67aa23a4460794"
+            },
+            {
+              "path": "src/client/platform.rs",
+              "sha256": "dfab2ae3f06c8bcb459ea181fe39819d1f513836bde9f10bb6af073961578776"
+            }
+          ]
+        },
+        "low_level": {
+          "status": "partial",
+          "reason": "Raw JSON/base64 Client::request can avoid the typed cap; request_upload enforces 1 MiB. No authenticated test establishes acceptance above that limit.",
+          "evidence": [
+            {
+              "path": "src/client.rs",
+              "sha256": "34e48e08d113613696126afd1fda8ff327f80a29b7cef1e8dbce23b40871ef26"
+            },
+            {
+              "path": "src/client/platform.rs",
+              "sha256": "dfab2ae3f06c8bcb459ea181fe39819d1f513836bde9f10bb6af073961578776"
+            }
+          ]
+        },
+        "validated_bindings": {
+          "status": "partial",
+          "reason": "create_emoji validation uses CreateEmoji and retains the 1 MiB bound.",
+          "evidence": [
+            {
+              "path": "src/capabilities/validation.rs",
+              "sha256": "172a1684c0cfaf9953f8f7557d7f72dd1209f332e31ced4c755755092f0c12e7"
+            },
+            {
+              "path": "src/models/platform.rs",
+              "sha256": "60b415b2ffaaf368c25019e331433b498b50e4bd889c371d3f67aa23a4460794"
+            }
+          ]
+        },
+        "worker": {
+          "status": "partial",
+          "reason": "Shared typed/parent upload paths retain the 1 MiB limit; raw JSON remains possible. Requires hot-reload.",
+          "evidence": [
+            {
+              "path": "src/api.rs",
+              "sha256": "4f49c8d0f77700744b57c747ef1131b7d984c7ff1dc2b773f8e25483891301dd"
+            },
+            {
+              "path": "src/client/platform.rs",
+              "sha256": "dfab2ae3f06c8bcb459ea181fe39819d1f513836bde9f10bb6af073961578776"
+            },
+            {
+              "path": "src/hot_reload/worker.rs",
+              "sha256": "877e47d6ffd6e107e0b8292eeda284aafe997c6307ad61c82fe5a9ff8f0d2c0c"
+            }
+          ]
+        },
+        "cli_mcp": {
+          "status": "partial",
+          "reason": "emoji-upload and validated create_emoji tools retain the 1 MiB cap. CLI request is a raw JSON escape hatch. Requires cli.",
+          "evidence": [
+            {
+              "path": "src/bin/rappin.rs",
+              "sha256": "a9cb06d3097021facc3922f40e8ceb62ef0a022adbd3ee946bc88d5598c456f2"
+            },
+            {
+              "path": "src/capabilities/validation.rs",
+              "sha256": "172a1684c0cfaf9953f8f7557d7f72dd1209f332e31ced4c755755092f0c12e7"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "gateway_events",
+      "title": "Gateway event intake",
+      "required_features": {
+        "typed": [
+          "gateway"
+        ],
+        "low_level": [],
+        "validated_bindings": [],
+        "worker": [
+          "gateway",
+          "hot-reload"
+        ],
+        "cli_mcp": [
+          "cli"
+        ]
+      },
+      "rollout": "Gateway is documented as beta; availability/denial is handled through preferred polling fallback or explicit gateway-only behavior.",
+      "operations": [],
+      "api_sources": [
+        "https://www.yapin.gg/openapi.json",
+        "https://www.yapin.gg/developers"
+      ],
+      "surfaces": {
+        "typed": {
+          "status": "supported",
+          "reason": "BotBuilder::gateway opts into WebSocket events, heartbeat/resume and polling fallback; gateway_only selects stricter behavior. Requires gateway.",
+          "evidence": [
+            {
+              "path": "src/bot/mod.rs",
+              "sha256": "88f8a03f30979d5835d0277e9ff20526d26ae8193c636664915531058954780f"
+            },
+            {
+              "path": "src/gateway.rs",
+              "sha256": "919f129da0fff8c47e43c0fef859e78d88813aca06bf997c41cb98b6e21dc843"
+            }
+          ]
+        },
+        "low_level": {
+          "status": "not_applicable",
+          "reason": "WebSocket event intake is a transport runner, not an arbitrary HTTP request.",
+          "evidence": []
+        },
+        "validated_bindings": {
+          "status": "not_applicable",
+          "reason": "Command capability bindings execute API operations; they do not select event intake.",
+          "evidence": []
+        },
+        "worker": {
+          "status": "supported",
+          "reason": "The parent owns gateway intake and dispatches admitted events to workers. Requires gateway in the parent and hot-reload for workers.",
+          "evidence": [
+            {
+              "path": "src/bot/pipeline.rs",
+              "sha256": "3b95eb8ab9f3c673a00a3b2b25fdad3e9a24383d82ff430aeede63c9b3944fcb"
+            },
+            {
+              "path": "src/hot_reload/host.rs",
+              "sha256": "18d4ab92430dd8b5cc46ca8557d5cd68ac3398018d8e979df618a0ab4299e1c4"
+            }
+          ]
+        },
+        "cli_mcp": {
+          "status": "missing",
+          "reason": "The CLI/MCP event tools use polling; compiling gateway does not make the CLI open a gateway connection.",
+          "evidence": [
+            {
+              "path": "src/bin/agent_events.rs",
+              "sha256": "d0e0c5789c6a4bc56fbeaaf7691ce1ab4198ad015098075f7782a4d3b4477185"
+            },
+            {
+              "path": "src/bin/rappin.rs",
+              "sha256": "a9cb06d3097021facc3922f40e8ceb62ef0a022adbd3ee946bc88d5598c456f2"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "gateway_api_requests",
+      "title": "Gateway JSON API requests",
+      "required_features": {
+        "typed": [
+          "gateway"
+        ],
+        "low_level": [
+          "gateway"
+        ],
+        "validated_bindings": [
+          "gateway"
+        ],
+        "worker": [
+          "gateway",
+          "hot-reload"
+        ],
+        "cli_mcp": [
+          "cli"
+        ]
+      },
+      "rollout": "Opt-in; each connection must advertise ready.requests=true. Eligible JSON calls only; uploads, binary calls and /events use HTTPS.",
+      "operations": [],
+      "api_sources": [
+        "https://www.yapin.gg/openapi.json",
+        "https://www.yapin.gg/developers"
+      ],
+      "surfaces": {
+        "typed": {
+          "status": "supported",
+          "reason": "configure_gateway_requests opts into the parent-owned bounded response pump; unknown submitted mutations never fall back or replay. Requires gateway.",
+          "evidence": [
+            {
+              "path": "src/gateway/requests.rs",
+              "sha256": "5f3e4c9dc2b7ddcc25eff949ce3a390bd22e229702f9248e4b6f9516f7426e5d"
+            },
+            {
+              "path": "src/client.rs",
+              "sha256": "34e48e08d113613696126afd1fda8ff327f80a29b7cef1e8dbce23b40871ef26"
+            }
+          ]
+        },
+        "low_level": {
+          "status": "supported",
+          "reason": "Eligible Client/Api JSON requests use the configured connection. No connection/capability chooses HTTPS before submission. Requires gateway.",
+          "evidence": [
+            {
+              "path": "src/gateway/requests.rs",
+              "sha256": "5f3e4c9dc2b7ddcc25eff949ce3a390bd22e229702f9248e4b6f9516f7426e5d"
+            },
+            {
+              "path": "src/api.rs",
+              "sha256": "4f49c8d0f77700744b57c747ef1131b7d984c7ff1dc2b773f8e25483891301dd"
+            }
+          ]
+        },
+        "validated_bindings": {
+          "status": "supported",
+          "reason": "Bindings use the same Client transport without weakening validation or permission checks. Requires gateway for the configured parent transport.",
+          "evidence": [
+            {
+              "path": "src/capabilities/execution.rs",
+              "sha256": "d7af3d2ad9fa58f8afc1b10a9f65d1f7a07324ebc79829467010617029d90374"
+            },
+            {
+              "path": "src/gateway/requests.rs",
+              "sha256": "5f3e4c9dc2b7ddcc25eff949ce3a390bd22e229702f9248e4b6f9516f7426e5d"
+            }
+          ]
+        },
+        "worker": {
+          "status": "supported",
+          "reason": "Workers use the parent-selected transport. Requires gateway in the parent and hot-reload; api_once additionally requires protocol v6 opt-in.",
+          "evidence": [
+            {
+              "path": "src/hot_reload/worker.rs",
+              "sha256": "877e47d6ffd6e107e0b8292eeda284aafe997c6307ad61c82fe5a9ff8f0d2c0c"
+            },
+            {
+              "path": "src/gateway/requests.rs",
+              "sha256": "5f3e4c9dc2b7ddcc25eff949ce3a390bd22e229702f9248e4b6f9516f7426e5d"
+            }
+          ]
+        },
+        "cli_mcp": {
+          "status": "missing",
+          "reason": "CLI/MCP does not own a gateway connection or expose gateway-request configuration.",
+          "evidence": [
+            {
+              "path": "src/bin/rappin.rs",
+              "sha256": "a9cb06d3097021facc3922f40e8ceb62ef0a022adbd3ee946bc88d5598c456f2"
+            },
+            {
+              "path": "src/bin/rappin_mcp.rs",
+              "sha256": "d26c981c7239ace606a58709e70e5425d0d1f6d1f089ba0956cb3d0ea5d5eb1a"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "hosted_call_activities",
+      "title": "Hosted call activity runtime",
+      "required_features": {
+        "typed": [],
+        "low_level": [],
+        "validated_bindings": [],
+        "worker": [],
+        "cli_mcp": []
+      },
+      "rollout": "custom_activities remains in testing. Registered HTTPS pages use the browser JavaScript bridge; discovery/verification differs for verified bots, unverified bots and DM calls.",
+      "operations": [],
+      "api_sources": [
+        "https://www.yapin.gg/openapi.json",
+        "https://www.yapin.gg/developers"
+      ],
+      "surfaces": {
+        "typed": {
+          "status": "not_applicable",
+          "reason": "The documented activity runtime is a hosted browser page. It is not a Rust bot REST endpoint.",
+          "evidence": []
+        },
+        "low_level": {
+          "status": "not_applicable",
+          "reason": "No bot REST activity lifecycle endpoint is established in this OpenAPI snapshot.",
+          "evidence": []
+        },
+        "validated_bindings": {
+          "status": "not_applicable",
+          "reason": "There is no documented bot REST runtime operation to bind; use_activities permissions are reviewed separately.",
+          "evidence": []
+        },
+        "worker": {
+          "status": "not_applicable",
+          "reason": "Worker cogs do not replace the hosted browser runtime.",
+          "evidence": []
+        },
+        "cli_mcp": {
+          "status": "not_applicable",
+          "reason": "CLI/MCP is not the browser postMessage activity bridge.",
+          "evidence": []
+        }
+      }
+    }
+  ]
+}

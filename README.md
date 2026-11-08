@@ -196,6 +196,7 @@ The default library build needs neither Node nor the CLI dependencies.
 ## Guides and examples
 
 - [API reference](https://docs.rs/rappin-rs): Rust types and client methods.
+- [API support by release](docs/api-support.md): reviewed feature coverage, required features, known gaps, and the public API-audit skill.
 - [Rust bot guide](docs/rust-bots.md): typed commands, checks, collectors, and delivery semantics.
 - [Checked invocation](docs/checked-invocation.md): invoke installed commands from the original message context, with read-only preparation, consumer operation IDs, and explicit completion.
 - [Handler failures](docs/handler-failures.md): completion decisions, structured errors, draining, and checkpoints.
