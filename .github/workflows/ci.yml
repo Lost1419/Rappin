@@ -21,6 +21,63 @@ jobs:
       - name: Test offline snapshots and release coverage
         run: python -B -m unittest discover -s skills/yapin-api-audit/scripts -p 'test_*.py'
 
+  minimum-rust:
+    name: Rust 1.88 / ${{ matrix.feature }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        feature: [minimal, cli, gateway, voice, hot-reload, webhook-middleware, metrics, all]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-${{ matrix.feature }}
+      - name: Check isolated features on minimum Rust
+        shell: bash
+        env:
+          FEATURE: ${{ matrix.feature }}
+        run: |
+          case "$FEATURE" in
+            minimal) cargo check --locked --no-default-features --all-targets ;;
+            all) cargo test --locked --all-features --lib ;;
+            *) cargo check --locked --no-default-features --features "$FEATURE" --all-targets ;;
+          esac
+
+  documentation-coverage:
+    name: Documentation coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
+      - name: Measure public items and examples
+        run: cargo rustdoc --locked --all-features --lib -- -Z unstable-options --show-coverage --output-format json
+      - name: Require 100 percent documented items and eligible examples
+        run: python3 scripts/check-doc-coverage.py target/doc/rappin.json
+
+  fuzz-smoke:
+    name: Bounded offline fuzz smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - run: cargo install cargo-fuzz --locked --version 0.13.2
+      - run: mkdir -p fuzz/corpus/events fuzz/corpus/arguments
+      - run: cargo fuzz run events fuzz/corpus/events fuzz/seeds/events -- -max_total_time=15 -max_len=8192 -rss_limit_mb=1024
+      - run: cargo fuzz run arguments fuzz/corpus/arguments fuzz/seeds/arguments -- -max_total_time=15 -max_len=8192 -rss_limit_mb=1024
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-crash-inputs
+          path: fuzz/artifacts
+          if-no-files-found: ignore
+
   compatibility:
     name: Public API compatibility
     runs-on: ubuntu-latest

@@ -7,10 +7,10 @@ can differ. A current Git checkout does not establish published-crate behavior.
 Run these commands from the skill directory, using new output paths:
 
 ```sh
-python3 scripts/support.py release --version 0.1.28 --out /tmp/rappin-0.1.28-source
+python3 scripts/support.py release --version 0.1.29 --out /tmp/rappin-0.1.29-source
 python3 scripts/audit.py snapshot --out /tmp/yapin-current-evidence
-python3 scripts/audit.py compare /tmp/rappin-0.1.28-source/source/docs/openapi.json /tmp/yapin-current-evidence --output /tmp/rappin-contract-diff.json
-python3 scripts/support.py report /tmp/rappin-0.1.28-source /tmp/yapin-current-evidence --reviews references/coverage-0.1.28.json --json /tmp/rappin-support.json --markdown /tmp/rappin-support.md
+python3 scripts/audit.py compare /tmp/rappin-0.1.29-source/source/docs/openapi.json /tmp/yapin-current-evidence --output /tmp/rappin-contract-diff.json
+python3 scripts/support.py report /tmp/rappin-0.1.29-source /tmp/yapin-current-evidence --reviews references/coverage-0.1.29.json --json /tmp/rappin-support.json --markdown /tmp/rappin-support.md
 ```
 
 `release` fetches only the fixed public crates.io/static.crates.io package URLs.
@@ -24,8 +24,9 @@ for code the user later chooses to build.
 OpenAPI hash and normalized developer-guide text hash. Equal version numbers are
 insufficient. A changed selection produces Unknown statuses and clears old rollout
 and feature requirements. Source paths/hashes and optional symbols are checked
-before matching support claims are printed. The full operation inventory remains
-Unknown: a feature review does not certify every behavior of an associated endpoint.
+before matching support claims are printed. Only explicit `operations[]` rows assess endpoint coverage. A feature review by
+itself still leaves its associated operation Unknown; raw request access does not
+certify typed validation or named bindings.
 
 Statuses describe the selected surface:
 
@@ -44,11 +45,14 @@ column but can differ; the reason must identify those differences explicitly.
 
 ## Maintaining review data
 
-The bundled `coverage-0.1.28.json` is a worked source review, with these fields:
+The bundled `coverage-0.1.29.json` is a worked source review, with these fields:
 
 - `format: 1`, `sdk.package`, exact `sdk.version`, `sdk.crate_sha256`.
 - `api.version`, `api.openapi_sha256`, `api.developer_text_sha256` from the captured
   evidence. `reviewed_at` is the actual UTC assessment time.
+- Optional `operations[]`: explicit unique `{method,path}` plus `surfaces`,
+  `required_features`, `rollout`, `notes` and `api_sources`, checked with the same
+  source evidence rules as features. A stale selection resets these assertions too.
 - `features[]`: stable `id`, `title`, official `api_sources`, `rollout` restrictions,
   associated `{method,path}` operations and per-surface `required_features`.
 - `surfaces`: exactly `typed`, `low_level`, `validated_bindings`, `worker`, `cli_mcp`.

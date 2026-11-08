@@ -47,7 +47,8 @@ Report confirmed changes, existing SDK gaps, rollout restrictions, source URLs a
 check time. Cite official URLs for platform claims. Say precisely which checks were
 not possible; distinguish a documented contract from live authenticated behavior.
 
-Use [the bundled 0.1.28 review](references/coverage-0.1.28.json) only when its
+Use [the full 0.1.29 operation review](references/coverage-0.1.29.json), or
+[the historical 0.1.28 feature review](references/coverage-0.1.28.json), only when its
 crate and API/guide hashes match the selected evidence. The report script turns
 all saved assertions into Unknown for another version or changed API evidence.
 For a new assessment, follow the report format and inspect the selected release's

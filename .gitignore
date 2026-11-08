@@ -7,3 +7,10 @@
 /skills/yapin-api-audit/**/__pycache__/
 
 .DS_Store
+
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/coverage/
+/scripts/__pycache__/
+
+/fuzz/corpus/

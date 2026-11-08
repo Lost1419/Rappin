@@ -11,6 +11,7 @@ mod agent_events;
 mod agent_output;
 #[path = "rappin_mcp.rs"]
 mod mcp;
+mod scaffold;
 mod server_features;
 
 #[derive(Parser)]
@@ -51,6 +52,8 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Create an offline Rust bot project; never reads credentials or overwrites a directory.
+    Init(scaffold::Options),
     /// Execute a catalogue API 1.2 operation with JSON arguments (also used by MCP).
     Platform {
         operation: String,
@@ -570,6 +573,7 @@ async fn run(args: Args, ctx: &Context) -> Result<Value> {
 }
 async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
     match args.command {
+        Command::Init(options) => scaffold::generate(&options, args.dry_run),
         Command::Platform {
             operation,
             arguments_file,
@@ -1207,6 +1211,16 @@ async fn main() {
             std::process::exit(2);
         }
     };
+    if let Command::Init(options) = &args.command {
+        match scaffold::generate(options, args.dry_run) {
+            Ok(data) => println!("{}", json!({"ok":true,"data":data})),
+            Err(error) => {
+                println!("{}", json!({"ok":false,"error":error_json(&error,true)}));
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
     let context = config(&args);
     if let Command::Mcp { cursor_file } = &args.command {
         match context {

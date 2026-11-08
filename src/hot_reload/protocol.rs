@@ -597,3 +597,40 @@ mod operation_identity_tests {
         assert!(serde_json::from_value::<Wire>(identified).is_err());
     }
 }
+
+#[cfg(test)]
+mod frame_properties {
+    use super::*;
+    use proptest::prelude::*;
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+        #[test]
+        fn arbitrary_frames_return_without_panicking(bytes in prop::collection::vec(any::<u8>(), 0..8192)) {
+            let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+            runtime.block_on(async {
+                let _ = read(&mut bytes.as_slice()).await;
+            });
+        }
+        #[test]
+        fn valid_frames_round_trip_and_do_not_consume_the_next_frame(id in any::<u64>()) {
+            let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+            runtime.block_on(async {
+                let first = Wire::EventResult { event: None, error: Some(id.to_string()), structured_error: None };
+                let mut bytes = Vec::new();
+                write(&mut bytes, &first).await.unwrap();
+                write(&mut bytes, &first).await.unwrap();
+                let mut input = bytes.as_slice();
+                assert_eq!(serde_json::to_value(read(&mut input).await.unwrap()).unwrap(), serde_json::to_value(&first).unwrap());
+                assert!(!input.is_empty());
+                read(&mut input).await.unwrap();
+                assert!(input.is_empty());
+            });
+        }
+    }
+    #[tokio::test]
+    async fn truncated_and_oversized_frames_are_rejected() {
+        assert!(read(&mut &b"{}"[..]).await.is_err());
+        let bytes = vec![b'x'; MAX_FRAME as usize + 1];
+        assert!(read(&mut bytes.as_slice()).await.is_err());
+    }
+}

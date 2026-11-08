@@ -48,7 +48,7 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.29"
+rappin-rs = "0.1.30"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -175,6 +175,10 @@ Output is JSON, writes support `--dry-run`, and JSON request bodies can come fro
 stdin. `rappin mcp` exposes discovery, history, messages, and explicit event
 acknowledgement as stdio MCP tools. `rappin schema` prints the bundled OpenAPI spec.
 
+Create a starter with `rappin init my-bot`, or select `--template gateway` or
+`--template worker`. Generation is offline and refuses existing directories; see
+[project templates](docs/project-templates.md).
+
 See the [agent guide](docs/agents.md) for configuration and tool usage, or use the
 included [operator skill](skills/rappin/SKILL.md). Skills for
 [building Rust bots](skills/rappin-bot-dev/SKILL.md) and
@@ -196,6 +200,8 @@ The default library build needs neither Node nor the CLI dependencies.
 ## Guides and examples
 
 - [API reference](https://docs.rs/rappin-rs): public types, client methods, and compiling usage examples. The reference includes all optional features; enable the relevant Cargo feature in your application.
+- [SDK development](docs/development.md): feature/MSRV checks, documentation coverage, randomized testing and offline performance measurement.
+- [Project templates](docs/project-templates.md): offline basic, gateway and worker scaffolding.
 - [API support by release](docs/api-support.md): reviewed feature coverage, required features, known gaps, and the public API-audit skill.
 - [Rust bot guide](docs/rust-bots.md): typed commands, checks, collectors, and delivery semantics.
 - [Checked invocation](docs/checked-invocation.md): invoke installed commands from the original message context, with read-only preparation, consumer operation IDs, and explicit completion.

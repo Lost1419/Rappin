@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.30 — 2026-11-08
+
+- Add `rappin init` with polling, gateway and reloadable-worker templates. Generation bypasses credential/config loading, supports JSON dry runs, refuses existing destinations and escapes custom prefixes as Rust literals. Each template is compiled offline in tests.
+- Check Rust 1.88 against the minimal build, every optional feature and the combined library. Select uuid 1.23 in the repository lockfile because 1.29 requires Rust 1.89; the public dependency range and SDK APIs are unchanged.
+- Enforce 100% rustdoc item and eligible-example coverage in CI, alongside existing strict docs and doctests. Reject missing or malformed coverage output.
+- Add explicit source reviews for all 76 documented API operations in published Rappin 0.1.29. Reports separate typed, raw, validated, worker and CLI/MCP support, name partial workflows and invalidate claims when crate/API/guide hashes change.
+- Add property tests for quoting/UTF-8 spans, malformed payloads, ordered checkpoints with duplicates/failures and bounded worker framing. Add two bounded offline libFuzzer targets and CI smoke runs.
+- Add Criterion baselines for parsing, encoding, validation, channel caching and native dispatch without remote effects, plus isolated build-time/executable-size measurements. No runtime features or default dispatch/retry behavior change.
+
 ## 0.1.29 — 2026-11-08
 
 - Document every public Rust item and add compiling usage examples across the client, command framework, workers, authorization and ingress recovery APIs. CI now rejects undocumented public items and rustdoc warnings.

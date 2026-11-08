@@ -32,6 +32,10 @@ cargo install --path . --features cli
 rappin --json doctor --offline
 ```
 
+Use `rappin init my-bot --template basic` for an offline starter, or choose
+`gateway` / `worker`. The operator-only command never reads credentials and refuses
+existing directories. See [project templates](project-templates.md).
+
 The library has no default optional features. `cli` adds the command and MCP server.
 Add `voice` only if the CLI needs local voice playback, or `gateway` when the
 application itself needs WebSocket event transport. The CLI does not need either

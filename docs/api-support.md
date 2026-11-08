@@ -6,11 +6,13 @@ different versions.
 
 | Published crate | Checked against | Report | Structured data |
 |---|---|---|---|
+| 0.1.29 | API 1.3.0, captured 8 November 2026 UTC | [All 76 operations](api-support-0.1.29.md) | [JSON](api-support-0.1.29.json) |
 | 0.1.28 | API 1.3.0, captured 8 November 2026 UTC | [Feature support](api-support-0.1.28.md) | [JSON](api-support-0.1.28.json) |
 
-The initial review covers nine selected features and inventories all 76 operations
-in that API snapshot. It is **not an exhaustive certification of SDK coverage**.
-Unreviewed behavior remains Unknown. Each reviewed feature distinguishes typed
+The 0.1.29 report assesses all 76 documented operations; the earlier 0.1.28 report
+reviews nine selected features. Operation coverage describes the stated primary
+request/response workflow, with explicit field and transport limitations. It does
+not certify undocumented platform behavior or live authorization. Each row distinguishes typed
 SDK support, low-level requests, validated bindings, worker support and CLI/MCP,
 with feature requirements, rollout limits and links to the selected release source.
 

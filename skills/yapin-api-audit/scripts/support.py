@@ -176,10 +176,16 @@ def report(release_root, snapshot, reviews):
                and review['api']['openapi_sha256'] == api['openapi_sha256']
                and review['api']['developer_text_sha256'] == api['developer_text_sha256'])
     features = copy.deepcopy(review['features'])
+    operation_reviews = copy.deepcopy(review.get('operations', []))
+    keys = [(row['method'].upper(), row['path']) for row in operation_reviews]
+    if len(set(keys)) != len(keys):
+        raise ValueError('duplicate reviewed operations')
+    if matches and any(method.lower() not in spec['paths'].get(path, {}) for method, path in keys):
+        raise ValueError('review names an operation absent from the API snapshot')
     cargo_features = tomllib.loads((Path(release_root) / 'source/Cargo.toml').read_text()).get('features', {})
     if len({row['id'] for row in features}) != len(features):
         raise ValueError('duplicate reviewed feature IDs')
-    for row in features:
+    for row in features + operation_reviews:
         if set(row['surfaces']) != set(SURFACES):
             raise ValueError('feature must assess each coverage surface')
         if set(row['required_features']) != set(SURFACES):
@@ -211,21 +217,30 @@ def report(release_root, snapshot, reviews):
             # Old rollout and feature requirements are not current assertions either.
             row['required_features'] = None
             row['rollout'] = 'Unknown for this evidence selection; reassess before use.'
+            if 'notes' in row:
+                row['notes'] = 'Unknown for this evidence selection; reassess before use.'
     operations = []
     for path, definition in sorted(spec['paths'].items()):
         for method in sorted(audit.METHODS & definition.keys()):
             associated = [r['id'] for r in features if any(
                 op['path'] == path and op['method'].lower() == method for op in r.get('operations', []))]
-            operations.append({'path': path, 'method': method.upper(),
-                               'operation_id': definition[method].get('operationId'),
-                               'status': 'unknown', 'reviewed_feature_ids': associated})
+            reviewed = next((r for r in operation_reviews if r['path'] == path
+                             and r['method'].lower() == method), None)
+            operation = {'path': path, 'method': method.upper(),
+                         'operation_id': definition[method].get('operationId'),
+                         'status': 'unknown', 'reviewed_feature_ids': associated}
+            if reviewed:
+                operation.update(reviewed)
+                operation['method'] = method.upper()
+                operation['status'] = 'reviewed' if matches else 'unknown'
+            operations.append(operation)
     return {'format': 1, 'generated_at': datetime.now(timezone.utc).isoformat(),
             'sdk': {k: v for k, v in sdk.items() if k != 'files'}, 'api': api,
             'review_matches': matches, 'reviewed_at': review['reviewed_at'] if matches else None,
             'review_method': 'Human/agent source review; live authenticated behavior was not tested.',
             'features': features, 'operations': operations,
-            'scope': 'Feature-level review. The operation inventory is deliberately unknown; '
-                     'a reviewed field or feature does not certify an entire endpoint.'}
+            'scope': 'Feature and explicit operation source review. Only explicit operation rows assess endpoint '
+                     'coverage; generic raw requests never establish typed or validated support.'}
 
 
 def markdown(data):
@@ -240,7 +255,8 @@ def markdown(data):
             '[Developer guide](https://www.yapin.gg/developers)', '',
             data['review_method'], '', data['scope'], '',
             f'Inventory: {len(data["operations"])} documented operations. '
-            f'This report reviews {len(data["features"])} selected features; other coverage is unknown.', '',
+            f'{sum(row["status"] == "reviewed" for row in data["operations"])} have explicit operation reviews; '
+            f'{len(data["features"])} selected features also have detailed reviews.', '',
             '| Feature | Typed SDK | Low-level requests | Validated bindings | Worker | CLI/MCP |',
             '|---|---|---|---|---|---|']
     for row in data['features']:
@@ -261,6 +277,29 @@ def markdown(data):
                         (' Sources: ' + ', '.join(dict.fromkeys(links)) + '.' if links else ''))
         rows += ['', 'Platform references: ' + ', '.join(
                  f'[source {i+1}]({url})' for i, url in enumerate(row['api_sources'])) + '.']
+    rows += ['', '## Operation coverage', '',
+             'Supported means the reviewed surface represents this endpoint; it does not certify live '
+             'access, platform rollout or undocumented fields. Partial rows name their limitations.', '',
+             '| Method / path | Typed SDK | Low-level requests | Validated bindings | Worker | CLI/MCP |',
+             '|---|---|---|---|---|---|']
+    for row in data['operations']:
+        surfaces = row.get('surfaces', {})
+        rows.append('| ' + ' | '.join([cell(row['method'] + ' ' + row['path'])] +
+                    [surfaces.get(key, {}).get('status', 'unknown') for key in SURFACES]) + ' |')
+    for row in data['operations']:
+        if 'surfaces' not in row:
+            continue
+        rows += ['', '### ' + row['method'] + ' ' + row['path'], '',
+                 'Availability: ' + row['rollout'], '', row.get('notes', ''), '']
+        for name in SURFACES:
+            surface = row['surfaces'][name]
+            required = row['required_features']
+            flags = ', '.join(required[name]) if required is not None else 'unknown'
+            links = [f'[{e["path"]}](https://github.com/Lost1419/Rappin/blob/{sdk["commit"]}/{e["path"]})'
+                     for e in surface.get('evidence', []) if sdk.get('commit')]
+            rows.append(f'- **{name} — {surface["status"]}:** {surface["reason"]} '
+                        f'Cargo: {flags or "no optional feature"}.' +
+                        (' Sources: ' + ', '.join(dict.fromkeys(links)) + '.' if links else ''))
     rows += ['', '## Evidence and freshness', '',
              f'OpenAPI SHA-256: `{data["api"]["openapi_sha256"]}`.', '',
              f'Developer text SHA-256: `{data["api"]["developer_text_sha256"]}`.', '',

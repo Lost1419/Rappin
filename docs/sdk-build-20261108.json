@@ -1,0 +1,22 @@
+{
+  "commit": "9c88a49064229dde0844e47a1822ea5656723f7e",
+  "dirty": true,
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: aarch64-apple-darwin\nrelease: 1.99.0\nLLVM version: 23.1.1",
+  "host": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "cargo_lock_sha256": "4c9cbf824a715a180bb6191bde43d27a4158cab795e506bd2e92e5fc9c6fd371",
+  "template": "basic",
+  "example": "ping_bot",
+  "features": [],
+  "binary_bytes": 8756848,
+  "samples": [
+    {
+      "phase": "fresh-target",
+      "seconds": 29.34769883309491
+    },
+    {
+      "phase": "reused-target",
+      "seconds": 0.1658181669190526
+    }
+  ],
+  "limitations": "Local build only; OS/registry caches may be warm. No executable or API traffic was run. Build scripts/macros are trusted executable code."
+}

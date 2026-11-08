@@ -1,6 +1,6 @@
 [package]
 name = "rappin-rs"
-version = "0.1.29"
+version = "0.1.30"
 edition = "2021"
 rust-version = "1.88"
 autobins = false
@@ -65,6 +65,8 @@ metrics-exporter-prometheus = { version = "0.14", optional = true }
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = "0.3"
 tower = { version = "0.5", features = ["util"] }
+proptest = "1.7"
+criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
 
 # Opt-in local builds with small artifacts; normal dev/test profiles are unchanged.
 [profile.compact]
@@ -99,3 +101,7 @@ required-features = ["gateway"]
 [[example]]
 name = "shared_webhook_polling"
 required-features = ["webhook-middleware"]
+
+[[bench]]
+name = "sdk"
+harness = false

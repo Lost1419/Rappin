@@ -141,6 +141,34 @@ class SupportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
             support.load_release(self.release)
 
+    def test_explicit_operation_review_requires_evidence_and_is_stale_on_mismatch(self):
+        path, data = self.review()
+        row = copy.deepcopy(data['features'][0])
+        row.update(method='POST', path='/messages', notes='Fixture endpoint review')
+        row.pop('operations')
+        data['operations'] = [row]
+        path.write_text(json.dumps(data))
+        result = support.report(self.release, self.snapshot, path)
+        self.assertEqual(result['operations'][0]['status'], 'reviewed')
+        self.assertIn('Operation coverage', support.markdown(result))
+        self.assertEqual(result['operations'][0]['surfaces']['typed']['status'], 'supported')
+        data['operations'].append(copy.deepcopy(row))
+        path.write_text(json.dumps(data))
+        with self.assertRaisesRegex(ValueError, 'duplicate reviewed operations'):
+            support.report(self.release, self.snapshot, path)
+        data['operations'] = [row]
+        row['surfaces']['typed']['evidence'] = []
+        path.write_text(json.dumps(data))
+        with self.assertRaisesRegex(ValueError, 'require source evidence'):
+            support.report(self.release, self.snapshot, path)
+        data['sdk']['version'] = '0.1.27'
+        path.write_text(json.dumps(data))
+        result = support.report(self.release, self.snapshot, path)
+        self.assertEqual(result['operations'][0]['status'], 'unknown')
+        self.assertTrue(all(v['status'] == 'unknown' for v in result['operations'][0]['surfaces'].values()))
+        self.assertIsNone(result['operations'][0]['required_features'])
+        self.assertIn('Unknown', result['operations'][0]['notes'])
+
     def test_cargo_identity_and_official_source_urls_are_required(self):
         self.files['Cargo.toml'] = '[package]\nname="other"\nversion="0.1.28"'
         with self.assertRaisesRegex(ValueError, 'Cargo manifest differs'):

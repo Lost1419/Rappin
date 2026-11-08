@@ -1,0 +1,1 @@
+{"type": "command", "command": "ping", "args": "20 \"two words\"", "argv": ["20", "two words"], "message": {"id": "00000000-0000-0000-0000-000000000001", "channel_id": "00000000-0000-0000-0000-000000000002", "author_id": "00000000-0000-0000-0000-000000000003", "content": "!ping", "command": "ping", "author_bot": false}}
