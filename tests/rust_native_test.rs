@@ -424,6 +424,17 @@ async fn pipeline_keeps_receiving_for_waiting_handler_and_commits_in_order() {
         }
         std::future::pending::<()>().await;
     });
+    // Collectors are notified during intake, before the executor accepts the batch.
+    // Stop only once the answer reaches dispatch so cursor 19 is required to commit.
+    struct StopAfterAnswer;
+    #[async_trait::async_trait]
+    impl EventHandler for StopAfterAnswer {
+        async fn on_message(&self, ctx: &MessageContext) {
+            if ctx.content() == "answer" {
+                ctx.bot().unwrap().stop();
+            }
+        }
+    }
     let p = path.clone();
     let bot = Bot::builder("secret")
         .base_url(format!("http://{address}"))
@@ -432,6 +443,7 @@ async fn pipeline_keeps_receiving_for_waiting_handler_and_commits_in_order() {
         .cursor_file(&path)
         .handler_concurrency(1)
         .pending_batches(2)
+        .event_handler(StopAfterAnswer)
         .command("question", "Wait", move |ctx| {
             let registered = registered.clone();
             let path = p.clone();
@@ -441,7 +453,6 @@ async fn pipeline_keeps_receiving_for_waiting_handler_and_commits_in_order() {
                 let answer = reply.wait().await?;
                 assert_eq!(answer.content.as_deref(), Some("answer"));
                 assert_eq!(EventCursor::new(path).load().await?, Some(10));
-                ctx.bot().unwrap().stop();
                 Ok(())
             }
         })
