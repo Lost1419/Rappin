@@ -135,9 +135,6 @@ async fn edited_rust_is_rebuilt_while_inflight_old_code_finishes_and_failed_buil
         !old.is_finished(),
         "old request must still be running during swap"
     );
-    tokio::fs::write(format!("{}.release", marker.display()), "release")
-        .await
-        .unwrap();
     assert_ne!(old_pid, reload.process_id().await);
     bot.process_event(event("added")).await.unwrap();
     assert!(requests
@@ -145,6 +142,12 @@ async fn edited_rust_is_rebuilt_while_inflight_old_code_finishes_and_failed_buil
         .await
         .unwrap()
         .contains("\"content\":\"new\""));
+    // Keep the old generation blocked until the new route proves it can reply.
+    // Releasing both first permits either process's HTTP request to arrive first.
+    assert!(!old.is_finished());
+    tokio::fs::write(format!("{}.release", marker.display()), "release")
+        .await
+        .unwrap();
     old.await.unwrap().unwrap();
     wait_for(FileExists(PathBuf::from(format!(
         "{}.stopped",
