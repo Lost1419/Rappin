@@ -48,7 +48,7 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.30"
+rappin-rs = "0.1.31"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -180,9 +180,9 @@ Create a starter with `rappin init my-bot`, or select `--template gateway` or
 [project templates](docs/project-templates.md).
 
 See the [agent guide](docs/agents.md) for configuration and tool usage, or use the
-included [operator skill](skills/rappin/SKILL.md). Skills for
-[building Rust bots](skills/rappin-bot-dev/SKILL.md) and
-[diagnosing failures](skills/rappin-diagnostics/SKILL.md) are also included.
+repository's [operator skill](https://github.com/Lost1419/Rappin/blob/main/skills/rappin/SKILL.md). Skills for
+[building Rust bots](https://github.com/Lost1419/Rappin/blob/main/skills/rappin-bot-dev/SKILL.md) and
+[diagnosing failures](https://github.com/Lost1419/Rappin/blob/main/skills/rappin-diagnostics/SKILL.md) are also available in the repository.
 
 ## Optional features
 
@@ -194,8 +194,18 @@ The default library build needs neither Node nor the CLI dependencies.
 | `gateway` | WebSocket events and opt-in JSON API requests |
 | `hot-reload` | Compilation and replacement of Rust worker cogs |
 | `webhook-middleware` | Axum webhook signature verification and verified event extraction |
-| `metrics` | Prometheus request, availability, and transport metrics |
+| `metrics-http` | Prometheus HTTP export for request, availability and transport metrics |
+| `metrics` | Prometheus export including push-gateway support |
 | `voice` | Encrypted voice playback through the Node/ffmpeg bridge |
+
+## Smaller builds
+
+Install the CLI with `cargo install rappin-rs --features cli --profile small`,
+or build a checkout with `cargo build --profile small --features cli`. The profile
+uses size optimization, thin LTO, one codegen unit and symbol stripping, with panic
+unwinding enabled. Symbol stripping reduces backtrace detail. Consumer profile
+settings and compact local development commands are in the build-size guide.
+[Build-size guide](docs/development.md#smaller-executables).
 
 ## Guides and examples
 

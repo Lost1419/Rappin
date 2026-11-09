@@ -790,7 +790,7 @@ dependencies = [
 
 [[package]]
 name = "rappin-rs"
-version = "0.1.30"
+version = "0.1.31"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

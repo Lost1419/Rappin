@@ -1,7 +1,8 @@
 //! Prometheus metrics export for request telemetry.
 //!
 //! This module provides optional Prometheus metrics export for the
-//! request telemetry collected by the Client. Enable with the `metrics` feature.
+//! request telemetry collected by the Client. Enable `metrics-http` for an HTTP
+//! listener, or `metrics` for HTTP and push-gateway exporter capabilities.
 //!
 //! # Example
 //!
@@ -38,7 +39,7 @@ use std::time::Duration;
 /// # Example
 ///
 /// ```no_run
-/// // Requires Cargo feature metrics; install a global recorder only once.
+/// // Requires Cargo feature metrics-http or metrics; install a global recorder only once.
 /// rappin::metrics::install_prometheus()?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
@@ -54,7 +55,7 @@ pub fn install_prometheus() -> Result<(), Box<dyn std::error::Error>> {
 /// # Example
 ///
 /// ```no_run
-/// // Requires Cargo feature metrics; install a global recorder only once.
+/// // Requires Cargo feature metrics-http or metrics; install a global recorder only once.
 /// rappin::metrics::install_prometheus_with_config("bot", Some(vec![0.05, 0.1, 0.5, 1.0]))?;
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```

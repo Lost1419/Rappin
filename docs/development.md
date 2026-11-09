@@ -1,5 +1,10 @@
 # Developing and measuring Rappin
 
+Use a tagged GitHub checkout for the full integration, fuzz and benchmark suites
+and their maintenance scripts. The crates.io package includes the SDK, public
+examples, unit-test support, runtime setup script and build-required guides/schema.
+Historical reports and agent skills are distributed through GitHub.
+
 The library keeps optional features off by default. CI checks the minimal build,
 each optional feature separately, and the combined build on Rust 1.88. The checked-in
 lockfile selects compatible dependencies; downstream applications control their own
@@ -74,7 +79,7 @@ not reply or mutate remote state. Cache cases include Tokio `block_on` overhead;
 replacement includes cloning the channel, and dispatch includes cloning the event.
 These figures measure local SDK work, not network/API latency or end-to-end replies.
 
-An [initial local sample](sdk-performance-20261108.md) includes JSON provenance
+An [initial local sample](https://github.com/Lost1419/Rappin/blob/main/docs/sdk-performance-20261108.md) includes JSON provenance
 and measured confidence intervals.
 
 Criterion stores estimates and confidence intervals under `target/criterion`.
@@ -104,3 +109,44 @@ build time is not the minimum build time of a standalone consumer.
 
 Live API latency and throughput benchmarking remains a separate project. SDK
 microbenchmarks must not be presented as a Yapin service benchmark.
+
+## Smaller executables
+
+Install the CLI from crates.io with `cargo install rappin-rs --features cli --profile small`.
+Select any additional CLI features needed for your deployment, such as `voice`.
+Build a checkout with these commands.
+
+```sh
+cargo build --locked --profile small --features cli --bin rappin
+cargo build --locked --profile small --example ping_bot
+```
+
+The `small` profile inherits `release`, uses `opt-level = "s"`, thin LTO, one
+codegen unit and symbol stripping. It explicitly keeps `panic = "unwind"` so the
+SDK can retain its supported panic-to-failure handling. Symbol stripping reduces
+backtrace detail. LTO and fewer codegen units can increase build time, and size
+optimization can affect throughput. Measure your own deployment workload.
+
+Cargo uses profiles from the application's root manifest. To apply the same
+settings to a consumer, add a profile there:
+
+```toml
+[profile.small]
+inherits = "release"
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "unwind"
+```
+
+For repeated local development, `cargo check --profile compact` and
+`cargo test --profile compact` use the existing debug-free profile with incremental
+compilation disabled. Normal `cargo check` and `cargo test` use Cargo's standard
+profiles and can accumulate substantial debug/incremental artifacts over time.
+Choose development profiles in your own application or workspace.
+
+The published schema is compact JSON containing the same API fields and values.
+Select `metrics-http` for the Prometheus HTTP listener and its smaller dependency
+graph. The `metrics` feature enables HTTP and push-gateway exporter support.
+Applications can configure an exporter through their own dependency.

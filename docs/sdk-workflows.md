@@ -144,7 +144,7 @@ loss. Routes remain sanitized templates, never raw credentials or query strings.
 The existing `subscribe_requests()` watch API remains **latest-value only**;
 do not count notifications from it to derive traffic totals.
 
-With `metrics`, publish `record_request_metrics(&client.request_metrics())`
+With `metrics-http` or `metrics`, publish `record_request_metrics(&client.request_metrics())`
 periodically for one client or an application-aggregated series. Absolute counters
 make repeated snapshots safe; do not pass independent clients into the same series
 without aggregating them. Cumulative duration gauges are

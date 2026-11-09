@@ -122,7 +122,7 @@ pub mod api;
 pub mod capabilities;
 pub mod lookup;
 pub use lookup::{LookupResult, LookupStatus, SearchStop};
-#[cfg(feature = "metrics")]
+#[cfg(any(feature = "metrics", feature = "metrics-http"))]
 pub mod metrics;
 pub mod permissions;
 pub mod role_hierarchy;
@@ -146,7 +146,7 @@ pub use bot::{
     InvocationOutcome, InvocationStatus, OperationId, PreparationReport, PreparedInvocation,
     MAX_INVOCATION_DEPTH,
 };
-#[cfg(feature = "metrics")]
+#[cfg(any(feature = "metrics", feature = "metrics-http"))]
 pub use metrics::{
     install_prometheus, install_prometheus_with_config, record_availability_status,
     record_request_metrics, record_request_observation, record_transport_status,
@@ -202,7 +202,7 @@ pub mod prelude {
     pub use crate::events::{EventConsumer, EventCursor};
     #[cfg(feature = "hot-reload")]
     pub use crate::hot_reload::{HotReload, Listener, WorkerCog, WorkerContext, WorkerProject};
-    #[cfg(feature = "metrics")]
+    #[cfg(any(feature = "metrics", feature = "metrics-http"))]
     pub use crate::metrics::{
         install_prometheus, install_prometheus_with_config, record_availability_status,
         record_request_metrics, record_request_observation, record_transport_status,

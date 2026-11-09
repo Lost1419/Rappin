@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.31 — 2026-11-08
+
+- Reduce the published archive by keeping integration suites, CI/fuzz tooling, agent skills and historical audit/performance reports in the GitHub distribution. Keep public examples, unit-test support, runtime setup and every schema/guide needed to build the SDK and its reference.
+- Compact the embedded OpenAPI JSON while retaining every schema value. The schema text shrinks from 594,117 to 286,863 bytes.
+- Add `metrics-http` for Prometheus HTTP export without the push-gateway/native-TLS dependency stack. The existing `metrics` feature enables both HTTP and push-gateway exporter capabilities.
+- Add an opt-in `small` release profile using size optimization, thin LTO, one codegen unit and symbol stripping. Select panic unwinding for handler failure reporting. Document root-application profile settings and the existing compact development profile.
+
 ## 0.1.30 — 2026-11-08
 
 - Add `rappin init` with polling, gateway and reloadable-worker templates. Generation bypasses credential/config loading, supports JSON dry runs, refuses existing destinations and escapes custom prefixes as Rust literals. Each template is compiled offline in tests.

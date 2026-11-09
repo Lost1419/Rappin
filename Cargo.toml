@@ -1,6 +1,6 @@
 [package]
 name = "rappin-rs"
-version = "0.1.30"
+version = "0.1.31"
 edition = "2021"
 rust-version = "1.88"
 autobins = false
@@ -11,6 +11,22 @@ homepage = "https://github.com/Lost1419/Rappin"
 readme = "README.md"
 keywords = ["yapin", "bot", "api", "chat", "async"]
 categories = ["api-bindings", "asynchronous"]
+# Maintainer tooling and historical evidence are distributed through GitHub.
+exclude = [
+    ".github/**",
+    "skills/**",
+    "fuzz/**",
+    "scripts/check-*",
+    "scripts/test_*",
+    "scripts/measure-build.py",
+    "docs/api-support-*.json",
+    "docs/api-support-*.md",
+    "docs/sdk-build-*.json",
+    "docs/sdk-performance-*.json",
+    "docs/sdk-performance-*.md",
+    "docs/advert.md",
+    "tests/*_test.rs",
+]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -32,7 +48,8 @@ gateway = ["dep:tokio-tungstenite", "dep:log", "dep:http"]
 voice = ["tokio/process", "tokio/io-util"]
 hot-reload = ["tokio/process", "tokio/io-util", "tokio/io-std"]
 webhook-middleware = ["dep:axum", "dep:hex"]
-metrics = ["dep:metrics", "dep:metrics-exporter-prometheus"]
+metrics = ["metrics-http", "metrics-exporter-prometheus/push-gateway"]
+metrics-http = ["dep:metrics", "dep:metrics-exporter-prometheus"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -59,7 +76,7 @@ tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"], 
 axum = { version = "0.8", optional = true }
 hex = { version = "0.4", optional = true }
 metrics = { version = "0.22", optional = true }
-metrics-exporter-prometheus = { version = "0.14", optional = true }
+metrics-exporter-prometheus = { version = "0.14", optional = true, default-features = false, features = ["http-listener"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -73,6 +90,15 @@ criterion = { version = "0.5", default-features = false, features = ["cargo_benc
 inherits = "dev"
 debug = 0
 incremental = false
+
+# Opt-in executable-size profile. Retains unwinding for handler failure reporting.
+[profile.small]
+inherits = "release"
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "unwind"
 
 [[example]]
 name = "hot_cog_worker"

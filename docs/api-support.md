@@ -6,8 +6,8 @@ different versions.
 
 | Published crate | Checked against | Report | Structured data |
 |---|---|---|---|
-| 0.1.29 | API 1.3.0, captured 8 November 2026 UTC | [All 76 operations](api-support-0.1.29.md) | [JSON](api-support-0.1.29.json) |
-| 0.1.28 | API 1.3.0, captured 8 November 2026 UTC | [Feature support](api-support-0.1.28.md) | [JSON](api-support-0.1.28.json) |
+| 0.1.29 | API 1.3.0, captured 8 November 2026 UTC | [All 76 operations](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.29.md) | [JSON](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.29.json) |
+| 0.1.28 | API 1.3.0, captured 8 November 2026 UTC | [Feature support](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.28.md) | [JSON](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.28.json) |
 
 The 0.1.29 report assesses all 76 documented operations; the earlier 0.1.28 report
 reviews nine selected features. Operation coverage describes the stated primary
@@ -23,7 +23,7 @@ interface is not relevant, such as running a browser activity through a Rust bot
 endpoint. Generic JSON requests alone do not establish typed or validated support.
 
 To check a different release or current upstream changes, use the public
-[yapin-api-audit skill](../skills/yapin-api-audit/SKILL.md). Copy the complete
+[yapin-api-audit skill](https://github.com/Lost1419/Rappin/blob/main/skills/yapin-api-audit/SKILL.md). Copy the complete
 skill directory, including scripts and references, into your agent's skills
 directory. Its scripts also work directly with Python 3.11+ and no extra packages.
 

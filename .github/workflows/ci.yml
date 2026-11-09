@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        feature: [minimal, cli, gateway, voice, hot-reload, webhook-middleware, metrics, all]
+        feature: [minimal, cli, gateway, voice, hot-reload, webhook-middleware, metrics, metrics-http, all]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
@@ -131,6 +131,14 @@ jobs:
       - name: Check README and every guide
         if: runner.os == 'Linux'
         run: python3 scripts/check-guides.py
+
+      - name: Verify published source package
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo package --locked --offline --all-features
+          rappin_package_version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          cargo check --locked --offline --all-features --all-targets --manifest-path "target/package/rappin-rs-$rappin_package_version/Cargo.toml" --target-dir target
 
       - name: Check minimal library
         run: cargo check --no-default-features
