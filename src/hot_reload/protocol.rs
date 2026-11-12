@@ -64,11 +64,6 @@ pub enum Listener {
 /// }
 /// ```
 pub enum CogEvent {
-    /// Original API 1.4 lifecycle event with lossless resource data.
-    ResourceEvent {
-        /// Parent-validated resource identity and kind.
-        event: crate::ResourceEvent,
-    },
     /// Incoming DM with original message identity.
     DmMessage {
         /// Original authenticated message identity and scope.
@@ -136,6 +131,11 @@ pub enum CogEvent {
     UiInteraction {
         /// Original typed parent-delivered event.
         event: crate::UiInteraction,
+    },
+    /// Original API 1.4 lifecycle event with lossless resource data.
+    ResourceEvent {
+        /// Parent-validated resource identity and kind.
+        event: crate::ResourceEvent,
     },
 }
 impl CogEvent {

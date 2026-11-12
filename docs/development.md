@@ -25,7 +25,7 @@ cargo clippy --locked --all-features --all-targets -- -D warnings
 cargo test --locked --all-features --doc
 cargo test --locked --no-default-features --doc
 python3 scripts/check-guides.py
-cargo +nightly rustdoc --locked --all-features --lib -- -Z unstable-options --show-coverage --output-format json
+cargo +nightly rustdoc --locked --all-features --lib -- -Z unstable-options --coverage --output-format json
 python3 scripts/check-doc-coverage.py target/doc/rappin.json
 ```
 

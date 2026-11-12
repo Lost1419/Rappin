@@ -54,7 +54,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
       - name: Measure public items and examples
-        run: cargo rustdoc --locked --all-features --lib -- -Z unstable-options --show-coverage --output-format json
+        run: cargo rustdoc --locked --all-features --lib -- -Z unstable-options --coverage --output-format json
       - name: Require 100 percent documented items and eligible examples
         run: python3 scripts/check-doc-coverage.py target/doc/rappin.json
 

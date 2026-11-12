@@ -214,10 +214,6 @@ pub struct EventsResponse {
 /// assert!(matches!(event.parse_data().unwrap(), rappin::EventData::Test(_)));
 /// ```
 pub enum EventData {
-    /// A validated channel, thread or category lifecycle event.
-    Resource(
-        #[doc = "Original resource event kind, identity and lossless data."] crate::ResourceEvent,
-    ),
     /// A server/channel message payload.
     Message(#[doc = "Typed original Message event payload."] MessageEvent),
     /// A normalized direct-message payload with no server command interpretation.
@@ -249,6 +245,10 @@ pub enum EventData {
         /// Original event payload, retained without interpretation.
         data: serde_json::Value,
     },
+    /// A validated channel, thread or category lifecycle event.
+    Resource(
+        #[doc = "Original resource event kind, identity and lossless data."] crate::ResourceEvent,
+    ),
 }
 
 /// Typed DM delivery, with no server command interpretation.
