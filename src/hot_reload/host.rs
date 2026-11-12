@@ -533,7 +533,8 @@ impl Generation {
                     protocol: version,
                     manifest,
                 } if (1..=protocol::VERSION).contains(&version)
-                    && (version >= 5 || !manifest.listeners.contains(&Listener::ServerMessage)) => (version, manifest),
+                    && (version >= 5 || !manifest.listeners.contains(&Listener::ServerMessage))
+                    && (version >= 9 || !manifest.listeners.contains(&Listener::ResourceEvent)) => (version, manifest),
                 _ => return Err(error(Protocol, "candidate ready frame has an unsupported protocol", None, true, false, None)),
             };
             manifest.validate().map_err(|cause| error(Registration, "candidate manifest is invalid", Some(&cause), true, false, None))?;
@@ -1045,6 +1046,16 @@ impl Cog for ProcessCog {
             client,
         )
         .await;
+    }
+    async fn on_resource_event(&self, client: &Client, event: &crate::ResourceEvent) -> Result<()> {
+        self.listen_result(
+            Listener::ResourceEvent,
+            CogEvent::ResourceEvent {
+                event: event.clone(),
+            },
+            client,
+        )
+        .await
     }
     async fn on_invite_create(&self, client: &Client, event: &crate::InviteEvent) {
         self.listen(

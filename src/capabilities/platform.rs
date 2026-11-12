@@ -5,7 +5,19 @@ use reqwest::Method;
 pub(super) fn is_platform_operation(name: &str) -> bool {
     matches!(
         name,
-        "get_message_emojis"
+        "resolve_id"
+            | "get_member_permissions"
+            | "get_channel_member_permissions"
+            | "get_role"
+            | "reorder_roles"
+            | "get_channel_overrides"
+            | "set_channel_override"
+            | "delete_channel_override"
+            | "get_category_overrides"
+            | "set_category_override"
+            | "delete_category_override"
+            | "send_sticker"
+            | "get_message_emojis"
             | "get_api_version"
             | "get_api_changelog"
             | "list_emojis"
@@ -100,6 +112,58 @@ impl ValidatedOperation {
     pub fn api_request(&self) -> Result<OperationRequest> {
         let id = |key: &str| self.args[key].as_str().unwrap_or_default();
         let (method, path, public) = match self.name() {
+            "resolve_id" => (Method::GET, format!("/resolve/{}", id("id")), false),
+            "get_member_permissions" => (
+                Method::GET,
+                format!("/servers/{}/members/{}/permissions", id("id"), id("user")),
+                false,
+            ),
+            "get_channel_member_permissions" => (
+                Method::GET,
+                format!("/channels/{}/permissions/{}", id("channel"), id("user")),
+                false,
+            ),
+            "get_role" => (
+                Method::GET,
+                format!("/servers/{}/roles/{}", id("id"), id("role")),
+                false,
+            ),
+            "reorder_roles" => (Method::PATCH, format!("/servers/{}/roles", id("id")), false),
+            "get_channel_overrides" => (
+                Method::GET,
+                format!("/channels/{}/overrides", id("channel")),
+                false,
+            ),
+            "set_channel_override" => (
+                Method::PUT,
+                format!("/channels/{}/overrides/{}", id("channel"), id("target")),
+                false,
+            ),
+            "delete_channel_override" => (
+                Method::DELETE,
+                format!("/channels/{}/overrides/{}", id("channel"), id("target")),
+                false,
+            ),
+            "get_category_overrides" => (
+                Method::GET,
+                format!("/categories/{}/overrides", id("category")),
+                false,
+            ),
+            "set_category_override" => (
+                Method::PUT,
+                format!("/categories/{}/overrides/{}", id("category"), id("target")),
+                false,
+            ),
+            "delete_category_override" => (
+                Method::DELETE,
+                format!("/categories/{}/overrides/{}", id("category"), id("target")),
+                false,
+            ),
+            "send_sticker" => (
+                Method::POST,
+                format!("/channels/{}/messages", id("channel")),
+                false,
+            ),
             "get_api_version" => (Method::GET, "/version".into(), true),
             "get_api_changelog" => (
                 Method::GET,
@@ -163,7 +227,11 @@ impl ValidatedOperation {
             method,
             path,
             public,
-            body: self.args.get("body").cloned(),
+            body: if self.name() == "send_sticker" {
+                Some(json!({"sticker_id":self.args["sticker"]}))
+            } else {
+                self.args.get("body").cloned()
+            },
             files: if self.name() == "send_files" {
                 files(&self.args["files"])?
             } else {

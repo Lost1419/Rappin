@@ -507,7 +507,7 @@ impl<const MIN: u32, const MAX: u32> FromStr for BoundedU32<MIN, MAX> {
 }
 
 /// Pure ID parsing; fetching the corresponding resource remains an explicit async operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 /// # Example
 ///
 /// ```rust
@@ -519,7 +519,7 @@ impl<const MIN: u32, const MAX: u32> FromStr for BoundedU32<MIN, MAX> {
 pub struct UserId(
     #[doc = "Parsed user UUID; existence and permissions are not established."] pub Uuid,
 );
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 /// Channel UUID parser accepting a raw UUID or channel mention.
 ///
 /// # Example
@@ -549,6 +549,27 @@ macro_rules! id_parser {
 }
 id_parser!(UserId, "<@");
 id_parser!(ChannelId, "<#");
+macro_rules! id_conversions {
+    ($name:ident) => {
+        impl From<Uuid> for $name {
+            fn from(id: Uuid) -> Self {
+                Self(id)
+            }
+        }
+        impl From<$name> for Uuid {
+            fn from(id: $name) -> Self {
+                id.0
+            }
+        }
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.0.fmt(f)
+            }
+        }
+    };
+}
+id_conversions!(UserId);
+id_conversions!(ChannelId);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Server permission name. Construction labels a requirement; it does not grant access.
@@ -562,6 +583,15 @@ id_parser!(ChannelId, "<#");
 /// ```
 pub struct Permission(String);
 impl Permission {
+    /// Name the activity-use permission for server grants or resource overrides.
+    ///
+    /// ```rust
+    /// assert_eq!(rappin::Permission::use_activities().as_str(), "use_activities");
+    /// ```
+    pub fn use_activities() -> Self {
+        Self::new("use_activities")
+    }
+
     /// Name a permission requirement without evaluating access.
     ///
     /// # Example

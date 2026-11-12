@@ -196,12 +196,12 @@ impl OperationPolicy for HostEvidence {
 
 #[test]
 fn catalogue_is_offline_filtered_complete_and_has_one_schema_source() {
-    assert_eq!(catalogue().len(), 57);
+    assert_eq!(catalogue().len(), 69);
     let names = catalogue()
         .iter()
         .map(|c| c.name)
         .collect::<std::collections::HashSet<_>>();
-    assert_eq!(names.len(), 57);
+    assert_eq!(names.len(), 69);
     for descriptor in catalogue() {
         let tool = descriptor.tool_definition();
         assert_eq!(tool["inputSchema"], descriptor.input_schema());
@@ -334,7 +334,7 @@ async fn preview_and_local_metadata_need_no_api_access() {
     assert!(api.requests.lock().unwrap().is_empty());
     let call = operation("get_capabilities", json!({}));
     let result = call.execute(&api, &context()).await.unwrap();
-    assert_eq!(result.data["tools"].as_array().unwrap().len(), 57);
+    assert_eq!(result.data["tools"].as_array().unwrap().len(), 69);
     assert!(api.requests.lock().unwrap().is_empty());
     for name in ["ack_events", "poll_events", "doctor"] {
         let args = if name == "ack_events" {

@@ -262,7 +262,7 @@ protocol compatibility. The worker example includes `roll` and `question`.
 
 Protocol v4 adds public metadata reads, fixed 64 KiB upload chunks, DM listeners
 and reaction listeners. Total upload data stays bounded to 12 MiB; ordinary frames
-remain 1 MiB. The current parent accepts protocol v1–v8 workers; newer capabilities
+remain 1 MiB. The current parent accepts protocol v1–v9 workers; newer capabilities
 require corresponding parent support. Upgrade the parent before enabling them.
 DM and native cog reaction hooks return Result and leave failed processing
 uncommitted. See [API 1.2 workflows](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.2.md).
@@ -272,5 +272,7 @@ For fallible natural-language handlers, use `WorkerCog::on_message` and the pare
 handlers retain protocol v4, and new parents continue accepting older workers.
 
 Additional opt-ins use protocol v6 for single-attempt API requests, v7 for select/modal
-interaction APIs, and v8 for consumer operation identities. See [API 1.3 interactions](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.3.md),
+interaction APIs, v8 for consumer operation identities, and v9 for fallible
+`Listener::ResourceEvent` delivery. API 1.4 JSON reads and writes use the existing
+proxy transport. Resource-listener errors propagate to the parent event checkpoint. See [API 1.3 interactions](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.3.md),
 [checked invocation](https://github.com/Lost1419/Rappin/blob/main/docs/checked-invocation.md), and the protocol table in the [Rust bot guide](https://github.com/Lost1419/Rappin/blob/main/docs/rust-bots.md).

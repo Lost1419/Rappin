@@ -119,6 +119,8 @@ pub use availability::{
     AvailabilityStatus,
 };
 pub mod api;
+pub mod resource_api;
+pub use resource_api::{ComputedPermissionsPolicy, ResourceApiExt};
 pub mod capabilities;
 pub mod lookup;
 pub use lookup::{LookupResult, LookupStatus, SearchStop};
@@ -232,6 +234,12 @@ pub mod prelude {
         Permission, PermissionEvaluation, PermissionSnapshot, ResponsePhase, TransportMode,
         TransportStatus, UiApiExt, UiInteractionContext, UserId, WaitError,
     };
+    pub use crate::{
+        ApiObject, CategoryId, EmojiId, MemberPermissions, MessageId, ResolvedObject,
+        ResourceEvent, ResourceEventKind, ResourceOverride, RoleId, RolePosition, ScheduledEventId,
+        ServerId, StickerId, StickerMessage, ThreadId, WebhookId,
+    };
+    pub use crate::{ComputedPermissionsPolicy, ResourceApiExt};
 }
 
 pub use events::{EventConsumer, EventCursor};
@@ -270,3 +278,6 @@ pub use ui_api::{UiApiExt, UiInteractionContext};
 
 #[doc = include_str!("../docs/api-1.3.md")]
 pub mod api_1_3_guide {}
+
+#[doc = include_str!("../docs/api-1.4.md")]
+pub mod api_1_4_guide {}

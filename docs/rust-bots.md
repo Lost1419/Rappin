@@ -273,7 +273,7 @@ also subject to WorkerProject's handler timeout, which includes queueing and API
 work. Waits count toward the 128 requests per invocation budget. In-flight old
 workers can finish their existing waits during reload; subscriptions do not migrate
 into the new process. Structured errors and parent-owned permission lookups are
-available from protocol v3. The current host accepts v1–v8; ordinary new worker
+available from protocol v3. The current host accepts v1–v9; ordinary new worker
 handlers use v4. Upgrade the parent before enabling newer worker capabilities.
 
 | Worker opt-in | Minimum parent protocol |
@@ -282,6 +282,7 @@ handlers use v4. Upgrade the parent before enabling newer worker capabilities.
 | `single_attempt_api()` / `api_once` | v6 |
 | `ui_api()` / `on_ui_interaction` | v7 |
 | `operation_identity()` | v8 |
+| `listen(Listener::ResourceEvent, handler)` | v9 |
 
 Enabling one capability does not implicitly enable the others. See
 [shared SDK workflows](https://github.com/Lost1419/Rappin/blob/main/docs/sdk-workflows.md) for runtime command schemas, registration

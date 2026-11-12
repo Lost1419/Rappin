@@ -54,6 +54,11 @@ impl Event {
     /// assert!(matches!(future.parse_data().unwrap(), rappin::EventData::Unknown { .. }));
     /// ```
     pub fn parse_data(&self) -> Result<EventData, serde_json::Error> {
+        if let Some(resource) = crate::ResourceEvent::from_event(self)
+            .map_err(|e| <serde_json::Error as serde::de::Error>::custom(e.to_string()))?
+        {
+            return Ok(EventData::Resource(resource));
+        }
         match self.kind.as_str() {
             "dm_message" => DmMessageEvent::deserialize(&self.data).map(EventData::DmMessage),
             "message" => match serde::Deserialize::deserialize(&self.data) {
@@ -209,6 +214,10 @@ pub struct EventsResponse {
 /// assert!(matches!(event.parse_data().unwrap(), rappin::EventData::Test(_)));
 /// ```
 pub enum EventData {
+    /// A validated channel, thread or category lifecycle event.
+    Resource(
+        #[doc = "Original resource event kind, identity and lossless data."] crate::ResourceEvent,
+    ),
     /// A server/channel message payload.
     Message(#[doc = "Typed original Message event payload."] MessageEvent),
     /// A normalized direct-message payload with no server command interpretation.

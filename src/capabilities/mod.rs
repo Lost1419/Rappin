@@ -458,10 +458,21 @@ fn metadata(
         "list_members" | "get_member" | "resolve_member" | "search_members" => {
             (S::Server("server"), D::Members)
         }
-        "list_roles" | "create_role" | "edit_role" | "delete_role" => (S::Server("id"), D::Roles),
-        "set_everyone_permissions" | "set_category_permissions" | "clear_category_permissions" => {
+        "list_roles" | "get_role" | "reorder_roles" | "create_role" | "edit_role"
+        | "delete_role" => (S::Server("id"), D::Roles),
+        "get_member_permissions"
+        | "set_everyone_permissions"
+        | "set_category_permissions"
+        | "clear_category_permissions" => (S::Server("id"), D::Permissions),
+        "get_category_overrides" | "set_category_override" | "delete_category_override" => {
             (S::Server("id"), D::Permissions)
         }
+        "resolve_id" => (S::Server("server"), D::Schema),
+        "get_channel_member_permissions"
+        | "get_channel_overrides"
+        | "set_channel_override"
+        | "delete_channel_override" => (S::Channel("channel"), D::Permissions),
+        "send_sticker" => (S::Channel("channel"), D::Messages),
         "list_invites" => (S::Server("id"), D::Members),
         "list_server_events" | "create_server_event" => (S::Server("id"), D::Events),
         "read_messages" | "get_message" | "get_message_emojis" | "send_message"
@@ -552,7 +563,7 @@ fn metadata(
                 .additional_checks
                 .push(ExternalCheck::MessageContentRules);
         }
-        "send_message" => {
+        "send_message" | "send_sticker" => {
             permissions.requester_channel.push("send_messages");
             permissions.bot_channel.push("send_messages");
             permissions
@@ -578,26 +589,39 @@ fn metadata(
             permissions.requester_channel.push("add_reactions");
             permissions.bot_channel.push("add_reactions");
         }
-        "create_role" | "edit_role" | "delete_role" | "set_everyone_permissions" => {
+        "create_role"
+        | "edit_role"
+        | "delete_role"
+        | "reorder_roles"
+        | "set_everyone_permissions" => {
             permissions.requester = P::All(vec!["manage_roles"]);
             permissions.bot = permissions.requester.clone();
             permissions
                 .additional_checks
                 .push(ExternalCheck::RoleHierarchy);
-            if name != "delete_role" {
+            if !matches!(name, "delete_role" | "reorder_roles") {
                 permissions
                     .additional_checks
                     .push(ExternalCheck::GrantablePermissions);
             }
         }
-        "get_channel_permissions"
+        "get_channel_overrides"
+        | "set_channel_override"
+        | "delete_channel_override"
+        | "get_category_overrides"
+        | "set_category_override"
+        | "delete_category_override"
+        | "get_channel_permissions"
         | "set_channel_permissions"
         | "clear_channel_permissions"
         | "set_category_permissions"
         | "clear_category_permissions" => {
             permissions.requester = P::Any(vec!["manage_roles", "manage_channels"]);
             permissions.bot = permissions.requester.clone();
-            if name != "get_channel_permissions" {
+            if !matches!(
+                name,
+                "get_channel_permissions" | "get_channel_overrides" | "get_category_overrides"
+            ) {
                 permissions
                     .additional_checks
                     .push(ExternalCheck::OverrideAuthority);
@@ -606,6 +630,14 @@ fn metadata(
                 permissions
                     .additional_checks
                     .push(ExternalCheck::CategoryScope);
+                if matches!(
+                    name,
+                    "get_category_overrides" | "set_category_override" | "delete_category_override"
+                ) {
+                    permissions
+                        .additional_checks
+                        .push(ExternalCheck::CategoryPermissions);
+                }
             }
         }
         "list_invites" => {
@@ -623,7 +655,19 @@ fn metadata(
     }
     let test_servers_only = matches!(
         name,
-        "get_message_emojis"
+        "resolve_id"
+            | "get_member_permissions"
+            | "get_channel_member_permissions"
+            | "get_role"
+            | "reorder_roles"
+            | "get_channel_overrides"
+            | "set_channel_override"
+            | "delete_channel_override"
+            | "get_category_overrides"
+            | "set_category_override"
+            | "delete_category_override"
+            | "send_sticker"
+            | "get_message_emojis"
             | "send_files"
             | "list_emojis"
             | "create_emoji"

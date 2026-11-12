@@ -165,6 +165,28 @@ impl CogButton {
 /// }
 /// ```
 pub trait Cog: Send + Sync + 'static {
+    /// Process a resource lifecycle event. Errors retain the event's checkpoint barrier.
+    ///
+    /// ```rust
+    /// struct Observer;
+    /// #[async_trait::async_trait]
+    /// impl rappin::Cog for Observer {
+    ///     async fn on_resource_event(&self, _client: &rappin::Client, event: &rappin::ResourceEvent) -> rappin::Result<()> {
+    ///         println!("{} {}", event.kind.as_str(), event.id);
+    ///         Ok(())
+    ///     }
+    ///     fn name(&self) -> &str { "observer" }
+    /// }
+    /// ```
+    async fn on_resource_event(
+        &self,
+        client: &Client,
+        event: &crate::ResourceEvent,
+    ) -> crate::Result<()> {
+        let _ = (client, event);
+        Ok(())
+    }
+
     /// Typed commands retain their parsing, checks and generated help when installed or reloaded.
     /// # Example
     ///

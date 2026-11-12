@@ -1,7 +1,7 @@
 # API 1.3: selects, modals and message emojis
 
 Rappin 0.1.21 adds the public API 1.3 contracts checked on 4 November 2026.
-The bundled OpenAPI snapshot is 1.3.0. Platform flags/permissions still determine
+The current bundled OpenAPI snapshot is 1.4.0. Platform flags/permissions still determine
 availability; a successful local validation or preview does not grant access.
 
 ## Select messages and structured emojis

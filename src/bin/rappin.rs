@@ -54,7 +54,7 @@ struct Args {
 enum Command {
     /// Create an offline Rust bot project; never reads credentials or overwrites a directory.
     Init(scaffold::Options),
-    /// Execute a catalogue API 1.2 operation with JSON arguments (also used by MCP).
+    /// Execute a named catalogue API operation with JSON arguments (also used by MCP).
     Platform {
         operation: String,
         #[arg(long)]
@@ -644,7 +644,7 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
             Ok(json!({"messages":ctx.client()?.send_files(channel,&body,&files).await?}))
         }
         Command::EmojiUpload { server, name, file } => {
-            let file = local_upload(&file, 1_048_576)?;
+            let file = local_upload(&file, 2_097_152)?;
             rappin::validate_emoji_name(&name)?;
             if ctx.dry {
                 return Ok(

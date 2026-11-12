@@ -190,6 +190,29 @@ fn component(
 /// # Ok::<(), rappin::YappinError>(())
 /// ```
 pub fn validate_message(value: &Value, creating: bool) -> Result<()> {
+    if !value["sticker_id"].is_null() {
+        if !creating
+            || value["sticker_id"]
+                .as_str()
+                .and_then(|s| s.parse::<uuid::Uuid>().ok())
+                .is_none()
+        {
+            return Err(invalid("sticker_id", "requires a UUID on message creation"));
+        }
+        let has_text = value["content"].as_str().is_some_and(|s| !s.is_empty());
+        let has_items = ["embeds", "components", "files"].iter().any(|key| {
+            value[*key]
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+        });
+        if has_text || has_items || value["flags"].as_u64().is_some_and(|flags| flags != 0) {
+            return Err(invalid(
+                "sticker_id",
+                "a sticker must occupy the whole message",
+            ));
+        }
+        return Ok(());
+    }
     text(&value["content"], "content", 2000)?;
     embeds(&value["embeds"], 5, 10)?;
     let v2 = value["flags"].as_u64().unwrap_or(0) & 32768 != 0;

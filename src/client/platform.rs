@@ -61,12 +61,12 @@ impl Client {
                 .ok_or_else(|| YappinError::validation("name", "emoji name required"))?;
             validate_emoji_name(name)?;
             if files.len() != 1
-                || files[0].data.len() > 1_048_576
+                || files[0].data.len() > 2_097_152
                 || !matches!(files[0].mime()?, "image/png" | "image/gif" | "image/webp")
             {
                 return Err(YappinError::validation(
                     "files",
-                    "emoji requires one PNG/GIF/WebP up to 1 MiB",
+                    "emoji requires one PNG/GIF/WebP up to 2 MiB",
                 ));
             }
         } else {
@@ -166,7 +166,7 @@ impl Client {
     pub async fn get_emojis(&self, server: Uuid) -> Result<EmojisResponse> {
         ApiExt::get_emojis(self, server).await
     }
-    /// Create a server emoji from a validated base64/data-URL image. Local validation currently caps decoded images at 1 MiB; moderation may return a pending result.
+    /// Create a server emoji from a validated base64/data-URL image. Local validation currently caps decoded images at 2 MiB; moderation may return a pending result.
     ///
     /// # Example
     ///
@@ -186,7 +186,7 @@ impl Client {
     ) -> Result<EmojiCreateResult> {
         ApiExt::create_emoji(self, server, body).await
     }
-    /// Upload one PNG/GIF/WebP emoji through the shared multipart transport. The current SDK cap is 1 MiB, and pending moderation is not a failed creation.
+    /// Upload one PNG/GIF/WebP emoji through the shared multipart transport. The current SDK cap is 2 MiB, and pending moderation is not a failed creation.
     ///
     /// # Example
     ///

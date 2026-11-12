@@ -889,8 +889,10 @@ impl WorkerCog {
             &Wire::Ready {
                 // Existing handlers retain protocol v4 compatibility. Opting into
                 // message outcomes requires a parent that understands protocol v5.
-                protocol: if self.operation_identity {
-                    protocol::VERSION
+                protocol: if self.manifest.listeners.contains(&Listener::ResourceEvent) {
+                    9
+                } else if self.operation_identity {
+                    8
                 } else if self.ui_api || self.manifest.listeners.contains(&Listener::UiInteraction)
                 {
                     7
@@ -936,6 +938,7 @@ impl WorkerCog {
                 CogEvent::MemberLeave { .. } => self.listeners.get(&Listener::MemberLeave),
                 CogEvent::InviteCreate { .. } => self.listeners.get(&Listener::InviteCreate),
                 CogEvent::InviteDelete { .. } => self.listeners.get(&Listener::InviteDelete),
+                CogEvent::ResourceEvent { .. } => self.listeners.get(&Listener::ResourceEvent),
             };
             let active = Arc::new(AtomicBool::new(true));
             let result = match handler {

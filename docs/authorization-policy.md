@@ -1,11 +1,17 @@
-# Public API authorization policy example
+# Legacy evidence policy example
 
-The runnable [access policy example](../examples/access_policy.rs) composes public
-Rappin APIs to collect fresh evidence and preserve unknown checks. It is a
-fail-closed reference, not a complete effective-permission evaluator. **The
-currently documented Yapin API cannot establish enough facts to approve channel
-edits/deletes, destination-category assignment, or category edits/deletes on
-behalf of an arbitrary requester.**
+For API 1.4, use `ResourceApiExt::get_member_permissions` and
+`ComputedPermissionsPolicy` for fresh actor-specific channel access. The
+[API 1.4 guide](api-1.4.md) documents response scope, missing evidence, native/worker
+composition and rollout. Category-specific authority and hierarchy questions may
+still need application policy.
+
+The runnable [access policy example](../examples/access_policy.rs) retains the
+pre-1.4 evidence-composition demonstration for applications on older platform
+contracts. Its manual role/override reads deliberately produce Unknown for
+channel edits and category actions. Its evidence inventory and limitations below
+record the contract checked on 1 November 2026. Select the computed helper for
+current API 1.4 channel authorization.
 
 The source has three parts:
 

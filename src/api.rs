@@ -269,7 +269,7 @@ pub trait ApiExt: Api {
         self.api_json::<_, ()>(Method::GET, &format!("/servers/{server}/emojis"), None)
             .await
     }
-    /// Validate and create a base64/data-URL emoji. The current SDK cap is 1 MiB decoded; a pending moderation result is successful but not yet usable.
+    /// Validate and create a base64/data-URL emoji. The current SDK cap is 2 MiB decoded; a pending moderation result is successful but not yet usable.
     ///
     /// # Example
     ///
@@ -295,7 +295,7 @@ pub trait ApiExt: Api {
         )
         .await
     }
-    /// Validate and upload one PNG/GIF/WebP emoji using the adapter's multipart support. The current SDK cap is 1 MiB.
+    /// Validate and upload one PNG/GIF/WebP emoji using the adapter's multipart support. The current SDK cap is 2 MiB.
     ///
     /// # Example
     ///
@@ -316,12 +316,12 @@ pub trait ApiExt: Api {
     ) -> Result<crate::EmojiCreateResult> {
         crate::validate_emoji_name(name)?;
         file.validate()?;
-        if file.data.len() > 1_048_576
+        if file.data.len() > 2_097_152
             || !matches!(file.mime()?, "image/png" | "image/gif" | "image/webp")
         {
             return Err(crate::YappinError::validation(
                 "file",
-                "emoji requires PNG/GIF/WebP up to 1 MiB",
+                "emoji requires PNG/GIF/WebP up to 2 MiB",
             ));
         }
         Ok(serde_json::from_value(

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.32 — 2026-11-12
+
+- Update the offline OpenAPI contract to 1.4.0. Add typed resource resolution, server/channel computed member permissions, role lookup/reordering and explicit channel/category overrides through Client and the shared native/worker API.
+- Add matching public capability schemas and CLI/MCP operations with server/resource scope checks, rollout requirements and separate actor authorization. ComputedPermissionsPolicy fetches fresh channel access, rejects mismatched identities and retains missing flags as Unknown.
+- Decode channel/thread/category lifecycle notifications into lossless ResourceEvent values. Add fallible native/cog callbacks and opt-in worker protocol v9 delivery. Listener failures preserve original causes and ordered checkpoint barriers. Resource dispatch invalidates configured server lookup caches and affected built-in channel entries.
+- Add opt-in UUID identity types and object-discriminator views. Extend existing user/channel ID parsers with UUID conversion, display and Serde support.
+- Add standalone sticker messages and rich-message sticker validation, including server-bound sticker lookup and rejection of mixed payloads or edits. Accept use_activities in override schemas and increase JSON/multipart emoji validation to 2 MiB decoded.
+
 ## 0.1.31 — 2026-11-08
 
 - Reduce the published archive by keeping integration suites, CI/fuzz tooling, agent skills and historical audit/performance reports in the GitHub distribution. Keep public examples, unit-test support, runtime setup and every schema/guide needed to build the SDK and its reference.

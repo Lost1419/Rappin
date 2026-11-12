@@ -1,26 +1,32 @@
 //! Typed request/response/event payloads shared by the library, workers and capability bindings.
+pub mod api14;
 pub mod channel;
 pub mod command;
 pub mod component;
 pub mod embed;
 pub mod event;
+pub mod identity;
 pub mod interaction;
 pub mod message;
 pub mod platform;
+pub mod resource_event;
 pub mod server;
 pub mod server_features;
 pub mod ui;
 pub mod user;
 pub mod voice;
 
+pub use api14::*;
 pub use channel::*;
 pub use command::*;
 pub use component::*;
 pub use embed::*;
 pub use event::*;
+pub use identity::*;
 pub use interaction::*;
 pub use message::*;
 pub use platform::*;
+pub use resource_event::*;
 pub use server::*;
 pub use server_features::*;
 pub use ui::*;

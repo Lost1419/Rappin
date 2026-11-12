@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub(super) const VERSION: u32 = 8;
+pub(super) const VERSION: u32 = 9;
 const MAX_FRAME: u64 = 1024 * 1024;
 
 /// Optional listeners implemented by a worker in addition to commands and buttons.
@@ -42,6 +42,8 @@ pub enum Listener {
     ServerMessage,
     /// API 1.3 values; opt-in parent protocol v7.
     UiInteraction,
+    /// Fallible API 1.4 resource lifecycle listener, requiring protocol v9.
+    ResourceEvent,
 }
 
 /// Serializable handler input. The bot credential is never part of this message.
@@ -62,6 +64,11 @@ pub enum Listener {
 /// }
 /// ```
 pub enum CogEvent {
+    /// Original API 1.4 lifecycle event with lossless resource data.
+    ResourceEvent {
+        /// Parent-validated resource identity and kind.
+        event: crate::ResourceEvent,
+    },
     /// Incoming DM with original message identity.
     DmMessage {
         /// Original authenticated message identity and scope.
@@ -261,6 +268,9 @@ impl CogEvent {
     /// }
     /// ```
     pub fn channel_id(&self) -> Option<uuid::Uuid> {
+        if let Self::ResourceEvent { event } = self {
+            return (event.kind.object() != "category").then_some(event.id);
+        }
         if let Self::ReactionAdd { event } | Self::ReactionRemove { event } = self {
             return Some(event.channel_id);
         }

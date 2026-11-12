@@ -2420,6 +2420,33 @@ impl Bot {
                     }
                 }
             }
+            EventData::Resource(resource) => {
+                self.handle
+                    .client()
+                    .invalidate_server_lookups(resource.server_id)
+                    .await;
+                self.handle
+                    .client()
+                    .cache()
+                    .invalidate_resource(&resource)
+                    .await;
+                if let Some(ref handler) = self.handle.inner.event_handler {
+                    failure::catch(handler.on_resource_event(self.handle.client(), &resource))
+                        .await?;
+                }
+                let cogs: Vec<_> = self
+                    .handle
+                    .inner
+                    .cogs
+                    .read()
+                    .await
+                    .values()
+                    .cloned()
+                    .collect();
+                for cog in cogs {
+                    failure::catch(cog.on_resource_event(self.handle.client(), &resource)).await?;
+                }
+            }
             EventData::Unknown { kind, data } => {
                 debug!("Received unhandled event type: {}", kind);
                 if let Some(ref h) = self.handle.inner.event_handler {

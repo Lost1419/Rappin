@@ -213,6 +213,33 @@ impl ValidatedOperation {
     fn verify_result_scope(&self, data: &Value, context: &OperationContext) -> Result<()> {
         let uuid = |value: &Value| value.as_str().and_then(|s| s.parse::<Uuid>().ok());
         let valid = match self.name() {
+            "resolve_id" => {
+                uuid(&data["id"]) == Some(self.uuid("id"))
+                    && uuid(&data["server_id"]) == Some(context.server_id())
+            }
+            "get_member_permissions" | "get_channel_member_permissions" => {
+                let channel =
+                    (self.name() == "get_channel_member_permissions").then(|| self.uuid("channel"));
+                serde_json::from_value::<crate::MemberPermissions>(data["permissions"].clone())
+                    .is_ok_and(|p| {
+                        p.validate_scope(context.server_id(), self.uuid("user"), channel)
+                            .is_ok()
+                    })
+            }
+            "get_role" => uuid(&data["role"]["id"]) == Some(self.uuid("role")),
+            "send_sticker" => uuid(&data["message"]["channel_id"]) == Some(self.uuid("channel")),
+            "get_channel_overrides" => crate::resource_api::decode_overrides(
+                data.clone(),
+                Some(self.uuid("channel")),
+                None,
+            )
+            .is_ok(),
+            "get_category_overrides" => crate::resource_api::decode_overrides(
+                data.clone(),
+                None,
+                Some(self.uuid("category")),
+            )
+            .is_ok(),
             "list_emojis" => data["emojis"].as_array().is_some_and(|rows| {
                 rows.iter()
                     .all(|row| uuid(&row["server_id"]) == Some(context.server_id()))

@@ -107,6 +107,12 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
             let body: EditCategoryRequest = serde_json::from_value(args["body"].clone())?;
             args["body"] = serde_json::to_value(body)?;
         }
+        "reorder_roles" => {
+            crate::resource_api::role_order_ids(&args["body"])?;
+        }
+        "send_sticker" => {
+            writes.push(json!({"sticker_id":args["sticker"]}));
+        }
         "create_role" => {
             let body: CreateRole = serde_json::from_value(args["body"].clone())?;
             args["body"] = serde_json::to_value(body)?;
@@ -119,7 +125,10 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
             let body: Permissions = serde_json::from_value(args["body"]["permissions"].clone())?;
             args["body"] = json!({"permissions":body});
         }
-        "set_channel_permissions" | "set_category_permissions" => {
+        "set_channel_permissions"
+        | "set_category_permissions"
+        | "set_channel_override"
+        | "set_category_override" => {
             let body: PermissionOverride = serde_json::from_value(args["body"].clone())?;
             args["body"] = serde_json::to_value(body)?;
         }
@@ -129,6 +138,12 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
             args["body"] = serde_json::to_value(body)?;
         }
         "send_files" => {
+            if !args["body"]["sticker_id"].is_null() {
+                return Err(YappinError::validation(
+                    "sticker_id",
+                    "stickers cannot include file uploads",
+                ));
+            }
             platform::files(&args["files"])?;
             let body: CreateMessage =
                 serde_json::from_value(args.get("body").cloned().unwrap_or_else(|| json!({})))?;
@@ -214,10 +229,12 @@ pub(super) fn collection_key(name: &str) -> Option<&'static str> {
         "search_channels" | "search_members" => Some("matches"),
         "list_emojis" | "get_message_emojis" => Some("emojis"),
         "list_channel_webhooks" | "list_bot_webhooks" => Some("webhooks"),
-        "list_roles" => Some("roles"),
+        "list_roles" | "reorder_roles" => Some("roles"),
         "list_invites" => Some("invites"),
         "list_server_events" => Some("events"),
-        "get_channel_permissions" => Some("overrides"),
+        "get_channel_permissions" | "get_channel_overrides" | "get_category_overrides" => {
+            Some("overrides")
+        }
         _ => None,
     }
 }

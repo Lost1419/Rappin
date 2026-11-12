@@ -284,8 +284,8 @@ async fn typed_dm_collectors_and_callbacks_never_dispatch_server_commands() {
 #[test]
 fn catalogue_uses_upstream_schemas_for_all_new_operations_and_redacts_previews() {
     use rappin::capabilities::*;
-    assert_eq!(bundled_schema()["info"]["version"], "1.3.0");
-    assert_eq!(catalogue().len(), 57);
+    assert_eq!(bundled_schema()["info"]["version"], "1.4.0");
+    assert_eq!(catalogue().len(), 69);
     for name in [
         "list_emojis",
         "create_emoji",

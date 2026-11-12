@@ -46,10 +46,13 @@ pub(super) fn body_schema(name: &str) -> Option<Value> {
         "send_files" => ("post", "/channels/{id}/messages"),
         "send_message" => ("post", "/channels/{id}/messages"),
         "edit_message" => ("patch", "/channels/{id}/messages/{mid}"),
+        "reorder_roles" => ("patch", "/servers/{id}/roles"),
+        "set_channel_override" => ("put", "/channels/{id}/overrides/{target}"),
+        "set_category_override" => ("put", "/categories/{id}/overrides/{target}"),
         "create_role" => ("post", "/servers/{id}/roles"),
         "edit_role" => ("patch", "/servers/{id}/roles/{rid}"),
         "set_everyone_permissions" => ("patch", "/servers/{id}/roles/everyone"),
-        "set_channel_permissions" => ("put", "/channels/{id}/permissions/{role}"),
+        "set_channel_permissions" => ("put", "/channels/{id}/permissions/{target}"),
         "set_category_permissions" => ("put", "/servers/{id}/categories/{cid}/permissions/{role}"),
         "create_server_event" => ("post", "/servers/{id}/events"),
         _ => return None,
@@ -159,6 +162,23 @@ pub(super) fn body_schema(name: &str) -> Option<Value> {
                 json!({"type":"integer","minimum":i32::MIN,"maximum":i32::MAX});
         }
         "edit_category" => schema["required"] = json!(["name"]),
+        "reorder_roles" => {
+            let positions = json!({
+                "type": "array",
+                "items": {
+                    "type": "object", "required": ["id", "position"],
+                    "properties": {
+                        "id": {"type": "string", "format": "uuid"},
+                        "position": {"type": "integer", "minimum": i32::MIN, "maximum": i32::MAX}
+                    },
+                    "additionalProperties": false
+                }
+            });
+            schema = json!({
+                "properties": schema["properties"].clone(),
+                "anyOf": [schema, positions]
+            });
+        }
         _ => (),
     }
     Some(schema)

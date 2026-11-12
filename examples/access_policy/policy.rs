@@ -1,4 +1,5 @@
-//! Read-only evidence composition, not a reconstruction of undocumented ACL rules.
+//! Pre-1.4 evidence-composition reference. Current applications can use
+//! ComputedPermissionsPolicy for authoritative channel checks; see docs/api-1.4.md.
 use async_trait::async_trait;
 use rappin::{capabilities::*, Api, ApiExt, Freshness, Permission, Result, YappinError};
 use reqwest::Method;

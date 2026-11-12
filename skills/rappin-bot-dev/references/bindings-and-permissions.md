@@ -41,6 +41,19 @@ aliases. Existing typed commands should retain their parser and behavior.
 Workers can combine `command_schema`, `WorkerCog::dynamic_command` and `prepare`;
 do not assume native alias routing is identical to worker routing.
 
+## API 1.4 resources
+
+For Rappin 0.1.32+, use `ResourceApiExt` on native/worker contexts and Client for
+computed member permissions, resource resolution, explicit override routes and
+role lookup/reordering. `ComputedPermissionsPolicy` supplies fresh channel access
+for each requested actor and preserves absent flags as Unknown. Compose other
+checks with application policy. Check endpoint rollout and keep platform 403
+causes. See [API 1.4 resources](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.4.md).
+
+Resource lifecycle listeners use `on_resource_event` natively or
+`Listener::ResourceEvent` in workers. That worker opt-in needs a protocol v9 parent.
+Return structured errors for incomplete work so the event checkpoint stays blocked.
+
 ## Establish authority separately for each principal
 
 Treat `AuthorizationReport` as Allowed, Denied or Unknown with independent

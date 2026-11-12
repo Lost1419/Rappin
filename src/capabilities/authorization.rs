@@ -657,7 +657,10 @@ impl ValidatedOperation {
         {
             return Ok(report);
         }
-        if self.entry.availability.test_servers_only {
+        let sticker = self.args["sticker"]
+            .as_str()
+            .or_else(|| self.args["body"]["sticker_id"].as_str());
+        if self.entry.availability.test_servers_only || sticker.is_some() {
             match context.test_server {
                 Some(true) => report.record(
                     "test_server_availability",
@@ -862,6 +865,82 @@ impl ValidatedOperation {
         report: &mut AuthorizationReport,
     ) -> bool {
         let server = context.server_id;
+        if self.name() == "resolve_id" {
+            let id = self.uuid("id");
+            match api
+                .request("GET".parse().unwrap(), &format!("/resolve/{id}"), None)
+                .await
+            {
+                Ok(value) => {
+                    let valid =
+                        value["id"].as_str().and_then(|s| s.parse::<Uuid>().ok()) == Some(id);
+                    let scope = value["server_id"]
+                        .as_str()
+                        .and_then(|s| s.parse::<Uuid>().ok());
+                    if !valid || scope.is_some_and(|scope| scope != server) {
+                        report.record(
+                            "resolved_scope",
+                            Principal::Context,
+                            CheckResolution::denied("resolved identity is outside the bound scope"),
+                            None,
+                        );
+                        return false;
+                    }
+                    if scope.is_none() {
+                        report.record("resolved_scope", Principal::Context, CheckResolution::unknown("resolver did not establish the bound server; use the raw typed API for a host-authorized global lookup"), None);
+                        return false;
+                    }
+                    report.record(
+                        "resolved_scope",
+                        Principal::Context,
+                        CheckResolution::allowed("resolved resource belongs to the bound server"),
+                        None,
+                    );
+                }
+                Err(error) => {
+                    report.failure("resolved_scope", Principal::Context, error);
+                    return false;
+                }
+            }
+        }
+        if let Some(sticker) = self.args["sticker"]
+            .as_str()
+            .or_else(|| self.args["body"]["sticker_id"].as_str())
+        {
+            match api
+                .request("GET".parse().unwrap(), &format!("/resolve/{sticker}"), None)
+                .await
+            {
+                Ok(value)
+                    if value["id"].as_str() == Some(sticker)
+                        && value["object"] == "sticker"
+                        && value["server_id"]
+                            .as_str()
+                            .and_then(|s| s.parse::<Uuid>().ok())
+                            == Some(server) =>
+                {
+                    report.record(
+                        "sticker_scope",
+                        Principal::Context,
+                        CheckResolution::allowed("sticker belongs to the bound server"),
+                        None,
+                    );
+                }
+                Ok(_) => {
+                    report.record(
+                        "sticker_scope",
+                        Principal::Context,
+                        CheckResolution::denied("sticker identity or server does not match"),
+                        None,
+                    );
+                    return false;
+                }
+                Err(error) => {
+                    report.failure("sticker_scope", Principal::Context, error);
+                    return false;
+                }
+            }
+        }
         if !self.platform_scopes(api, context, channel, report).await {
             return false;
         }
@@ -870,6 +949,17 @@ impl ValidatedOperation {
             .or_else(|| self.args["target"].as_str().filter(|s| *s != "everyone"))
             .into_iter()
             .collect();
+        if self.name() == "reorder_roles" {
+            if let Some(ids) = self.args["body"]["ids"].as_array() {
+                roles.extend(ids.iter().filter_map(Value::as_str));
+            } else if let Some(positions) = self.args["body"].as_array() {
+                roles.extend(
+                    positions
+                        .iter()
+                        .filter_map(|position| position["id"].as_str()),
+                );
+            }
+        }
         if self.name() == "edit_channel" {
             for key in ["role_ids", "post_role_ids"] {
                 if let Some(ids) = self.args["body"][key].as_array() {

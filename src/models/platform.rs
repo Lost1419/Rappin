@@ -186,7 +186,7 @@ pub struct EmojiCreateResult {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
-/// JSON emoji-creation payload. The current SDK bound is 1 MiB decoded, even where newer platform docs allow a larger image.
+/// JSON emoji-creation payload. The decoded image bound is 2 MiB.
 ///
 /// # Example
 ///
@@ -198,7 +198,7 @@ pub struct EmojiCreateResult {
 pub struct CreateEmoji {
     /// Requested emoji name; local validation accepts 2 through 32 ASCII letters, digits or underscores.
     pub name: String,
-    /// Base64 image bytes or a PNG/GIF/WebP data URL. This SDK currently validates a 1 MiB decoded maximum.
+    /// Base64 image bytes or a PNG/GIF/WebP data URL. This SDK currently validates a 2 MiB decoded maximum.
     pub image: String,
 }
 impl CreateEmoji {
@@ -217,7 +217,7 @@ impl CreateEmoji {
             image: image.into(),
         }
     }
-    /// Check the name, base64/data-URL form and current 1 MiB decoded SDK bound. This does not perform server image scanning.
+    /// Check the name, base64/data-URL form and current 2 MiB decoded SDK bound. This does not perform server image scanning.
     ///
     /// # Example
     ///
@@ -247,19 +247,19 @@ impl CreateEmoji {
         } else {
             &self.image
         };
-        if image.len() > 1_398_104 {
+        if image.len() > 2_796_204 {
             return Err(YappinError::validation(
                 "image",
-                "maximum decoded emoji image is 1 MiB",
+                "maximum decoded emoji image is 2 MiB",
             ));
         }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(image)
             .map_err(|_| YappinError::validation("image", "invalid base64"))?;
-        if bytes.is_empty() || bytes.len() > 1_048_576 {
+        if bytes.is_empty() || bytes.len() > 2_097_152 {
             return Err(YappinError::validation(
                 "image",
-                "requires 1 through 1048576 decoded bytes",
+                "requires 1 through 2097152 decoded bytes",
             ));
         }
         Ok(())

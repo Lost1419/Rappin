@@ -22,6 +22,28 @@ use crate::models::{BotProfile, MemberJoinEvent, MemberLeaveEvent, ReactionEvent
 /// }
 /// ```
 pub trait EventHandler: Send + Sync + 'static {
+    /// Process a resource lifecycle event. Errors retain the event's checkpoint barrier.
+    ///
+    /// ```rust
+    /// struct Observer;
+    /// #[async_trait::async_trait]
+    /// impl rappin::EventHandler for Observer {
+    ///     async fn on_resource_event(&self, _client: &rappin::Client, event: &rappin::ResourceEvent) -> rappin::Result<()> {
+    ///         println!("{} {}", event.kind.as_str(), event.id);
+    ///         Ok(())
+    ///     }
+    /// }
+    /// ```
+    async fn on_resource_event(
+        &self,
+        client: &Client,
+        event: &crate::ResourceEvent,
+    ) -> crate::Result<()> {
+        self.on_unknown_event(client, event.kind.as_str(), &event.data)
+            .await;
+        Ok(())
+    }
+
     /// An invite was created (Manage Server; test servers only).
     /// # Example
     ///

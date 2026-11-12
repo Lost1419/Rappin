@@ -313,6 +313,9 @@ impl From<SelectMenu> for UiComponent {
 /// body.validate(true).unwrap();
 /// ```
 pub struct UiMessageBody {
+    /// Standalone server sticker for creation. Text, embeds, components and files must be empty.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sticker_id: Option<Uuid>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

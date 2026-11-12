@@ -477,6 +477,15 @@ impl Cache {
         self.channels.read().await.get(id).cloned()
     }
 
+    pub(crate) async fn invalidate_resource(&self, event: &crate::ResourceEvent) {
+        let mut channels = self.channels.write().await;
+        if event.kind.object() == "category" {
+            channels.retain(|_, channel| channel.server_id != Some(event.server_id));
+        } else {
+            channels.remove(&event.id);
+        }
+    }
+
     /// Returns a list of all channels currently cached.
     /// # Example
     ///

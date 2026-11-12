@@ -48,7 +48,7 @@ Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.31"
+rappin-rs = "0.1.32"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -221,6 +221,7 @@ settings and compact local development commands are in the build-size guide.
 - [Draining and retirement](docs/draining-and-retirement.md): API lifetimes during shutdown, polling authority, and explicit assessment of uncertain work.
 - [Gateway API requests](docs/gateway-requests.md): opt-in JSON request transport, bounded concurrency, and uncertain-write handling.
 - [Transport and caching](docs/transport-and-cache.md): API hosts, retries, custom caches, and prefixes.
+- [API 1.4 resources](docs/api-1.4.md): computed member permissions, object resolution, role ordering, explicit overrides and resource lifecycle events.
 - [API 1.3 interactions](docs/api-1.3.md): select menus, modal forms, slash interaction mode, and message emoji discovery.
 - [Server management](docs/server-management.md): roles, permission overrides, invites, counts, and scheduled events.
 - [Availability and role hierarchy](docs/availability-and-hierarchy.md): bounded read recovery and fresh, independent requester/bot role checks.

@@ -231,6 +231,12 @@ pub trait UiApiExt: Api {
         kind: InteractionCallbackType,
         body: &UiMessageBody,
     ) -> Result<()> {
+        if body.sticker_id.is_some() {
+            return Err(YappinError::validation(
+                "sticker_id",
+                "send stickers through the channel message endpoint",
+            ));
+        }
         if body.reply_to.is_some() {
             return Err(YappinError::validation(
                 "reply_to",

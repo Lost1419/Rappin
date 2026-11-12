@@ -127,6 +127,12 @@ application data in compiler text. Builds, procedural macros and workers execute
 trusted code; neither compilation failure nor timeout makes them a sandbox or
 proves they produced no effects.
 
+API 1.4 computed permission reads can establish requester and bot access
+independently. Use `get_member_permissions` with the actual server/user/channel.
+A missing flag stays unknown. Rollout-related 403 responses concern availability.
+Resource lifecycle worker listeners require protocol v9. See the
+[API 1.4 guide](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.4.md).
+
 ## API origin
 
 Doctor reports configured and active hosts. Default REST failover is restricted

@@ -587,7 +587,7 @@ impl Client {
         }
     }
 
-    async fn invalidate_server_lookups(&self, server: Uuid) {
+    pub(crate) async fn invalidate_server_lookups(&self, server: Uuid) {
         self.cache().invalidate_server_lookups(server).await;
         if let Some(backend) = &self.inner.lookup_backend {
             backend.invalidate_server(server).await;
