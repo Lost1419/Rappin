@@ -439,7 +439,8 @@ async fn reload_removes_old_buttons_and_listeners_and_installs_new_ones() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn timed_out_exchange_cannot_be_reused_and_reload_recovers_the_cog() {
     let project = Project::new().await;
-    project.code("slow", &["ping"], 1000, None).await;
+    let blocked = project.0.join("blocked");
+    project.code("slow", &["ping"], 0, Some(&blocked)).await;
     let (base, mut requests, http) = support::mock(vec![support::response(200, json!({}))]).await;
     let bot = Bot::builder("yb_fixture")
         .base_url(base)
@@ -448,10 +449,14 @@ async fn timed_out_exchange_cannot_be_reused_and_reload_recovers_the_cog() {
         .build();
     bot.cache().set_me(me()).await;
     let mut spec = project.spec();
-    spec.handler_timeout = Duration::from_millis(100);
+    // The file gate keeps the first invocation pending until the transport expires.
+    // The replacement uses the same budget, including Windows process/HTTP scheduling.
+    spec.handler_timeout = Duration::from_secs(5);
     let reload = HotReload::load(bot.handle(), spec).await.unwrap();
     let error = bot.process_event(event("ping")).await.unwrap_err();
     assert!(error.to_string().contains("timed out"));
+    assert!(blocked.exists());
+    assert!(requests.try_recv().is_err());
     let error = bot.process_event(event("ping")).await.unwrap_err();
     assert!(error.to_string().contains("no longer usable"));
     project.code("recovered", &["ping"], 0, None).await;

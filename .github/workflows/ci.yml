@@ -22,7 +22,7 @@ jobs:
         run: python -B -m unittest discover -s skills/yapin-api-audit/scripts -p 'test_*.py'
 
   minimum-rust:
-    name: Rust 1.88 / ${{ matrix.feature }}
+    name: Rust 1.89 / ${{ matrix.feature }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -30,7 +30,7 @@ jobs:
         feature: [minimal, cli, gateway, voice, hot-reload, webhook-middleware, metrics, metrics-http, all]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: dtolnay/rust-toolchain@1.89.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv-${{ matrix.feature }}
@@ -44,6 +44,24 @@ jobs:
             all) cargo test --locked --all-features --lib ;;
             *) cargo check --locked --no-default-features --features "$FEATURE" --all-targets ;;
           esac
+
+      - name: Check fresh consumer resolution on minimum Rust
+        if: matrix.feature == 'all'
+        shell: bash
+        run: |
+          mkdir -p target/msrv-consumer/src
+          cat > target/msrv-consumer/Cargo.toml <<'EOF'
+          [package]
+          name = "rappin-msrv-consumer"
+          version = "0.0.0"
+          edition = "2021"
+          rust-version = "1.89"
+          [workspace]
+          [dependencies]
+          rappin-rs = { path = "../..", features = ["cli", "gateway", "voice", "hot-reload", "webhook-middleware", "metrics", "metrics-http"] }
+          EOF
+          echo 'fn main() { let _ = rappin::Client::new("unused-msrv-fixture"); }' > target/msrv-consumer/src/main.rs
+          cargo check --manifest-path target/msrv-consumer/Cargo.toml --target-dir target --config 'resolver.incompatible-rust-versions="fallback"'
 
   documentation-coverage:
     name: Documentation coverage

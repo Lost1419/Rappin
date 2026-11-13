@@ -41,14 +41,14 @@ and optional encrypted voice playback.
 
 ## Get started
 
-Requires Rust 1.88 or newer. Create a bot in **Yapin → Settings → Developer**,
+Requires Rust 1.89 or newer. Create a bot in **Yapin → Settings → Developer**,
 copy its token, and add it to your server.
 
 Add these dependencies to your Rust project:
 
 ```toml
 [dependencies]
-rappin-rs = "0.1.32"
+rappin-rs = "0.1.33"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

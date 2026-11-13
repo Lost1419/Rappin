@@ -37,7 +37,7 @@ server-aware resolver when needed. Explicit slash-command dispatch remains avail
 | `worker` | `hot-reload` | Parent with a separately compiled, watched `examples/worker.rs` |
 
 Generated projects depend on the generating CLI's Rappin version and declare Rust
-1.88. Tests compile each template against the checkout under test; when using a
+1.89. Tests compile each template against the checkout under test; when using a
 published CLI, Cargo resolves its published dependency normally. Building can
 require network access even though generation itself does not.
 

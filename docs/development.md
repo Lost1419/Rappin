@@ -6,7 +6,7 @@ examples, unit-test support, runtime setup script and build-required guides/sche
 Historical reports and agent skills are distributed through GitHub.
 
 The library keeps optional features off by default. CI checks the minimal build,
-each optional feature separately, and the combined build on Rust 1.88. The checked-in
+each optional feature separately, and the combined build on Rust 1.89. The checked-in
 lockfile selects compatible dependencies; downstream applications control their own
 lockfiles and Cargo resolver. If a newer transitive dependency raises its minimum
 Rust version, select a compatible version or use Cargo's MSRV-aware resolution.

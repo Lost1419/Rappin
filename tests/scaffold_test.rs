@@ -106,6 +106,11 @@ fn every_generated_template_compiles_offline_with_its_declared_features() {
         );
         let manifest = root.join("Cargo.toml");
         let mut text = std::fs::read_to_string(&manifest).unwrap();
+        let generated: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(
+            generated["package"]["rust-version"].as_str(),
+            Some(env!("CARGO_PKG_RUST_VERSION"))
+        );
         // Compile generated code against the exact checkout under test, without registry publication.
         text.push_str(&format!(
             "\n[patch.crates-io]\nrappin-rs = {{ path = {:?} }}\n",

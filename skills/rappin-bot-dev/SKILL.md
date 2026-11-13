@@ -10,7 +10,7 @@ For a new bot, copy the bundled [starter](assets/starter), rename
 `Cargo.toml.template` to `Cargo.toml`, set `YAPPER_BOT_TOKEN` in the environment,
 and run `cargo run`. Do not overwrite an existing project with the starter.
 
-The package is `rappin-rs`; imports use `rappin`. Rust 1.88+ is required. Ordinary
+The package is `rappin-rs`; imports use `rappin`. Rust 1.89+ is required. Ordinary
 commands are async closures returning `rappin::Result<()>`. Use `CommandSpec` /
 `FromArgs` for typed parsing, bounds, aliases, checks and help. Do not invent
 derive macros. The default library needs neither CLI/Clap nor Node.

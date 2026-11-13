@@ -79,14 +79,15 @@ fn files(options: &Options) -> Result<BTreeMap<&'static str, String>> {
 name = "{name}"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "{rust_version}"
 default-run = "{name}"
 
 [dependencies]
 rappin = {{ package = "rappin-rs", version = "{}"{features} }}
 tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
 "#,
-        env!("CARGO_PKG_VERSION")
+        env!("CARGO_PKG_VERSION"),
+        rust_version = env!("CARGO_PKG_RUST_VERSION")
     );
     let mut main = String::from("use rappin::prelude::*;\n\n#[tokio::main]\nasync fn main() -> Result<()> {\n    let token = std::env::var(\"YAPPER_BOT_TOKEN\")\n        .map_err(|_| YappinError::Config(\"set YAPPER_BOT_TOKEN\".into()))?;\n    let bot = Bot::builder(token)\n");
     // Debug formatting produces a Rust string literal, including Rust Unicode escapes.

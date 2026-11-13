@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.33 — 2026-11-13
+
+- Raise the declared minimum Rust version to 1.89 to match UUID 1.29.2. Test locked builds and fresh consumer dependency resolution on that compiler.
+- Make the worker timeout/recovery fixture block on a file gate. Give the replacement worker a five-second execution budget so Windows scheduling does not turn a successful recovery into a 100 ms timeout failure.
+
 ## 0.1.32 — 2026-11-12
 
 - Update the offline OpenAPI contract to 1.4.0. Add typed resource resolution, server/channel computed member permissions, role lookup/reordering and explicit channel/category overrides through Client and the shared native/worker API.
