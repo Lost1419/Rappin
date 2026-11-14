@@ -5,13 +5,83 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Classify changed files
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: scope
+        name: Determine CI scope
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          event_name = os.environ['GITHUB_EVENT_NAME']
+          with open(os.environ['GITHUB_EVENT_PATH']) as source:
+              event = json.load(source)
+
+          docs_only = event_name == 'workflow_dispatch'
+          if event_name == 'pull_request':
+              pr = event['pull_request']
+              revision = f"{pr['base']['sha']}...{pr['head']['sha']}"
+              diff = ['git', 'diff', revision]
+          elif event_name == 'push':
+              diff = ['git', 'diff', event['before'], event['after']]
+          else:
+              diff = None
+
+          if diff is not None:
+              result = subprocess.run(
+                  [*diff, '--name-only', '--no-renames', '-z', '--'],
+                  capture_output=True,
+              )
+              paths = result.stdout.rstrip(b'\0').split(b'\0')
+              # If the baseline is unavailable (for example, a new branch), run full CI.
+              docs_only = result.returncode == 0 and all(
+                  path.endswith(b'.md') and (b'/' not in path or path.startswith(b'docs/'))
+                  for path in paths
+              )
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print(f'docs_only={str(docs_only).lower()}', file=output)
+          PY
+
+  guides:
+    name: README and guides
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fetch --locked
+      - run: python3 scripts/check-guides.py
+
   api-audit-skill:
     name: API audit skill tests
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +93,8 @@ jobs:
 
   minimum-rust:
     name: Rust 1.89 / ${{ matrix.feature }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -65,6 +137,8 @@ jobs:
 
   documentation-coverage:
     name: Documentation coverage
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,6 +152,8 @@ jobs:
 
   fuzz-smoke:
     name: Bounded offline fuzz smoke
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -98,6 +174,8 @@ jobs:
 
   compatibility:
     name: Public API compatibility
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -107,6 +185,8 @@ jobs:
 
   test:
     name: Build & Test
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -146,10 +226,6 @@ jobs:
       - name: Check minimal documentation examples
         run: cargo test --locked --no-default-features --doc
 
-      - name: Check README and every guide
-        if: runner.os == 'Linux'
-        run: python3 scripts/check-guides.py
-
       - name: Verify published source package
         if: runner.os == 'Linux'
         shell: bash
@@ -163,6 +239,8 @@ jobs:
 
   audit:
     name: Security Audit
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
