@@ -133,7 +133,7 @@ local validation. Inline CLI/MCP arguments remain bounded to 128 KiB.
 
 Override validation accepts `use_activities`. JSON and multipart emoji helpers
 accept up to 2 MiB decoded. Worker uploads use the existing chunked transport and
-frame bounds. The CLI's `emojis upload` command accepts the same image bound.
+frame bounds. The CLI's `emoji-upload` command accepts the same image bound.
 
 ## CLI, MCP and permanent commands
 

@@ -153,7 +153,7 @@ rappin upload "$CHANNEL" ./report.txt ./picture.png --body-file message.json
 rappin emoji-upload "$SERVER" party ./party.gif --dry-run
 ```
 
-The 56-operation catalogue is shared by Rust, CLI and MCP. New named operations:
+The shared Rust, CLI and MCP catalogue includes these upload and webhook operations:
 `get_api_version`, `get_api_changelog`, `send_files`, `list_emojis`, `create_emoji`,
 `edit_emoji`, `delete_emoji`, `list_channel_webhooks`, `list_bot_webhooks`,
 `create_bot_webhook`, `delete_bot_webhook`, `post_bot_webhook`.

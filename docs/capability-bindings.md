@@ -19,7 +19,7 @@ already implement it; `WorkerContext` requires the existing `hot-reload` feature
 
 | API | Contract |
 |---|---|
-| `catalogue() -> &'static [Capability]` | Shared 56-operation inventory used by CLI/MCP |
+| `catalogue() -> &'static [Capability]` | Shared operation inventory used by CLI/MCP |
 | `capability(name) -> Option<&'static Capability>` | Exact operation lookup |
 | `filtered_catalogue(&CapabilityFilter)` | Select by names, domains, write/read, library support and test-server restriction |
 | `CapabilityFilter::validate(name, &Value)` | Enforce the selected inventory and validate a call |

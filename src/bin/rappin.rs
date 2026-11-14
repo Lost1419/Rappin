@@ -564,7 +564,12 @@ async fn run(args: Args, ctx: &Context) -> Result<Value> {
         offset: args.offset.map(|n| n as usize),
     };
     agent_output::validate(&limits, key)?;
+    let preview = ctx.dry
+        && matches!(&args.command, Command::Platform { operation, .. } if agent_catalog::is_write(operation));
     let result = run_inner(args, ctx).await?;
+    if preview {
+        return Ok(result);
+    }
     match key {
         Some(key) => agent_output::apply(redact(result, ctx.token.as_deref()), key, &limits),
         None => Ok(result),

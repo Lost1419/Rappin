@@ -3,7 +3,9 @@ pub use rappin::capabilities::output::{apply, validate, Limits};
 pub fn collection(command: &Command) -> Option<&'static str> {
     match command {
         Command::Platform { operation, .. } => match operation.as_str() {
-            "list_emojis" => Some("emojis"),
+            "list_emojis" | "get_message_emojis" => Some("emojis"),
+            "get_channel_overrides" | "get_category_overrides" => Some("overrides"),
+            "reorder_roles" => Some("roles"),
             "list_channel_webhooks" | "list_bot_webhooks" => Some("webhooks"),
             _ => None,
         },

@@ -1071,3 +1071,85 @@ async fn api13_mcp_select_payloads_and_message_emoji_lookup_preserve_data() {
     http.await.unwrap();
     mcp.close().await;
 }
+
+#[tokio::test]
+async fn platform_collection_limits_match_advertised_schemas() {
+    let id = Uuid::nil();
+    let rows = json!([{"id": id}, {"id": Uuid::from_u128(1)}]);
+    let cases = [
+        (
+            "get_message_emojis",
+            json!({"channel":id,"message":id}),
+            "emojis",
+            format!("GET /channels/{id}/messages/{id}/emojis "),
+        ),
+        (
+            "get_channel_overrides",
+            json!({"channel":id}),
+            "overrides",
+            format!("GET /channels/{id}/overrides "),
+        ),
+        (
+            "get_category_overrides",
+            json!({"id":id,"category":id}),
+            "overrides",
+            format!("GET /categories/{id}/overrides "),
+        ),
+        (
+            "reorder_roles",
+            json!({"id":id,"body":{"ids":[id]}}),
+            "roles",
+            format!("PATCH /servers/{id}/roles "),
+        ),
+    ];
+    let (base, mut requests, server) = mock(
+        cases
+            .iter()
+            .flat_map(|(_, _, key, _)| {
+                std::iter::repeat_with(|| response(200, json!({(*key): rows}))).take(2)
+            })
+            .collect(),
+    )
+    .await;
+    let cfg = config();
+    let arguments = temp("json");
+    let mut mcp = Mcp::new(Some(&base), None);
+    for (index, (name, mut args, key, route)) in cases.into_iter().enumerate() {
+        std::fs::write(&arguments, args.to_string()).unwrap();
+        let (ok, cli_result) = cli(
+            &cfg,
+            Some(&base),
+            &[
+                "platform",
+                name,
+                "--arguments-file",
+                arguments.to_str().unwrap(),
+                "--max-items",
+                "1",
+            ],
+        )
+        .await;
+        assert!(ok, "{name}: {cli_result}");
+        assert!(requests.recv().await.unwrap().starts_with(&route));
+        args["max_items"] = json!(1);
+        mcp.call(index as u64 + 1, name, args).await;
+        let result = mcp.recv().await;
+        assert_eq!(result["result"]["structuredContent"], cli_result, "{name}");
+        assert_eq!(data(&result)[key].as_array().unwrap().len(), 1);
+        assert_eq!(data(&result)["truncated"], true);
+        assert!(requests.recv().await.unwrap().starts_with(&route));
+    }
+    mcp.call(
+        5,
+        "reorder_roles",
+        json!({"id":id,"body":{"ids":[id]},"max_items":1,"dry_run":true}),
+    )
+    .await;
+    let result = mcp.recv().await;
+    assert_eq!(result["result"]["isError"], false);
+    assert_eq!(data(&result)["arguments"]["body"]["ids"], json!([id]));
+    server.await.unwrap();
+    mcp.close().await;
+    std::fs::remove_file(arguments).unwrap();
+    std::fs::remove_file(cfg).unwrap();
+}
