@@ -1001,9 +1001,9 @@ impl<'de> Deserialize<'de> for Component {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let v = serde_json::Value::deserialize(d)?;
         let known = if v["type"] == "row" || v["type"] == 1 {
-            serde_json::from_value(v.clone()).map(Self::Row)
+            ActionRow::deserialize(&v).map(Self::Row)
         } else {
-            serde_json::from_value(v.clone()).map(Self::V2)
+            LayoutComponent::deserialize(&v).map(Self::V2)
         };
         Ok(match known {
             Ok(component) if serde_json::json!(&component) == v => component,

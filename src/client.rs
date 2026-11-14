@@ -2709,7 +2709,9 @@ impl Client {
         token: &str,
         callback: &InteractionCallback,
     ) -> Result<()> {
-        callback.validate()?;
+        let mut value = serde_json::to_value(callback)?;
+        crate::validation::validate_callback(&value, callback.kind)?;
+        crate::utils::strip_proxy_metadata(&mut value);
         let interaction_id: String =
             url::form_urlencoded::byte_serialize(interaction_id.as_bytes())
                 .collect::<String>()
@@ -2721,7 +2723,7 @@ impl Client {
             .request_json(
                 Method::POST,
                 &format!("/interactions/{}/{}/callback", interaction_id, token),
-                Some(callback),
+                Some(&value),
             )
             .await?;
         Ok(())

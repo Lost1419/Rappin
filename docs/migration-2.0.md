@@ -129,12 +129,20 @@ retain the event barrier. Logging an error alone cannot establish completion.
 
 ## Rebuild workers
 
-New worker command specs require protocol v10 for schemas, aliases and groups.
-Upgrade the parent before enabling those definitions. The host negotiates protocol
-support before installing routes. Existing protocols retain their wire versions.
-Built-in checks execute through the parent-authenticated API. Custom
-`CommandCheck` implementations need `check_worker` for worker use. Preparation
-reports worker checks as deferred, then execution evaluates them again.
+All workers require protocol 11. Rebuild the parent and every worker together.
+Protocols 1–10 are rejected during startup before candidate routes are published.
+UI callbacks, operation identities and single-attempt requests are available on
+every route. Remove `.ui_api()`, `.operation_identity()` and `.single_attempt_api()`.
+Typed and runtime worker commands share registration, aliases, groups and schemas.
+Custom `CommandCheck` implementations provide `check_worker`. Preparation reports
+worker checks as deferred and execution evaluates them before the handler.
+
+`InteractionCallback` now stores its payload in `message: EditMessage`. Existing
+constructors and builder methods remain available. Direct field access uses
+`callback.message.content`, `embeds`, `components` and `flags`. Wire JSON stays flat.
+`send_long_message` returns `Error::PartialWrite` on a failed part, including
+confirmed messages, the failed step and the original structured cause. Each part
+is submitted once, including when the server supplies retry advice.
 
 Initialize worker state with `WorkerCog::state`. Process-local values are created
 by each generation. Your application owns database state and durable receipts.

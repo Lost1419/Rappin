@@ -290,6 +290,25 @@ impl crate::EditMessage {
         validate_message(&serde_json::to_value(self)?, false)
     }
 }
+pub(crate) fn validate_callback(value: &Value, kind: crate::InteractionCallbackType) -> Result<()> {
+    use crate::InteractionCallbackType::*;
+    if kind == Ack {
+        return Ok(());
+    }
+    if kind == Ephemeral
+        && (value.get("components").is_some()
+            || value["flags"]
+                .as_u64()
+                .is_some_and(|flags| flags & 32768 != 0))
+    {
+        return Err(invalid(
+            "components",
+            "ephemeral replies do not support components",
+        ));
+    }
+    validate_message(value, kind != Update)
+}
+
 impl crate::InteractionCallback {
     /// Check typed payload bounds before an API call.
     ///
@@ -301,19 +320,7 @@ impl crate::InteractionCallback {
     /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn validate(&self) -> Result<()> {
-        use crate::InteractionCallbackType::*;
-        if self.kind == Ack {
-            return Ok(());
-        }
-        if self.kind == Ephemeral
-            && (self.flags.is_some_and(|v| v & 32768 != 0) || self.components.is_some())
-        {
-            return Err(invalid(
-                "components",
-                "ephemeral replies do not support components",
-            ));
-        }
-        validate_message(&serde_json::to_value(self)?, self.kind != Update)
+        validate_callback(&serde_json::to_value(self)?, self.kind)
     }
 }
 /// Split long output on Unicode character boundaries, preferring newlines or spaces.

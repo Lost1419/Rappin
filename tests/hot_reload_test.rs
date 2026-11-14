@@ -37,7 +37,7 @@ impl Project {
         marker: Option<&Path>,
         listeners: &[&str],
     ) {
-        let ready = json!({"op":"ready","protocol":1,"manifest":{"name":"fixture","commands":commands.iter().map(|n|Command::new(*n,version)).collect::<Vec<_>>(),"buttons":[format!("{version}:")],"listeners":listeners}});
+        let ready = json!({"op":"ready","protocol":11,"manifest":{"name":"fixture","commands":commands.iter().map(|n|Command::new(*n,version)).collect::<Vec<_>>(),"buttons":[format!("{version}:")],"listeners":listeners}});
         let api = json!({"op":"api","method":"POST","path":"/channels/00000000-0000-0000-0000-000000000000/messages","body":{"content":version}});
         let source=r#"
 use std::io::{BufRead, Write};
@@ -61,7 +61,7 @@ fn main(){
         }
         println!("{}",__API__);std::io::stdout().flush().unwrap();
         let result=lines.next().unwrap().unwrap();assert!(result.contains("\"op\":\"api_result\""));assert!(!result.contains("yb_private_fixture"));
-        println!("{{\"op\":\"done\",\"error\":null}}");std::io::stdout().flush().unwrap();
+        println!("{{\"op\":\"done\",\"disposition\":\"continue\",\"error\":null}}");std::io::stdout().flush().unwrap();
     }
 }
 "#.replace("__READY__",&serde_json::to_string(&ready.to_string()).unwrap())
@@ -613,7 +613,7 @@ async fn common(api:&(impl Api+?Sized),path:&str)->Result<Value> {
 }
 #[tokio::main]
 async fn main()->Result<()> {
-    let schema:CommandSchema=serde_json::from_value(json!({"name":"dynamic","description":"Runtime","arguments":[{"name":"n","kind":{"type":"integer","min":1,"max":10}}]}))?;
+    let schema:CommandSchema=serde_json::from_value(json!({"name":"tools dynamic","aliases":["dynamic"],"description":"Runtime","arguments":[{"name":"n","kind":{"type":"integer","min":1,"max":10}}]}))?;
     WorkerCog::new("fixture")
         .command("probe","Probe",|ctx|async move {
             let error=common(&ctx,"/denied").await.unwrap_err();
@@ -667,6 +667,17 @@ async fn main()->Result<()> {
         .lookup_cache(rappin::CachePolicy::new(8, Duration::from_secs(60)))
         .sync_commands(false)
         .log(false)
+        .command("prepare", "Prepare runtime schema", |ctx| async move {
+            let bot = ctx.bot().unwrap();
+            assert!(bot.prepare_invocation(&ctx, "dynamic", "11").await.is_err());
+            let plan = bot.prepare_invocation(&ctx, "dynamic", "3").await?;
+            assert!(plan
+                .report()
+                .assessed
+                .iter()
+                .any(|s| s.contains("argument schema")));
+            bot.invoke_prepared(plan).await.into_result()
+        })
         .build()
         .expect("valid bot configuration");
     bot.cache().set_me(me()).await;
@@ -674,11 +685,11 @@ async fn main()->Result<()> {
     let error = bot.process_event(event("probe")).await.unwrap_err();
     assert_eq!(error.status_code(), Some(418));
     assert_eq!(error.to_json()["kind"], "api");
-    let mut valid = event("dynamic");
+    let mut valid = event("prepare");
     valid.data["args"] = json!("3");
     bot.process_event(valid).await.unwrap();
-    let mut invalid = event("dynamic");
-    invalid.data["args"] = json!("11");
+    let mut invalid = event("tools");
+    invalid.data["args"] = json!("dynamic 11");
     bot.process_event(invalid).await.unwrap();
     for _ in 0..8 {
         let request = requests.recv().await.unwrap();
@@ -1011,12 +1022,22 @@ async fn candidate_timeout_exit_and_protocol_phases_are_explicit() {
 
     for (version, commands, phase) in [
         (
+            1,
+            vec![Command::new("ping", "test")],
+            rappin::ReloadPhase::Protocol,
+        ),
+        (
+            10,
+            vec![Command::new("ping", "test")],
+            rappin::ReloadPhase::Protocol,
+        ),
+        (
             99,
             vec![Command::new("ping", "test")],
             rappin::ReloadPhase::Protocol,
         ),
         (
-            3,
+            11,
             vec![Command::new("INVALID!", "test")],
             rappin::ReloadPhase::Registration,
         ),
@@ -1054,10 +1075,8 @@ async fn structured_candidate_failure_crosses_worker_and_callback_without_implic
     let original = Error::HotReload {
         failure: Box::new(failure.clone()),
     };
-    let ready = json!({"op":"ready","protocol":3,"manifest":{"name":"fixture","commands":[Command::new("proposal","test")],"buttons":[],"listeners":[]}}).to_string();
-    let done =
-        json!({"op":"done","error":original.to_string(),"structured_error":original.to_remote()})
-            .to_string();
+    let ready = json!({"op":"ready","protocol":11,"manifest":{"name":"fixture","commands":[Command::new("proposal","test")],"buttons":[],"listeners":[]}}).to_string();
+    let done = json!({"op":"done","error":original.to_remote()}).to_string();
     let source = format!(
         r#"use std::io::{{BufRead,Write}};fn main() {{ println!("{{}}",{ready:?});std::io::stdout().flush().unwrap();for line in std::io::stdin().lock().lines() {{ if line.unwrap().contains("shutdown") {{break;}} println!("{{}}",{done:?}); std::io::stdout().flush().unwrap(); }} }}"#
     );
@@ -1112,7 +1131,7 @@ use serde_json::json;
 use uuid::Uuid;
 #[tokio::main]
 async fn main()->Result<()> {
-    WorkerCog::new("role-fixture").single_attempt_api()
+    WorkerCog::new("role-fixture")
         .command("delete", "Delete", |ctx| async move {
             let target=match ctx.args() { "protected"=>11,"missing"=>12,_=>10 };
             let operation=capability("delete_role").unwrap().validate(&json!({"id":Uuid::nil(),"role":Uuid::from_u128(target)}))?;
@@ -1213,41 +1232,6 @@ async fn main()->Result<()> {
         .iter()
         .any(|r| r.starts_with(&format!("GET /servers/{requester}/members/{bot_id} "))));
     http.abort();
-
-    // Omitting the protocol opt-in fails before any DELETE is sent.
-    // The opt-in check itself needs no network or token.
-    let legacy = r#"
-use rappin::*;
-#[tokio::main]
-async fn main()->Result<()> {
-    WorkerCog::new("role-fixture").command("no-once","Check opt-in",|ctx|async move {
-        let error=ctx.request_once("DELETE".parse().unwrap(),"/roles",None).await.unwrap_err();
-        assert!(error.to_string().contains("single_attempt_api"));Ok(())
-    }).command("no-ui","Check UI opt-in",|ctx|async move {
-        let event:InteractionEvent=serde_json::from_value(serde_json::json!({"id":"fixture","token":"fixture","type":"button"}))?;
-        let error=ctx.show_modal(&event,&Modal::new("f","F").input(TextInput::short("n","N"))).await.unwrap_err();
-        assert!(error.to_string().contains("ui_api"));Ok(())
-    }).run().await
-}
-"#;
-    tokio::fs::write(project.0.join("src/main.rs"), legacy)
-        .await
-        .unwrap();
-    let bot = Bot::builder("fixture")
-        .base_url("http://127.0.0.1:1")
-        .sync_commands(false)
-        .log(false)
-        .build()
-        .expect("valid bot configuration");
-    bot.cache().set_me(me()).await;
-    let _reload = HotReload::load(
-        bot.handle(),
-        WorkerProject::new(project.0.join("Cargo.toml"), "role-policy-worker").offline(true),
-    )
-    .await
-    .unwrap();
-    bot.process_event(event("no-once")).await.unwrap();
-    bot.process_event(event("no-ui")).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -6,7 +6,6 @@ use uuid::Uuid;
 #[tokio::main]
 async fn main() -> Result<()> {
     WorkerCog::new("role-assessment")
-        .single_attempt_api()
         .command(
             "role-check",
             "Assess a role UUID without deleting it",

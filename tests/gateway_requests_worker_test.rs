@@ -35,7 +35,7 @@ async fn worker_single_attempt_requests_keep_partial_and_unknown_outcomes_withou
         r#"
 use rappin::{*, hot_reload::WorkerCog};
 #[tokio::main] async fn main()->Result<()> {
- WorkerCog::new("gateway-worker").single_attempt_api()
+ WorkerCog::new("gateway-worker")
  .command("once","request",|ctx|async move {ctx.api_once("POST","/mutate",None).await?;Ok(())})
  .command("partial","partial",|ctx|async move {
     let receipt=ctx.api_once("POST","/mutate",None).await?;

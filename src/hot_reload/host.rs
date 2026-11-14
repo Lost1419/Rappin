@@ -439,13 +439,27 @@ impl Drop for DirectoryCleanup {
     }
 }
 struct Generation {
-    protocol: u32,
     manifest: Manifest,
     io: Mutex<Io>,
     directory: PathBuf,
     pid: Option<u32>,
     timeout: Duration,
 }
+fn api_result(client: &Client, result: Result<Value>) -> Result<Wire> {
+    Ok(match result {
+        Ok(value) => Wire::ApiResult {
+            value: Some(client.worker_output(value)),
+            error: None,
+        },
+        Err(error) => Wire::ApiResult {
+            value: None,
+            error: Some(serde_json::from_value(
+                client.worker_output(error.to_json()),
+            )?),
+        },
+    })
+}
+
 impl Generation {
     async fn start(
         executable: &Path,
@@ -527,20 +541,12 @@ impl Generation {
                     return Err(Error::HotReload { failure: Box::new(failure) });
                 }
             };
-            let (version, manifest) = match ready {
-                Wire::Ready {
-                    protocol: version,
-                    manifest,
-                } if (1..=protocol::VERSION).contains(&version)
-                    && (version >= 5 || !manifest.listeners.contains(&Listener::ServerMessage))
-                    && (version >= 9 || !manifest.listeners.contains(&Listener::ResourceEvent))
-                    && (version >= 10 || manifest.schemas.is_empty()
-                        && manifest.help.iter().all(|info| info.aliases.is_empty() && !info.name.contains(' '))) => (version, manifest),
-                _ => return Err(error(Protocol, "candidate ready frame has an unsupported protocol", None, true, false, None)),
+            let manifest = match ready {
+                Wire::Ready { protocol: version, manifest } if version == protocol::VERSION => manifest,
+                _ => return Err(error(Protocol, "candidate requires protocol 11; rebuild the parent and worker together", None, true, false, None)),
             };
             manifest.validate().map_err(|cause| error(Registration, "candidate manifest is invalid", Some(&cause), true, false, None))?;
             Ok(Arc::new(Self {
-                protocol: version,
                 manifest,
                 io: Mutex::new(Io {
                     child: Some(child),
@@ -575,14 +581,6 @@ impl Generation {
         client: &Client,
         operation_id: Option<crate::OperationId>,
     ) -> Result<crate::MessageDisposition> {
-        if operation_id.is_some() && self.protocol < 8 {
-            return Err(Error::validation(
-                "invocation.operation_id",
-                "worker requires protocol v8 operation identity support",
-            ));
-        }
-        let expects_disposition = matches!(&event, CogEvent::Message { .. })
-            && self.manifest.listeners.contains(&Listener::ServerMessage);
         let completed = std::sync::atomic::AtomicBool::new(false);
         let call = async {
             let mut io = self.io.lock().await;
@@ -645,18 +643,10 @@ impl Generation {
                             Ok(event) => Wire::EventResult {
                                 event: Some(Box::new(event)),
                                 error: None,
-                                structured_error: None,
                             },
                             Err(error) => Wire::EventResult {
                                 event: None,
-                                error: Some(
-                                    client
-                                        .worker_output(Value::String(error.to_string()))
-                                        .as_str()
-                                        .unwrap_or("event wait failed")
-                                        .into(),
-                                ),
-                                structured_error: Some(serde_json::from_value(
+                                error: Some(serde_json::from_value(
                                     client.worker_output(error.to_json()),
                                 )?),
                             },
@@ -667,36 +657,21 @@ impl Generation {
                         )
                         .await?;
                     }
-                    Wire::Done {
-                        disposition,
-                        error,
-                        structured_error,
-                    } => {
-                        if expects_disposition
-                            && error.is_none()
-                            && structured_error.is_none()
-                            && disposition.is_none()
+                    Wire::Done { disposition, error } => {
+                        if error.is_none() && disposition.is_none()
+                            || error.is_some() && disposition.is_some()
                         {
                             return Err(protocol::protocol_error());
                         }
                         io.poisoned = false;
                         completed.store(true, Ordering::SeqCst);
-                        if let Some(error) = structured_error {
+                        if let Some(error) = error {
                             let error: crate::RemoteError = serde_json::from_value(
                                 client.worker_output(serde_json::to_value(error)?),
                             )?;
                             return Err(error.into());
                         }
-                        return match error {
-                            Some(error) => Err(Error::Config(
-                                client
-                                    .worker_output(Value::String(error))
-                                    .as_str()
-                                    .unwrap_or("worker failed")
-                                    .into(),
-                            )),
-                            None => Ok(disposition.unwrap_or(crate::MessageDisposition::Continue)),
-                        };
+                        return disposition.ok_or_else(protocol::protocol_error);
                     }
                     request @ (Wire::Api { .. }
                     | Wire::ApiOnce { .. }
@@ -744,26 +719,7 @@ impl Generation {
                             }
                             _ => unreachable!(),
                         };
-                        let message = match response {
-                            Ok(value) => Wire::ApiResult {
-                                value: Some(client.worker_output(value)),
-                                error: None,
-                                structured_error: None,
-                            },
-                            Err(error) => Wire::ApiResult {
-                                value: None,
-                                structured_error: Some(serde_json::from_value(
-                                    client.worker_output(error.to_json()),
-                                )?),
-                                error: Some(
-                                    client
-                                        .worker_output(Value::String(error.to_string()))
-                                        .as_str()
-                                        .unwrap_or("API request failed")
-                                        .into(),
-                                ),
-                            },
-                        };
+                        let message = api_result(client, response)?;
                         protocol::write(
                             io.input.as_mut().ok_or_else(protocol::protocol_error)?,
                             &message,
@@ -792,26 +748,10 @@ impl Generation {
                             },
                         )
                         .await;
-                        let message = match result {
-                            Ok(snapshot) => Wire::ApiResult {
-                                value: Some(client.worker_output(serde_json::to_value(snapshot)?)),
-                                error: None,
-                                structured_error: None,
-                            },
-                            Err(error) => Wire::ApiResult {
-                                value: None,
-                                error: Some(
-                                    client
-                                        .worker_output(Value::String(error.to_string()))
-                                        .as_str()
-                                        .unwrap_or("permission lookup failed")
-                                        .into(),
-                                ),
-                                structured_error: Some(serde_json::from_value(
-                                    client.worker_output(error.to_json()),
-                                )?),
-                            },
-                        };
+                        let message = api_result(
+                            client,
+                            result.and_then(|snapshot| Ok(serde_json::to_value(snapshot)?)),
+                        )?;
                         protocol::write(
                             io.input.as_mut().ok_or_else(protocol::protocol_error)?,
                             &message,
@@ -1274,7 +1214,6 @@ impl HotReload {
                 generation: generation.clone(),
             },
             false,
-            generation.protocol >= 8,
         )
         .await?;
         Ok(Self {
@@ -1399,7 +1338,6 @@ impl HotReload {
                 generation: generation.clone(),
             },
             true,
-            generation.protocol >= 8,
         )
         .await?;
         *self.inner.current.write().await = Some(generation);

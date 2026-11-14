@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub(super) const VERSION: u32 = 10;
+pub(super) const VERSION: u32 = 11;
 const MAX_FRAME: u64 = 1024 * 1024;
 
 /// Optional listeners implemented by a worker in addition to commands and buttons.
@@ -19,7 +19,7 @@ const MAX_FRAME: u64 = 1024 * 1024;
 /// let worker = WorkerCog::new("observer").listen(Listener::ReactionAdd, |_ctx| async move { eprintln!("Reaction observed"); Ok(()) });
 /// ```
 pub enum Listener {
-    /// Legacy server-message observer.
+    /// Server-message listener completing after a successful fallible handler.
     Message,
     /// Incoming direct-message listener; never server-command dispatch.
     DmMessage,
@@ -27,7 +27,7 @@ pub enum Listener {
     ReactionAdd,
     /// Reaction-removed listener.
     ReactionRemove,
-    /// Legacy component interaction observer.
+    /// Button-only component interaction listener.
     Interaction,
     /// Server membership join observer.
     MemberJoin,
@@ -40,9 +40,9 @@ pub enum Listener {
     /// Opt-in fallible server-message listener with explicit completion.
     /// Appended to preserve the discriminants of existing public variants.
     ServerMessage,
-    /// API 1.3 values; opt-in parent protocol v7.
+    /// Typed button, select, modal and command interaction values.
     UiInteraction,
-    /// Fallible API 1.4 resource lifecycle listener, requiring protocol v9.
+    /// Fallible resource lifecycle listener.
     ResourceEvent,
 }
 
@@ -419,9 +419,8 @@ pub(super) enum Wire {
     },
     EventResult {
         event: Option<Box<crate::Event>>,
-        error: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        structured_error: Option<crate::RemoteError>,
+        error: Option<crate::RemoteError>,
     },
     Shutdown,
     Ready {
@@ -445,16 +444,14 @@ pub(super) enum Wire {
     },
     ApiResult {
         value: Option<Value>,
-        error: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        structured_error: Option<crate::RemoteError>,
+        error: Option<crate::RemoteError>,
     },
     Done {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         disposition: Option<crate::MessageDisposition>,
-        error: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        structured_error: Option<crate::RemoteError>,
+        error: Option<crate::RemoteError>,
     },
 }
 pub(super) fn protocol_error() -> Error {
@@ -659,7 +656,7 @@ mod frame_properties {
         fn valid_frames_round_trip_and_do_not_consume_the_next_frame(id in any::<u64>()) {
             let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
             runtime.block_on(async {
-                let first = Wire::EventResult { event: None, error: Some(id.to_string()), structured_error: None };
+                let first = Wire::EventResult { event: None, error: Some(Error::Config(id.to_string()).to_remote()) };
                 let mut bytes = Vec::new();
                 write(&mut bytes, &first).await.unwrap();
                 write(&mut bytes, &first).await.unwrap();

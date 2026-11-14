@@ -155,15 +155,16 @@ makes no API request idempotent and does not make a payment safe to resend.
 
 ### Workers and compatibility
 
-Workers require `hot-reload` and explicit `WorkerCog::operation_identity()`, which
-advertises **protocol v8**. Upgrade the parent first. Existing worker modes v4–v7
-and ordinary explicit calls remain unchanged. `single_attempt_api()` and `ui_api()`
-keep their independent opt-ins; operation identity does not enable either helper.
+Workers require `hot-reload` and protocol 11. Every worker supports operation
+identities, single-attempt API requests and UI callbacks. Rebuild the parent and
+workers together. The old `operation_identity`, `single_attempt_api` and `ui_api`
+capability switches are removed. Consumer operation IDs retain their separate
+authenticated-message provenance and authorization boundaries.
 
 ```rust,no_run
 use rappin::{hot_reload::WorkerCog, Result};
 async fn worker() -> Result<()> {
-    WorkerCog::new("records").operation_identity()
+    WorkerCog::new("records")
         .command("record", "Record a recipient", |ctx| async move {
             let operation = ctx.operation_id(); // Option<&OperationId>
             let message = ctx.event.message().expect("command message");

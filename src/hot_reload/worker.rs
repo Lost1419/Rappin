@@ -24,8 +24,22 @@ struct Connection {
     input: BufReader<Stdin>,
     output: Stdout,
     poisoned: bool,
-    allow_single_attempt: bool,
-    allow_ui: bool,
+}
+
+impl Connection {
+    fn finish_response<T>(
+        &mut self,
+        value: Option<T>,
+        error: Option<crate::RemoteError>,
+    ) -> Result<T> {
+        let result = match (value, error) {
+            (Some(value), None) => Ok(value),
+            (None, Some(error)) => Err(error.into()),
+            _ => return Err(protocol::protocol_error()),
+        };
+        self.poisoned = false;
+        result
+    }
 }
 
 /// Rust handler context inside a worker. Authenticated JSON API requests go through the parent.
@@ -112,19 +126,8 @@ impl WorkerContext {
         )
         .await?;
         match protocol::read(&mut connection.input).await? {
-            Wire::EventResult {
-                event,
-                error,
-                structured_error,
-            } => {
-                connection.poisoned = false;
-                if let Some(error) = structured_error {
-                    return Err(error.into());
-                }
-                if let Some(error) = error {
-                    return Err(Error::Config(error));
-                }
-                event.map(|e| *e).ok_or_else(protocol::protocol_error)
+            Wire::EventResult { event, error } => {
+                connection.finish_response(event.map(|event| *event), error)
             }
             _ => Err(protocol::protocol_error()),
         }
@@ -190,14 +193,6 @@ impl WorkerContext {
         };
         let event = self.wait_request(filter, timeout, Some(message)).await?;
         serde_json::from_value(event.data).map_err(Into::into)
-    }
-    pub(crate) async fn require_ui_api(&self) -> Result<()> {
-        self.ensure_active()?;
-        if self.connection.lock().await.allow_ui {
-            Ok(())
-        } else {
-            Err(Error::validation("ui_api","worker UI callbacks require WorkerCog::ui_api() or on_interaction and a protocol v7 parent"))
-        }
     }
     /// Borrow extended select/modal/command values for a UI listener event.
     ///
@@ -281,12 +276,6 @@ impl WorkerContext {
     /// ```
     pub async fn api_once(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
         self.ensure_active()?;
-        if !self.connection.lock().await.allow_single_attempt {
-            return Err(Error::validation(
-                "request_once",
-                "worker requires WorkerCog::single_attempt_api() and a protocol v6 parent",
-            ));
-        }
         self.proxy(Wire::ApiOnce {
             method: method.into(),
             path: path.into(),
@@ -378,20 +367,7 @@ impl WorkerContext {
     }
     async fn api_result(connection: &mut Connection) -> Result<Value> {
         match protocol::read(&mut connection.input).await? {
-            Wire::ApiResult {
-                value,
-                error,
-                structured_error,
-            } => {
-                connection.poisoned = false;
-                if let Some(error) = structured_error {
-                    return Err(error.into());
-                }
-                match error {
-                    Some(error) => Err(Error::Config(error)),
-                    None => Ok(value.unwrap_or(Value::Null)),
-                }
-            }
+            Wire::ApiResult { value, error } => connection.finish_response(value, error),
             _ => Err(protocol::protocol_error()),
         }
     }
@@ -408,7 +384,7 @@ impl WorkerContext {
         Self::api_result(&mut connection).await
     }
 
-    fn ensure_active(&self) -> Result<()> {
+    pub(crate) fn ensure_active(&self) -> Result<()> {
         if self.active.load(Ordering::SeqCst) {
             Ok(())
         } else {
@@ -514,7 +490,9 @@ impl WorkerContext {
     /// }
     /// ```
     pub async fn respond_callback(&self, callback: InteractionCallback) -> Result<()> {
-        callback.validate()?;
+        let mut value = serde_json::to_value(&callback)?;
+        crate::validation::validate_callback(&value, callback.kind)?;
+        crate::utils::strip_proxy_metadata(&mut value);
         let event = self
             .event
             .interaction()
@@ -531,7 +509,7 @@ impl WorkerContext {
                 encode(&event.id),
                 encode(&event.token)
             ),
-            Some(serde_json::to_value(callback)?),
+            Some(value),
         )
         .await?;
         Ok(())
@@ -594,19 +572,15 @@ impl WorkerContext {
 /// // Reserve stdout for IPC. Call run only in the executable started by the parent.
 /// ```
 pub struct WorkerCog {
-    command_specs: bool,
     state: crate::state::State,
     manifest: Manifest,
     commands: HashMap<String, Handler>,
     buttons: HashMap<String, Handler>,
     listeners: HashMap<Listener, Handler>,
-    single_attempt_api: bool,
-    ui_api: bool,
-    operation_identity: bool,
 }
 impl WorkerCog {
     /// Register the same command metadata, parser and built-in checks used by
-    /// native cogs. Supports aliases and command groups. Requires host protocol10.
+    /// native cogs. Supports aliases and command groups. Requires host protocol 11.
     ///
     /// ```rust
     /// use rappin::{WorkerCog, CommandSpec, Check};
@@ -614,39 +588,37 @@ impl WorkerCog {
     ///     CommandSpec::<()>::new("status", "Show status").alias("health").check(Check::server_only()),
     ///     |ctx, ()| async move { ctx.reply("Ready").await });
     /// ```
-    pub fn command_spec<A, F, Fut>(mut self, spec: crate::CommandSpec<A>, handler: F) -> Self
+    pub fn command_spec<A, F, Fut>(self, spec: crate::CommandSpec<A>, handler: F) -> Self
     where
         A: crate::FromArgs,
         F: Fn(WorkerContext, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
-        self.command_specs = true;
-        self.operation_identity = true;
-        self.single_attempt_api = true;
-        self.ui_api = true;
         let info = spec.info;
-        if let Some(arguments) = A::schema() {
-            self.manifest.schemas.push(crate::CommandSchema {
-                name: info.name.clone(),
-                description: info.description.clone(),
-                aliases: info.aliases.clone(),
-                arguments,
-            });
-        }
-        self.manifest.help.push(info.clone());
+        let schema = A::schema().map(|arguments| crate::CommandSchema {
+            name: info.name.clone(),
+            description: info.description.clone(),
+            aliases: info.aliases.clone(),
+            arguments,
+        });
         let handler = Arc::new(handler);
         let checks = Arc::new(spec.checks);
-        self.command(info.name, info.description, move |ctx| {
-            let handler = handler.clone();
-            let checks = checks.clone();
-            async move {
-                let args = ctx.parse::<A>()?;
-                for check in checks.iter() {
-                    check.check_worker(&ctx).await?;
-                }
-                handler(ctx, args).await
-            }
-        })
+        self.register_command(
+            info,
+            schema,
+            Arc::new(move |ctx| {
+                let handler = handler.clone();
+                let checks = checks.clone();
+                Box::pin(async move {
+                    let args = ctx.parse::<A>()?;
+                    for check in checks.iter() {
+                        check.check_worker(&ctx).await?;
+                    }
+                    handler(ctx, args).await?;
+                    Ok(crate::MessageDisposition::Continue)
+                })
+            }),
+        )
     }
     /// Register process-local state for this worker generation. Durable state
     /// belongs in application storage.
@@ -667,7 +639,7 @@ impl WorkerCog {
     /// let worker = WorkerCog::new("utilities").command_typed("status", "Show status", |ctx, (): ()| async move { ctx.reply("Ready").await });
     /// ```
     pub fn command_typed<A, F, Fut>(
-        mut self,
+        self,
         name: impl Into<String>,
         description: impl Into<String>,
         handler: F,
@@ -677,22 +649,7 @@ impl WorkerCog {
         F: Fn(WorkerContext, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
-        let name = name.into();
-        let description = description.into();
-        self.manifest.help.push(crate::commands::CommandInfo {
-            name: name.clone(),
-            description: description.clone(),
-            aliases: vec![],
-            arguments: A::describe(),
-        });
-        let handler = Arc::new(handler);
-        self.command(name, description, move |ctx| {
-            let handler = handler.clone();
-            async move {
-                let args = ctx.parse::<A>()?;
-                handler(ctx, args).await
-            }
-        })
+        self.command_spec(crate::CommandSpec::<A>::new(name, description), handler)
     }
     /// Create a worker definition without starting IPC or executing handlers.
     ///
@@ -707,7 +664,6 @@ impl WorkerCog {
     /// ```
     pub fn new(name: impl Into<String>) -> Self {
         Self {
-            command_specs: false,
             state: Default::default(),
             manifest: Manifest {
                 name: name.into(),
@@ -720,13 +676,10 @@ impl WorkerCog {
             commands: HashMap::new(),
             buttons: HashMap::new(),
             listeners: HashMap::new(),
-            single_attempt_api: false,
-            ui_api: false,
-            operation_identity: false,
         }
     }
     /// Runtime argument schemas on workers use the same parser as native commands.
-    /// Worker routes are single command names; use native commands for aliases/subcommands.
+    /// Worker routes support the same aliases and grouped names as native commands.
     /// # Example
     ///
     /// ```rust
@@ -737,36 +690,29 @@ impl WorkerCog {
     ///     })
     /// }
     /// ```
-    pub fn dynamic_command<F, Fut>(
-        mut self,
-        schema: crate::CommandSchema,
-        handler: F,
-    ) -> Result<Self>
+    pub fn dynamic_command<F, Fut>(self, schema: crate::CommandSchema, handler: F) -> Result<Self>
     where
         F: Fn(WorkerContext, crate::CommandValues) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         schema.validate()?;
-        if schema.name.contains(' ') || !schema.aliases.is_empty() {
-            return Err(crate::CommandError::Definition(
-                "workers require a single command name without local aliases".into(),
-            )
-            .into());
-        }
-        self.manifest.help.push(schema.info());
-        let name = schema.name.clone();
-        let description = schema.description.clone();
-        let schema = Arc::new(schema);
+        let info = schema.info();
+        let metadata = schema.clone();
+        let parser = Arc::new(schema);
         let handler = Arc::new(handler);
-        self = self.command(name, description, move |ctx| {
-            let schema = schema.clone();
-            let handler = handler.clone();
-            async move {
-                let values = schema.parse(ctx.args())?;
-                handler(ctx, values).await
-            }
-        });
-        Ok(self)
+        Ok(self.register_command(
+            info,
+            Some(metadata),
+            Arc::new(move |ctx| {
+                let schema = parser.clone();
+                let handler = handler.clone();
+                Box::pin(async move {
+                    let values = schema.parse(ctx.args())?;
+                    handler(ctx, values).await?;
+                    Ok(crate::MessageDisposition::Continue)
+                })
+            }),
+        ))
     }
     /// Bind a single-name worker command using parent-authenticated context.
     ///
@@ -780,7 +726,7 @@ impl WorkerCog {
     /// // Reserve stdout for IPC. Call run only in the executable started by the parent.
     /// ```
     pub fn command<F, Fut>(
-        mut self,
+        self,
         name: impl Into<String>,
         description: impl Into<String>,
         handler: F,
@@ -789,19 +735,42 @@ impl WorkerCog {
         F: Fn(WorkerContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
-        let name = name.into();
-        self.manifest
-            .commands
-            .push(Command::new(&name, description));
-        self.commands.insert(
-            name,
+        let info = crate::CommandInfo {
+            name: name.into(),
+            description: description.into(),
+            aliases: vec![],
+            arguments: vec![],
+        };
+        self.register_command(
+            info,
+            None,
             Arc::new(move |ctx| {
                 let future = handler(ctx);
-                Box::pin(async move { future.await.map(|()| crate::MessageDisposition::Continue) })
+                Box::pin(async move {
+                    future.await?;
+                    Ok(crate::MessageDisposition::Continue)
+                })
             }),
-        );
+        )
+    }
+
+    fn register_command(
+        mut self,
+        info: crate::CommandInfo,
+        schema: Option<crate::CommandSchema>,
+        handler: Handler,
+    ) -> Self {
+        self.manifest
+            .commands
+            .push(Command::new(&info.name, &info.description));
+        self.commands.insert(info.name.clone(), handler);
+        self.manifest.help.push(info);
+        if let Some(schema) = schema {
+            self.manifest.schemas.push(schema);
+        }
         self
     }
+
     /// Bind a custom-ID prefix to a fallible interaction handler.
     ///
     /// # Example
@@ -897,43 +866,6 @@ impl WorkerCog {
     {
         self.listen(Listener::UiInteraction, handler)
     }
-    /// Require a protocol v7 parent for UI callbacks from existing button/command routes.
-    /// # Example
-    ///
-    /// ```rust
-    /// use rappin::hot_reload::WorkerCog;
-    /// let worker = WorkerCog::new("utilities").ui_api();
-    /// // Upgrade the parent before enabling the required protocol capability.
-    /// ```
-    pub fn ui_api(mut self) -> Self {
-        self.ui_api = true;
-        self
-    }
-    /// Require parent protocol v6 before starting handlers that use request_once.
-    /// # Example
-    ///
-    /// ```rust
-    /// use rappin::hot_reload::WorkerCog;
-    /// let worker = WorkerCog::new("utilities").single_attempt_api();
-    /// // Upgrade the parent before enabling the required protocol capability.
-    /// ```
-    pub fn single_attempt_api(mut self) -> Self {
-        self.single_attempt_api = true;
-        self
-    }
-    /// Opt into protocol v8 operation metadata. Upgrade the parent first.
-    /// This does not enable single-attempt API or UI helpers implicitly.
-    /// # Example
-    ///
-    /// ```rust
-    /// use rappin::hot_reload::WorkerCog;
-    /// let worker = WorkerCog::new("utilities").operation_identity();
-    /// // Upgrade the parent before enabling the required protocol capability.
-    /// ```
-    pub fn operation_identity(mut self) -> Self {
-        self.operation_identity = true;
-        self
-    }
     /// Serve the parent-owned stdio protocol until shutdown; execute only trusted worker code and await all required effects.
     ///
     /// # Example
@@ -953,30 +885,11 @@ impl WorkerCog {
             input: BufReader::new(tokio::io::stdin()),
             output: tokio::io::stdout(),
             poisoned: false,
-            allow_single_attempt: self.single_attempt_api,
-            allow_ui: self.ui_api || self.manifest.listeners.contains(&Listener::UiInteraction),
         }));
         protocol::write(
             &mut connection.lock().await.output,
             &Wire::Ready {
-                // Existing handlers retain protocol v4 compatibility. Opting into
-                // message outcomes requires a parent that understands protocol v5.
-                protocol: if self.command_specs {
-                    10
-                } else if self.manifest.listeners.contains(&Listener::ResourceEvent) {
-                    9
-                } else if self.operation_identity {
-                    8
-                } else if self.ui_api || self.manifest.listeners.contains(&Listener::UiInteraction)
-                {
-                    7
-                } else if self.single_attempt_api {
-                    6
-                } else if self.manifest.listeners.contains(&Listener::ServerMessage) {
-                    5
-                } else {
-                    4
-                },
+                protocol: protocol::VERSION,
                 manifest: self.manifest,
             },
         )
@@ -991,9 +904,7 @@ impl WorkerCog {
                     Wire::Shutdown => return Ok(()),
                     _ => return Err(protocol::protocol_error()),
                 };
-            if operation_id.is_some()
-                && (!self.operation_identity || !matches!(&event, CogEvent::Command { .. }))
-            {
+            if operation_id.is_some() && !matches!(&event, CogEvent::Command { .. }) {
                 return Err(protocol::protocol_error());
             }
             let handler = match &event {
@@ -1037,11 +948,47 @@ impl WorkerCog {
                 &mut connection.output,
                 &Wire::Done {
                     disposition: result.as_ref().ok().copied(),
-                    structured_error: result.as_ref().err().map(|e| e.to_remote()),
-                    error: result.err().map(|e| e.to_string()),
+                    error: result.err().map(|e| e.to_remote()),
                 },
             )
             .await?;
         }
+    }
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn malformed_responses_keep_the_exchange_poisoned_and_errors_keep_their_cause() {
+        let mut connection = Connection {
+            input: BufReader::new(tokio::io::stdin()),
+            output: tokio::io::stdout(),
+            poisoned: true,
+        };
+        assert_eq!(connection.finish_response(Some(42), None).unwrap(), 42);
+        assert!(!connection.poisoned);
+        let cause = Error::Api {
+            status: 502,
+            message: "uncertain".into(),
+            retry_after: Some(0.25),
+        }
+        .to_remote();
+        connection.poisoned = true;
+        let error = connection
+            .finish_response::<usize>(None, Some(cause.clone()))
+            .unwrap_err();
+        assert_eq!(error.status_code(), Some(502));
+        assert_eq!(
+            error.retry_after(),
+            Some(std::time::Duration::from_millis(250))
+        );
+        assert!(!connection.poisoned);
+        connection.poisoned = true;
+        assert!(connection.finish_response::<usize>(None, None).is_err());
+        assert!(connection.poisoned);
+        assert!(connection.finish_response(Some(42), Some(cause)).is_err());
+        assert!(connection.poisoned);
     }
 }

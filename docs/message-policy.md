@@ -129,13 +129,12 @@ async fn worker() -> Result<()> {
 # }
 ```
 
-This registers `Listener::ServerMessage` and uses protocol v5 for explicit outcomes.
-Upgrade the parent before opting in. New parents accept older workers, and workers
-using only existing handlers retain protocol v4. Existing `listen(Listener::Message,
-...)` also propagates failures; use on_message for explicit message completion outcomes. A worker cannot register both message contracts at once. Missing or
-invalid outcome/completion frames are not implicit success: retain an uncertain
-barrier, poison the exchange and reconcile before explicit replacement. Workers
-and their build scripts remain trusted code, not a sandbox.
+This registers `Listener::ServerMessage` with explicit completion outcomes under
+protocol 11. `listen(Listener::Message, ...)` completes after its fallible handler
+returns successfully. A worker chooses one message listener contract. Missing or
+invalid completion frames retain an uncertain barrier and poison the exchange.
+Reconcile unfinished effects before replacing a failed worker. Workers and build
+scripts execute trusted code. Rebuild parent and workers together for this version.
 
 ## Intake, duplicates and replay boundaries
 

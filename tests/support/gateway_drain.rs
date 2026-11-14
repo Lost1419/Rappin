@@ -518,7 +518,7 @@ async fn worker_requests_drain_and_preserve_partial_or_uncertain_failures() {
     std::fs::write(project.0.join("src/main.rs"),r#"
 use rappin::{*, hot_reload::WorkerCog};
 #[tokio::main] async fn main()->Result<()> {
- WorkerCog::new("drain-rpc").single_attempt_api().command("work","fixture",|ctx|async move {
+ WorkerCog::new("drain-rpc").command("work","fixture",|ctx|async move {
    let first=ctx.api_once("POST","/mutate",None).await?;
    match ctx.api_once("PATCH","/mutate/id",None).await {Ok(_)=>Ok(()),Err(source)=>Err(Error::PartialWrite{completed:vec![first],failed_step:2,source:Box::new(source)})}
  }).run().await

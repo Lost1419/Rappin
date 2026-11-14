@@ -54,11 +54,9 @@ when those trace targets are active.
 
 ## Workers and example
 
-No worker protocol change is needed. Existing workers route API requests through
-the parent's selected transport. `WorkerCog::single_attempt_api()` and
-`WorkerContext::api_once` require the existing protocol v6 support; extended UI
-workers retain v7. Typed validation, authorization checks, structured remote errors
-and original message identity remain in their existing layers.
+Protocol 11 workers route requests through the parent's selected transport.
+`WorkerContext::api_once` uses a single submission. Structured remote errors,
+typed validation and the original message identity propagate through that transport.
 
 Run [the example](../examples/gateway_api_requests.rs):
 `cargo run --features gateway --example gateway_api_requests`, with

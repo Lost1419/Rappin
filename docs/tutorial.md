@@ -156,7 +156,7 @@ the installed routes serving and exposes structured diagnostics.
 Worker command specs support the same argument metadata, aliases and groups.
 Built-in checks run through the parent-authenticated API. Custom checks need a
 worker implementation. Read-only preparation reports worker checks as deferred.
-These specs require protocol10. Build the parent and workers from the same
+These specs require protocol 11. Build the parent and workers from the same
 development revision. Compilation executes trusted build scripts and procedural macros.
 
 ## 8. Understand completion before deploying

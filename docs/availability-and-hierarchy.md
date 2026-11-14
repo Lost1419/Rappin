@@ -161,7 +161,7 @@ cargo build --example role_hierarchy_worker --features hot-reload
 Load it using `WorkerProject::example("Cargo.toml", "role_hierarchy_worker")`
 with `.features(["hot-reload"])` and `HotReload::load`, as in the hot-reload guide.
 It deliberately leaves rollout evidence Unknown and performs no deletion.
-Workers must opt in with `WorkerCog::single_attempt_api()` (protocol v6).
+Protocol 11 workers support single-attempt requests on every route.
 Existing workers retain v4/v5 behavior. `Api` works with Client, Arc, native
 contexts and WorkerContext; custom adapters must explicitly implement
 `request_once` or execution fails closed. The parent retains the token, endpoint

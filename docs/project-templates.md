@@ -51,7 +51,7 @@ control characters excluded and are escaped as Rust literals.
 ## Worker lifecycle
 
 Keep the reload controller and watcher guard alive for the parent's lifetime.
-Worker command specs use protocol10. Each generation initializes its own
+Worker command specs use protocol 11. Each generation initializes its own
 process-local state. Workers, build scripts and procedural macros execute trusted
 code. Reserve worker stdout for IPC and send diagnostics to stderr.
 See [hot reloading](hot-reloading.md) for candidate failures, draining and replacement.

@@ -219,7 +219,7 @@ fn main(){
         println!("{{\"op\":\"done\",\"error\":null}}");std::io::stdout().flush().unwrap();
     }
 }
-"#.replace("r#READY#",&format!("{:?}",json!({"op":"ready","protocol":5,"manifest":{"name":"outcome","commands":[],"buttons":[],"listeners":["server_message"]}}).to_string()))).unwrap();
+"#.replace("r#READY#",&format!("{:?}",json!({"op":"ready","protocol":11,"manifest":{"name":"outcome","commands":[],"buttons":[],"listeners":["server_message"]}}).to_string()))).unwrap();
     let bot = Bot::builder("fixture")
         .sync_commands(false)
         .log(false)

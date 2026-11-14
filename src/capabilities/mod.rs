@@ -26,16 +26,8 @@ pub use schema::{bundled_schema, endpoint_schema, validate_schema};
 /// # Example
 ///
 /// ```rust
-/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
-/// let filter = CapabilityFilter {
-///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
-///     ..Default::default()
-/// };
-/// for operation in filtered_catalogue(&filter) {
-///     assert!(!operation.write);
-///     println!("{}: {}", operation.name, operation.description);
-///     // Discovery metadata is not authorization to execute.
-/// }
+/// let domain = rappin::capabilities::CapabilityDomain::Messages;
+/// assert_eq!(serde_json::to_value(domain).unwrap(), "messages");
 /// ```
 pub enum CapabilityDomain {
     /// Server discovery and metadata.
@@ -70,16 +62,8 @@ pub enum CapabilityDomain {
 /// # Example
 ///
 /// ```rust
-/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
-/// let filter = CapabilityFilter {
-///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
-///     ..Default::default()
-/// };
-/// for operation in filtered_catalogue(&filter) {
-///     assert!(!operation.write);
-///     println!("{}: {}", operation.name, operation.description);
-///     // Discovery metadata is not authorization to execute.
-/// }
+/// let scope = rappin::capabilities::OperationScope::Server("server");
+/// assert!(matches!(scope, rappin::capabilities::OperationScope::Server("server")));
 /// ```
 pub enum OperationScope {
     /// Bind the named server argument to the host server.
@@ -106,16 +90,8 @@ pub enum OperationScope {
 /// # Example
 ///
 /// ```rust
-/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
-/// let filter = CapabilityFilter {
-///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
-///     ..Default::default()
-/// };
-/// for operation in filtered_catalogue(&filter) {
-///     assert!(!operation.write);
-///     println!("{}: {}", operation.name, operation.description);
-///     // Discovery metadata is not authorization to execute.
-/// }
+/// let support = rappin::capabilities::LibrarySupport::ScopedApi;
+/// assert_eq!(serde_json::to_value(support).unwrap(), "scoped_api");
 /// ```
 pub enum LibrarySupport {
     /// Supported through the shared Api interface with scoped authorization.
@@ -133,16 +109,8 @@ pub enum LibrarySupport {
 /// # Example
 ///
 /// ```rust
-/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
-/// let filter = CapabilityFilter {
-///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
-///     ..Default::default()
-/// };
-/// for operation in filtered_catalogue(&filter) {
-///     assert!(!operation.write);
-///     println!("{}: {}", operation.name, operation.description);
-///     // Discovery metadata is not authorization to execute.
-/// }
+/// let operation = rappin::capabilities::capability("read_messages").unwrap();
+/// assert!(!operation.availability.test_servers_only);
 /// ```
 pub struct Availability {
     /// Whether the pinned endpoint contract restricts this operation to test servers.
@@ -158,16 +126,8 @@ pub struct Availability {
 /// # Example
 ///
 /// ```rust
-/// use rappin::capabilities::{CapabilityDomain, CapabilityFilter, filtered_catalogue};
-/// let filter = CapabilityFilter {
-///     domains: vec![CapabilityDomain::Messages], write: Some(false), library_only: true,
-///     ..Default::default()
-/// };
-/// for operation in filtered_catalogue(&filter) {
-///     assert!(!operation.write);
-///     println!("{}: {}", operation.name, operation.description);
-///     // Discovery metadata is not authorization to execute.
-/// }
+/// let rule = rappin::capabilities::PermissionRule::Member;
+/// assert_eq!(serde_json::to_value(rule).unwrap(), serde_json::json!({"kind":"member"}));
 /// ```
 pub enum PermissionRule {
     /// No server grant required by this rule; separate scope/external checks still apply.

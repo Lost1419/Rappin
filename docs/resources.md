@@ -111,7 +111,7 @@ uses delete and restoration uses create. Whole-server deletion emits no channel
 delete notifications. Channel create covers text/voice channels.
 
 Workers subscribe with `WorkerCog::listen(Listener::ResourceEvent, handler)` and
-match `CogEvent::ResourceEvent { event }`. This opt-in advertises protocol v9.
+match `CogEvent::ResourceEvent { event }`. This opt-in advertises protocol 11.
 Older worker capabilities continue selecting their existing protocol version.
 Upgrade the parent before enabling the new listener. Resource API methods use
 the existing JSON proxy and preserve parent-held credentials and structured errors.

@@ -26,6 +26,11 @@ exclude = [
     "docs/sdk-performance-*.md",
     "docs/advert.md",
     "tests/*_test.rs",
+    "tests/support/failure_gateway.rs",
+    "tests/support/failure_worker.rs",
+    "tests/support/gateway_drain.rs",
+    "docs/history/**",
+    "docs/api-1.*.md",
 ]
 
 [package.metadata.docs.rs]

@@ -524,12 +524,6 @@ impl BotHandle {
                 let snapshot = self.invocation_snapshot(&path).await.ok_or_else(|| {
                     Error::validation("invocation.command", "command was unloaded")
                 })?;
-                if operation_id.is_some() && !snapshot.def.operation_identity_supported {
-                    return Err(Error::validation(
-                        "invocation.operation_id",
-                        "worker requires protocol v8 operation identity support",
-                    ));
-                }
                 let mut context = ctx.clone();
                 context.command = Some(path);
                 context.args = args;
@@ -730,16 +724,6 @@ impl BotHandle {
         snapshot: InvocationSnapshot,
         operation_id: Option<OperationId>,
     ) -> InvocationOutcome {
-        if operation_id.is_some() && !snapshot.def.operation_identity_supported {
-            return InvocationOutcome::failed(
-                ctx.command.as_deref().unwrap_or_default(),
-                Error::validation(
-                    "invocation.operation_id",
-                    "worker requires protocol v8 operation identity support",
-                ),
-                false,
-            );
-        }
         let mut origin = ORIGIN.with(Clone::clone);
         origin.operation_id = operation_id;
         ORIGIN

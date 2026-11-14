@@ -276,21 +276,15 @@ also subject to WorkerProject's handler timeout, which includes queueing and API
 work. Waits count toward the 128 requests per invocation budget. In-flight old
 workers can finish their existing waits during reload; subscriptions do not migrate
 into the new process. Structured errors and parent-owned permission lookups are
-available from protocol v3. The current host accepts v1–v10; ordinary new worker
-handlers use v4. Upgrade the parent before enabling newer worker capabilities.
+available in protocol 11. Rebuild the parent and all workers together when migrating
+from 0.1 or an earlier 2.0 preview. Other versions fail during candidate startup.
+All worker routes support structured errors, operation identities, UI callbacks
+and single-attempt API requests. The old capability-switch methods are removed.
 
-| Worker opt-in | Minimum parent protocol |
-| --- | --- |
-| `on_message` fallible server-message listener | v5 |
-| `single_attempt_api()` / `api_once` | v6 |
-| `ui_api()` / `on_interaction` | v7 |
-| `operation_identity()` | v8 |
-| `listen(Listener::ResourceEvent, handler)` | v9 |
-| `command_spec` schemas, aliases and groups | v10 |
-
-A worker command_spec enables UI, single-attempt API and operation identity together. Other legacy-style opt-ins select their own supported contracts. See
-[shared SDK workflows](https://github.com/Lost1419/Rappin/blob/dev/docs/sdk-workflows.md) for runtime command schemas, registration
-preflight and shared native/worker helpers.
+Typed `command_spec` and `command_typed` routes share registration with runtime
+`dynamic_command` schemas. Each supports aliases, grouped names, help and pure
+preparation schemas when available. Worker checks are deferred during preparation
+and run again before the handler. Custom checks implement `check_worker`.
 
 See [hot-reloading](https://github.com/Lost1419/Rappin/blob/dev/docs/hot-reloading.md) and `examples/hot_cog_worker.rs`. There is no
 JavaScript-style manager hierarchy, hidden resource fetching, general middleware

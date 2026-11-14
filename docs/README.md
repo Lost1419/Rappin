@@ -35,4 +35,4 @@ Start with the [tutorial](tutorial.md), then select a task guide.
 - [SDK development and build size](development.md)
 - [API support audits](api-support.md)
 
-Version-specific guides are retained in [history](history/README.md).
+Version-specific guides are retained in [history](https://github.com/Lost1419/Rappin/blob/dev/docs/history/README.md).

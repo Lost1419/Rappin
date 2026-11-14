@@ -54,8 +54,7 @@ impl FromArgs for Roll {
 }
 #[tokio::main] async fn main()->Result<()> {
  let journal=std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<String,String>::new()));
- let mut cog=WorkerCog::new("checked-worker");
- if !std::path::Path::new("legacy").exists(){cog=cog.operation_identity();}
+ let cog=WorkerCog::new("checked-worker");
  cog
  .command("wid","identified record",move |ctx|{let journal=journal.clone();async move{
     let key=ctx.operation_id().expect("identified call").as_str().to_owned();
@@ -85,7 +84,6 @@ impl FromArgs for Roll {
             vec![("Retry-After", "0.25")],
             json!({"error":"unknown"}).to_string(),
         ),
-        support::response(201, message.clone()),
         support::response(201, message.clone()),
         support::response(201, message),
     ])
@@ -122,28 +120,7 @@ impl FromArgs for Roll {
                     bot.prepare_invocation(&ctx, "wroll", "20").await?
                 };
                 assert!(plan.report().deferred.iter().any(|s| s.contains("worker")));
-                if ctx.args == "legacy" {
-                    assert!(bot
-                        .prepare_invocation_with_operation_id(
-                            &ctx,
-                            "wroll",
-                            "20",
-                            OperationId::new("legacy")?
-                        )
-                        .await
-                        .is_err());
-                    let denied = bot
-                        .invoke_command_with_operation_id(
-                            &ctx,
-                            "wroll",
-                            "20",
-                            OperationId::new("legacy")?,
-                        )
-                        .await;
-                    assert_eq!(denied.status, InvocationStatus::Failed);
-                    assert!(!denied.effects_possible);
-                    bot.invoke_prepared(plan).await.into_result()?;
-                } else if ctx.args == "identity" {
+                if ctx.args == "identity" {
                     let one = bot
                         .prepare_invocation_with_operation_id(
                             &ctx,
@@ -255,22 +232,12 @@ impl FromArgs for Roll {
         bot.process_event(event).await.unwrap();
     }
     reload.unload().await.unwrap();
-    std::fs::write(project.0.join("legacy"), "legacy").unwrap();
-    let legacy = HotReload::load(
-        bot.handle(),
-        WorkerProject::new(project.0.join("Cargo.toml"), "checked-invocation-worker").offline(true),
-    )
-    .await
-    .unwrap();
-    let legacy_event=serde_json::from_value(json!({"id":5,"type":"message","data":{"id":Uuid::from_u128(5),"channel_id":Uuid::nil(),"server_id":Uuid::nil(),"author_id":Uuid::from_u128(42),"command":"outer","args":"legacy"}})).unwrap();
-    bot.process_event(legacy_event).await.unwrap();
-    legacy.unload().await.unwrap();
     http.await.unwrap();
     let mut count = 0;
     while let Ok(request) = requests.try_recv() {
         count += 1;
         assert!(request.starts_with("POST /channels/"));
     }
-    assert_eq!(count, 6);
+    assert_eq!(count, 5);
     assert!(pid.is_some());
 }

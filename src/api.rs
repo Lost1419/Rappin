@@ -233,10 +233,10 @@ pub trait ApiExt: Api {
                 "this interaction has no original message to update",
             ));
         }
-        patch.validate()?;
-        Api::track_interaction(self, event).await?;
         let mut value = json!(patch);
         value["type"] = json!(InteractionCallbackType::Update);
+        crate::validation::validate_callback(&value, InteractionCallbackType::Update)?;
+        Api::track_interaction(self, event).await?;
         crate::utils::strip_proxy_metadata(&mut value);
         self.request(
             Method::POST,
@@ -823,17 +823,22 @@ pub trait ApiExt: Api {
         let channel: crate::ChannelId = channel.into();
         let channel = Uuid::from(channel);
 
-        body.validate()?;
         let mut value = json!(body);
+        crate::validation::validate_message(&value, true)?;
         crate::utils::strip_proxy_metadata(&mut value);
-        let response = self
+        let mut response = self
             .request(
                 Method::POST,
                 &format!("/channels/{channel}/messages"),
                 Some(value),
             )
             .await?;
-        Ok(serde_json::from_value(response["message"].clone())?)
+        Ok(serde_json::from_value(
+            response
+                .get_mut("message")
+                .map(Value::take)
+                .unwrap_or(Value::Null),
+        )?)
     }
     /// Validate and edit an extended message body, preserving omission versus explicit null clearing. Reply targets cannot be changed by edits.
     ///
@@ -860,17 +865,22 @@ pub trait ApiExt: Api {
         let message: crate::MessageId = message.into();
         let message = Uuid::from(message);
 
-        body.validate()?;
         let mut value = json!(body);
+        crate::validation::validate_message(&value, false)?;
         crate::utils::strip_proxy_metadata(&mut value);
-        let response = self
+        let mut response = self
             .request(
                 Method::PATCH,
                 &format!("/channels/{channel}/messages/{message}"),
                 Some(value),
             )
             .await?;
-        Ok(serde_json::from_value(response["message"].clone())?)
+        Ok(serde_json::from_value(
+            response
+                .get_mut("message")
+                .map(Value::take)
+                .unwrap_or(Value::Null),
+        )?)
     }
     /// Open a validated modal as an eligible initial interaction response. Opening from a modal submission is rejected; response deadlines and ownership are tracked by supporting adapters.
     ///
@@ -949,18 +959,10 @@ pub trait ApiExt: Api {
                 "this interaction has no original message to update",
             ));
         }
-        if kind == InteractionCallbackType::Ephemeral
-            && (body.components.is_some() || body.flags.is_some_and(|f| f & 32768 != 0))
-        {
-            return Err(Error::validation(
-                "components",
-                "ephemeral replies do not support components",
-            ));
-        }
-        crate::validation::validate_message(&json!(body), kind != InteractionCallbackType::Update)?;
-        Api::track_interaction(self, event).await?;
         let mut value = json!(body);
         value["type"] = json!(kind);
+        crate::validation::validate_callback(&value, kind)?;
+        Api::track_interaction(self, event).await?;
         crate::utils::strip_proxy_metadata(&mut value);
         self.request(
             Method::POST,
@@ -988,14 +990,19 @@ pub trait ApiExt: Api {
         enabled: bool,
     ) -> Result<Vec<Command>> {
         crate::validation::validate_commands(commands)?;
-        let value = self
+        let mut value = self
             .request(
                 Method::PUT,
                 "/commands",
                 Some(json!({"commands":commands,"interactions":enabled})),
             )
             .await?;
-        Ok(serde_json::from_value(value["commands"].clone())?)
+        Ok(serde_json::from_value(
+            value
+                .get_mut("commands")
+                .map(Value::take)
+                .unwrap_or(Value::Null),
+        )?)
     }
     /// Resolve an ID visible to the bot. Hidden and absent resources return the platform 404.
     ///
@@ -1044,9 +1051,13 @@ pub trait ApiExt: Api {
             Some(channel) => format!("/channels/{channel}/permissions/{user}"),
             None => format!("/servers/{server}/members/{user}/permissions"),
         };
-        let response = self.request(Method::GET, &path, None).await?;
-        let permissions: MemberPermissions =
-            serde_json::from_value(response["permissions"].clone())?;
+        let mut response = self.request(Method::GET, &path, None).await?;
+        let permissions: MemberPermissions = serde_json::from_value(
+            response
+                .get_mut("permissions")
+                .map(Value::take)
+                .unwrap_or(Value::Null),
+        )?;
         permissions.validate_scope(server, user, channel)?;
         Ok(permissions)
     }
@@ -1068,14 +1079,19 @@ pub trait ApiExt: Api {
         let role: crate::RoleId = role.into();
         let role = Uuid::from(role);
 
-        let response = self
+        let mut response = self
             .request(
                 Method::GET,
                 &format!("/servers/{server}/roles/{role}"),
                 None,
             )
             .await?;
-        let result: Role = serde_json::from_value(response["role"].clone())?;
+        let result: Role = serde_json::from_value(
+            response
+                .get_mut("role")
+                .map(Value::take)
+                .unwrap_or(Value::Null),
+        )?;
         if result.id != role {
             return Err(Error::validation(
                 "role",
@@ -1103,14 +1119,19 @@ pub trait ApiExt: Api {
         let server = Uuid::from(server);
 
         validate_role_order(ids)?;
-        let response = self
+        let mut response = self
             .request(
                 Method::PATCH,
                 &format!("/servers/{server}/roles"),
                 Some(json!({"ids":ids})),
             )
             .await?;
-        Ok(serde_json::from_value(response["roles"].clone())?)
+        Ok(serde_json::from_value(
+            response
+                .get_mut("roles")
+                .map(Value::take)
+                .unwrap_or(Value::Null),
+        )?)
     }
     /// Apply explicit role positions using the documented alternate array body.
     /// Ambiguous mutation failures require reconciliation before a retry.
@@ -1136,14 +1157,19 @@ pub trait ApiExt: Api {
                 .map(|position| position.id)
                 .collect::<Vec<_>>(),
         )?;
-        let response = self
+        let mut response = self
             .request(
                 Method::PATCH,
                 &format!("/servers/{server}/roles"),
                 Some(json!(positions)),
             )
             .await?;
-        Ok(serde_json::from_value(response["roles"].clone())?)
+        Ok(serde_json::from_value(
+            response
+                .get_mut("roles")
+                .map(Value::take)
+                .unwrap_or(Value::Null),
+        )?)
     }
     /// List channel role/everyone overrides through the explicit override endpoint.
     ///
@@ -1301,14 +1327,19 @@ pub trait ApiExt: Api {
         let channel: crate::ChannelId = channel.into();
         let channel = Uuid::from(channel);
 
-        let value = self
+        let mut value = self
             .request(
                 Method::POST,
                 &format!("/channels/{channel}/messages"),
                 Some(json!(body)),
             )
             .await?;
-        let message: Message = serde_json::from_value(value["message"].clone())?;
+        let message: Message = serde_json::from_value(
+            value
+                .get_mut("message")
+                .map(Value::take)
+                .unwrap_or(Value::Null),
+        )?;
         if message.channel_id != channel {
             return Err(Error::Remote(RemoteError {
                 kind: "operation_result_scope".into(),
@@ -1462,7 +1493,7 @@ native_context!(crate::InteractionContext);
 #[async_trait]
 impl Api for crate::WorkerContext {
     async fn track_interaction(&self, _event: &crate::InteractionEvent) -> Result<()> {
-        self.require_ui_api().await
+        self.ensure_active()
     }
     async fn request_once(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
         self.api_once(method.as_str(), path, body).await

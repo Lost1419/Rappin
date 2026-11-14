@@ -6,7 +6,7 @@
 //! let body = rappin::CreateMessage::new("Choose fruit").component(menu.row());
 //! body.validate().unwrap();
 //! ```
-//! Additive API 1.3 payloads; legacy Component/Button/InteractionCallback remain unchanged.
+//! Select menus, modal forms, interaction values and custom emoji references.
 use super::*;
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};

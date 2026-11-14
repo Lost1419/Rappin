@@ -9,6 +9,15 @@
 - Use fallible event/cog listeners and explicit failure callbacks throughout. Remove legacy void failure observers.
 - Add gateway-first project generation, human-readable init/doctor output, an ordered tutorial and a 0.1-to-2.0 migration guide.
 
+### Development cleanup
+
+- Require worker protocol 11. Remove older protocol negotiation, capability-switch builders and string-only IPC errors. Rebuild parent and workers together.
+- Route typed and runtime worker commands through shared registration, including aliases, groups and preparation schemas.
+- Store interaction callback patches in `EditMessage` and share validation across native, worker and generic API paths.
+- Submit split message parts once and retain confirmed receipts when a part fails. Preserve the failed request's status, retry hints and unknown outcome.
+- Compare signed/unsigned JSON integer bounds exactly, including mixed floating-point limits. Reduce message serialization passes and owned response/component clones.
+- Exclude historical guides and integration-only fixtures from crate archives. Keep focused public-item examples and the current OpenAPI contract.
+
 ## 0.1.33 — 2026-11-13
 
 - Raise the declared minimum Rust version to 1.89 to match UUID 1.29.2. Test locked builds and fresh consumer dependency resolution on that compiler.

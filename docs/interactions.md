@@ -144,10 +144,9 @@ WorkerCog::new("forms").on_interaction(|ctx| async move {
 Legacy `Listener::Interaction` retains button-only routing. Use
 `WorkerCog::on_interaction` for the unified typed interaction listener.
 
-A worker `command_spec` uses protocol10 and enables supported UI, single-attempt
-and operation-identity requests together. Legacy-style worker routes can select
-UI support with `ui_api()`. Upgrade the parent before enabling a newer worker
-contract. Workers and build scripts execute trusted code. Keep stdout for IPC.
+Protocol 11 supplies UI callbacks, single-attempt requests and operation identities
+on every worker route. Rebuild parent and workers together when migrating. Workers
+and build scripts execute trusted code. Keep stdout for IPC.
 
 ## Discover message emojis
 

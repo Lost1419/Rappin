@@ -75,10 +75,9 @@ restarting the parent, put a cog in a separate `WorkerCog` executable and use
 `WorkerProject` / `HotReload`. Parent credentials stay in the parent. Worker state
 resets; preserve durable state in the application's storage.
 
-Worker protocol requirements are opt-in: existing handlers use v4,
-`WorkerCog::on_message` uses v5, and `single_attempt_api()` requires v6. Upgrade the
-parent before enabling newer worker APIs. Worker stdout is
-the protocol stream; use stderr for sanitized diagnostics.
+Protocol 11 is required by the parent and every worker. Rebuild both together.
+All routes support UI callbacks, operation identities and single-attempt requests.
+Keep worker stdout for IPC and sanitized diagnostics on stderr.
 
 Keep the watcher guard alive. Inspect `WatchGuard::status()` fields `scan_error`,
 `reload_error`, and `reload_failure`. Scan recovery clears only the scan error;
@@ -99,9 +98,8 @@ a checkout also includes `examples/message_gate.rs` and hot-reload examples.
 Use `CreateMessage`, `EditMessage` and `ApiExt` for messages, nullable updates,
 select menus and modal forms. Native `on_select`, `on_modal` and
 `on_command_interaction` receive the shared `InteractionContext`. Cog and worker
-listeners use `on_interaction`. A worker `command_spec` advertises protocol10
-and enables UI, single-attempt API and operation-identity support. Legacy workers
-retain their negotiated versions. The parent must enable `interactive_events(true)`.
+listeners use `on_interaction`. Protocol 11 provides UI, single-attempt API and operation-identity support
+on every worker route. Rebuild parent and workers together. The parent must enable `interactive_events(true)`.
 Slash interactions have their own authorization boundary. A modal must precede
 acknowledgement or another response. Propagate incomplete work through the
 explicit failure policy. See `interactions_guide` and the included forms example.

@@ -401,7 +401,9 @@ impl Client {
             .into_unique("member")
     }
 
-    /// Sequentially send split message parts. This legacy helper returns the first error without prior receipts; use explicit per-part tracking or validated bindings when partial-write reconciliation is required.
+    /// Sequentially send split message parts. A failure returns PartialWrite with
+    /// confirmed prior messages and a one-based failed step. The failed request
+    /// retains its structured cause and uncertainty; no part is automatically replayed.
     ///
     /// # Example
     ///
@@ -420,10 +422,23 @@ impl Client {
     ) -> Result<Vec<crate::Message>> {
         let mut sent = vec![];
         for part in crate::split_message(content) {
-            sent.push(
-                self.send_message(channel, &crate::CreateMessage::new(part))
-                    .await?,
-            );
+            match crate::client::single_attempt(
+                self.send_message(channel, &crate::CreateMessage::new(part)),
+            )
+            .await
+            {
+                Ok(message) => sent.push(message),
+                Err(source) => {
+                    return Err(crate::Error::PartialWrite {
+                        failed_step: sent.len() + 1,
+                        completed: sent
+                            .into_iter()
+                            .map(|message| serde_json::json!(message))
+                            .collect(),
+                        source: Box::new(source),
+                    })
+                }
+            }
         }
         Ok(sent)
     }

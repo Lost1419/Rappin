@@ -161,9 +161,6 @@ impl Client {
         &self,
         server: impl Into<crate::ServerId> + Send,
     ) -> Result<EmojisResponse> {
-        let server: crate::ServerId = server.into();
-        let server = Uuid::from(server);
-
         ApiExt::get_emojis(self, server).await
     }
     /// Create a server emoji from a validated base64/data-URL image. Local validation currently caps decoded images at 2 MiB; moderation may return a pending result.
@@ -184,9 +181,6 @@ impl Client {
         server: impl Into<crate::ServerId> + Send,
         body: &CreateEmoji,
     ) -> Result<EmojiCreateResult> {
-        let server: crate::ServerId = server.into();
-        let server = Uuid::from(server);
-
         ApiExt::create_emoji(self, server, body).await
     }
     /// Upload one PNG/GIF/WebP emoji through the shared multipart transport. The current SDK cap is 2 MiB, and pending moderation is not a failed creation.
@@ -208,9 +202,6 @@ impl Client {
         name: &str,
         file: &UploadFile,
     ) -> Result<EmojiCreateResult> {
-        let server: crate::ServerId = server.into();
-        let server = Uuid::from(server);
-
         ApiExt::upload_emoji(self, server, name, file).await
     }
     /// Rename a server emoji after validating its name. The platform enforces Manage Emoji and resource scope.
@@ -231,11 +222,6 @@ impl Client {
         emoji: impl Into<crate::EmojiId> + Send,
         name: &str,
     ) -> Result<EmojiCreateResult> {
-        let server: crate::ServerId = server.into();
-        let server = Uuid::from(server);
-        let emoji: crate::EmojiId = emoji.into();
-        let emoji = Uuid::from(emoji);
-
         ApiExt::edit_emoji(self, server, emoji, name).await
     }
     /// Delete the selected server emoji. An uncertain result must be reconciled rather than replayed automatically.
@@ -255,11 +241,6 @@ impl Client {
         server: impl Into<crate::ServerId> + Send,
         emoji: impl Into<crate::EmojiId> + Send,
     ) -> Result<()> {
-        let server: crate::ServerId = server.into();
-        let server = Uuid::from(server);
-        let emoji: crate::EmojiId = emoji.into();
-        let emoji = Uuid::from(emoji);
-
         ApiExt::delete_emoji(self, server, emoji).await
     }
     /// Read bot-owned webhooks visible in the selected channel.
@@ -278,9 +259,6 @@ impl Client {
         &self,
         channel: impl Into<crate::ChannelId> + Send,
     ) -> Result<BotWebhooksResponse> {
-        let channel: crate::ChannelId = channel.into();
-        let channel = Uuid::from(channel);
-
         ApiExt::get_channel_webhooks(self, channel).await
     }
     /// Read webhooks owned by the authenticated bot.
@@ -315,9 +293,6 @@ impl Client {
         channel: impl Into<crate::ChannelId> + Send,
         body: &CreateBotWebhook,
     ) -> Result<BotWebhook> {
-        let channel: crate::ChannelId = channel.into();
-        let channel = Uuid::from(channel);
-
         ApiExt::create_bot_webhook(self, channel, body).await
     }
     /// Delete a bot-owned webhook by ID. The API enforces ownership and channel permissions.
@@ -336,9 +311,6 @@ impl Client {
         &self,
         webhook: impl Into<crate::WebhookId> + Send,
     ) -> Result<()> {
-        let webhook: crate::WebhookId = webhook.into();
-        let webhook = Uuid::from(webhook);
-
         ApiExt::delete_bot_webhook(self, webhook).await
     }
     /// Post through a bot-owned webhook using bot authentication, preserving confirmed message data on success.
@@ -358,9 +330,6 @@ impl Client {
         webhook: impl Into<crate::WebhookId> + Send,
         body: &crate::webhook::WebhookMessage,
     ) -> Result<Message> {
-        let webhook: crate::WebhookId = webhook.into();
-        let webhook = Uuid::from(webhook);
-
         ApiExt::post_bot_webhook(self, webhook, body).await
     }
     /// # Example
@@ -380,9 +349,6 @@ impl Client {
         body: &CreateMessage,
         files: &[UploadFile],
     ) -> Result<Vec<Message>> {
-        let channel: crate::ChannelId = channel.into();
-        let channel = Uuid::from(channel);
-
         ApiExt::send_files(self, channel, body, files).await
     }
 }

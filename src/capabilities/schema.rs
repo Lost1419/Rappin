@@ -201,6 +201,29 @@ pub fn validate_schema(schema: &Value, value: &Value) -> Result<()> {
 pub(super) fn validate_partial(schema: &Value, value: &Value) -> Result<()> {
     validate_at(schema, schema, value, "arguments", true, 0)
 }
+// JSON integers can span i64::MIN through u64::MAX. i128 covers that union
+// exactly, including comparisons between signed and unsigned representations.
+fn number_less(left: &Value, right: &Value) -> bool {
+    let integer = |value: &Value| {
+        value
+            .as_i64()
+            .map(i128::from)
+            .or_else(|| value.as_u64().map(i128::from))
+    };
+    match (integer(left), integer(right)) {
+        (Some(left), Some(right)) => left < right,
+        (Some(left), None) => right.as_f64().is_some_and(|right| {
+            left < right as i128 || left == right as i128 && right.fract() > 0.0
+        }),
+        (None, Some(right)) => left.as_f64().is_some_and(|left| {
+            (left as i128) < right || left as i128 == right && left.fract() < 0.0
+        }),
+        (None, None) => {
+            matches!((left.as_f64(), right.as_f64()), (Some(left), Some(right)) if left < right)
+        }
+    }
+}
+
 fn validate_at(
     root: &Value,
     schema: &Value,
@@ -255,21 +278,14 @@ fn validate_at(
             return Err(invalid("invalid argument type"));
         }
     }
-    if let Some(n) = value.as_f64() {
-        // Integer comparisons must retain u64 precision (event IDs can exceed 2^53).
-        let below = schema["minimum"]
-            .as_u64()
-            .zip(value.as_u64())
-            .map(|(min, n)| n < min)
-            .unwrap_or_else(|| schema["minimum"].as_f64().is_some_and(|min| n < min));
-        let above = schema["maximum"]
-            .as_u64()
-            .zip(value.as_u64())
-            .map(|(max, n)| n > max)
-            .unwrap_or_else(|| schema["maximum"].as_f64().is_some_and(|max| n > max));
-        if below || above {
-            return Err(invalid("argument out of bounds"));
-        }
+    let below = schema
+        .get("minimum")
+        .is_some_and(|min| number_less(value, min));
+    let above = schema
+        .get("maximum")
+        .is_some_and(|max| number_less(max, value));
+    if below || above {
+        return Err(invalid("argument out of bounds"));
     }
     if let Some(text) = value.as_str() {
         let length = text.chars().count() as u64;

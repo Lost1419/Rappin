@@ -192,8 +192,7 @@ original receipts and audit during fsync/rename transactions, and never starts a
 runner. It operates on that consumer-owned source of truth; do not export/edit another
 database into it. Database consumers implement the same hook in their own transaction.
 
-Feature `gateway` enables the API response pump; `hot-reload` enables executable
-workers. Worker protocols 4–8 remain supported with no new RPC protocol. Protocol 6+
-provides `single_attempt_api`/`api_once`; UI/operation-identity versions retain their
-existing requirements. Native and worker command authorization, parsing, checks,
-cooldowns and reply ownership stay in their existing layers.
+Feature `gateway` enables the API response pump. Feature `hot-reload` enables
+executable workers using protocol 11, including `api_once`, UI callbacks and
+operation identities. Native and worker commands run their normal authorization,
+parsing, checks, cooldowns and reply coordination during draining.

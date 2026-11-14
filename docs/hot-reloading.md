@@ -258,25 +258,22 @@ waiters before posting and owns the authenticated transport. See the
 [Rust workflow guide](https://github.com/Lost1419/Rappin/blob/dev/docs/rust-bots.md#hot-workers) for bounds, cancellation, and
 protocol compatibility. The worker example includes `roll` and `question`.
 
-### API 1.2 worker transport
+### Worker transport and command definitions
 
-Protocol v4 adds public metadata reads, fixed 64 KiB upload chunks, DM listeners
-and reaction listeners. Total upload data stays bounded to 12 MiB; ordinary frames
-remain 1 MiB. The current parent accepts protocol v1–v10 workers; newer capabilities
-require corresponding parent support. Upgrade the parent before enabling them.
-DM and native cog reaction hooks return Result and leave failed processing
-uncommitted. See [API 1.2 workflows](https://github.com/Lost1419/Rappin/blob/dev/docs/uploads-and-webhooks.md).
+Protocol 11 carries structured errors, message completion, operation identities,
+permission lookups, UI callbacks, public reads and bounded uploads. Upload chunks
+are 64 KiB, total upload data is bounded to 12 MiB and ordinary frames to 1 MiB.
+Rebuild the parent and every worker together when migrating from 0.1 or an earlier
+2.0 preview. Unsupported versions fail before routes are published.
 
-For fallible natural-language handlers, use `WorkerCog::on_message` and the parent
-[message-failure policy](https://github.com/Lost1419/Rappin/blob/dev/docs/message-policy.md). This opt-in uses protocol v5; existing
-handlers retain protocol v4, and new parents continue accepting older workers.
+Use `command_spec` for typed definitions, `command_typed` for its single-call
+convenience form, or `dynamic_command` for a runtime schema. They share registration,
+alias/group routing and help metadata. Preparation validates available pure
+argument schemas and reports worker checks as deferred. Execution parses again
+and runs checks before the handler. Custom checks implement `check_worker`.
 
-Additional opt-ins use protocol v6 for single-attempt API requests, v7 for select/modal
-interaction APIs, v8 for consumer operation identities, and v9 for fallible
-`Listener::ResourceEvent` delivery. API 1.4 JSON reads and writes use the existing
-proxy transport. Resource-listener errors propagate to the parent event checkpoint. See [API 1.3 interactions](https://github.com/Lost1419/Rappin/blob/dev/docs/interactions.md),
-[checked invocation](https://github.com/Lost1419/Rappin/blob/dev/docs/checked-invocation.md), and the protocol table in the [Rust bot guide](https://github.com/Lost1419/Rappin/blob/dev/docs/rust-bots.md).
-
-### Shared command specs
-
-`WorkerCog::command_spec` accepts native `CommandSpec<A>` definitions, including aliases and command groups. It advertises protocol10 and supplies pure argument schemas to preparation. Preparation reports worker checks as deferred. Execution parses again and runs fresh built-in checks before the handler. Custom CommandCheck implementations provide check_worker for worker execution. Shared specs enable UI, single-attempt API requests and operation identities together. Upgrade the parent first.
+Single-attempt requests, UI callbacks and operation identities are always available
+in the worker transport. The parent opts into extended event intake using
+`interactive_events(true)`. Listener and handler failures retain structured causes,
+partial receipts and checkpoint barriers. Use `on_message` for explicit completion
+outcomes and `on_interaction` for typed button/select/form/command values.

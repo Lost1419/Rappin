@@ -51,7 +51,7 @@ checks with application policy. Check endpoint rollout and keep platform 403
 causes. See [API 1.4 resources](https://github.com/Lost1419/Rappin/blob/dev/docs/resources.md).
 
 Resource lifecycle listeners use `on_resource_event` natively or
-`Listener::ResourceEvent` in workers. That worker opt-in needs a protocol v9 parent.
+`Listener::ResourceEvent` in workers. That worker opt-in needs a protocol 11 parent.
 Return structured errors for incomplete work so the event checkpoint stays blocked.
 
 ## Establish authority separately for each principal
@@ -80,7 +80,7 @@ system targets stay protected, and missing evidence stays Unknown.
 For validated role deletion use `RoleHierarchyPolicy::execute_deletion`, or
 `execute_role_deletion` with a composed host policy. These force fresh checks and
 `Api::request_once`; custom adapters must implement that method explicitly.
-Workers need `WorkerCog::single_attempt_api()` and a compatible parent. No DELETE
+Workers and their parent require protocol 11. No DELETE
 is automatically replayed, even with Retry-After. There is no atomic API operation
 combining requester assessment and deletion: account for revocation between them.
 

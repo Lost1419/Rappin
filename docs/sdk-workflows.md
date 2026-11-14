@@ -55,14 +55,13 @@ Requests retain the configured origin/path restrictions. Workers proxy through
 the parent and receive no credential getter. Custom implementations remain an
 application trust boundary.
 
-Worker protocol v3 carries `RemoteError`: kind, message, HTTP status, retry wait,
-outcome hints and partial-write details. `Error` status/retry helpers work
-on it. Error JSON is redacted before crossing the parent/worker boundary. Legacy
-string fields remain for v1/v2 workers; rebuild workers to obtain structured
-errors. The current host accepts v1–v8; older hosts reject worker capabilities beyond their supported version. Structured errors arrived in v3; later versions add opt-in behavior. See the [worker compatibility guide](https://github.com/Lost1419/Rappin/blob/dev/docs/rust-bots.md#hot-workers).
-Command/button dispatch preserves structured causes across callbacks and worker
-boundaries. Legacy callbacks observe failures; the explicit
-[failure policy](https://github.com/Lost1419/Rappin/blob/dev/docs/handler-failures.md) can complete an invocation. Typed worker
+Protocol 11 carries `RemoteError` with kind, message, HTTP status, retry hints,
+partial receipts and uncertain outcomes. Error JSON is redacted before crossing
+the parent/worker boundary. Rebuild both executables together. Unsupported
+protocol versions fail at candidate startup. The explicit
+[failure policy](https://github.com/Lost1419/Rappin/blob/dev/docs/handler-failures.md)
+controls completion after command and button failures.
+Typed worker
 parse errors reach the parent policy, and only recognized input/check rejections
 receive default terminal replies.
 
