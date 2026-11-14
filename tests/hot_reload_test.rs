@@ -2,7 +2,7 @@
 mod support;
 use rappin::{
     hot_reload::{HotReload, WorkerProject},
-    Bot, Client, Cog, CogBuilder, Command, Result, YappinError,
+    Bot, Client, Cog, CogBuilder, Command, Error, Result,
 };
 use serde_json::json;
 use std::{
@@ -40,7 +40,7 @@ impl Project {
         let ready = json!({"op":"ready","protocol":1,"manifest":{"name":"fixture","commands":commands.iter().map(|n|Command::new(*n,version)).collect::<Vec<_>>(),"buttons":[format!("{version}:")],"listeners":listeners}});
         let api = json!({"op":"api","method":"POST","path":"/channels/00000000-0000-0000-0000-000000000000/messages","body":{"content":version}});
         let source=r#"
-use std::io::{BufRead,Write};
+use std::io::{BufRead, Write};
 fn main(){
     for key in ["YAPPER_BOT_TOKEN","CARGO_REGISTRY_TOKEN","NODE_OPTIONS"] {assert!(std::env::var_os(key).is_none(),"inherited credential environment");}
     println!("{}",__READY__);std::io::stdout().flush().unwrap();
@@ -119,7 +119,8 @@ async fn edited_rust_is_rebuilt_while_inflight_old_code_finishes_and_failed_buil
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .build(),
+            .build()
+            .expect("valid bot configuration"),
     );
     bot.cache().set_me(me()).await;
     let reload = HotReload::load(bot.handle(), project.spec()).await.unwrap();
@@ -217,7 +218,8 @@ async fn watcher_reloads_source_and_registration_conflicts_preserve_existing_rou
         .sync_commands(false)
         .log(false)
         .command("reserved", "native", |_| async { Ok(()) })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache().set_me(me()).await;
     let reload = HotReload::load(bot.handle(), project.spec()).await.unwrap();
     let watch = reload.watch(Duration::from_millis(30)).await.unwrap();
@@ -317,7 +319,8 @@ async fn recovered_scans_clear_only_scan_errors_and_missing_sources_keep_active_
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache().set_me(me()).await;
     let reload = HotReload::load(bot.handle(), project.spec().watch_path(&shared))
         .await
@@ -396,7 +399,8 @@ async fn reload_removes_old_buttons_and_listeners_and_installs_new_ones() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache().set_me(me()).await;
     let reload = HotReload::load(bot.handle(), project.spec()).await.unwrap();
     let button = |prefix: &str| {
@@ -446,7 +450,8 @@ async fn timed_out_exchange_cannot_be_reused_and_reload_recovers_the_cog() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache().set_me(me()).await;
     let mut spec = project.spec();
     // The file gate keeps the first invocation pending until the transport expires.
@@ -476,7 +481,7 @@ impl Cog for BadCog {
         "native"
     }
     async fn on_load(&self, _: &Client) -> Result<()> {
-        Err(YappinError::Config("candidate failed".into()))
+        Err(Error::Config("candidate failed".into()))
     }
 }
 #[tokio::test]
@@ -486,7 +491,8 @@ async fn native_cog_load_failure_also_preserves_old_handler() {
     let bot = Bot::builder("yb_fixture")
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache().set_me(me()).await;
     bot.add_cog(
         CogBuilder::new("native")
@@ -520,7 +526,8 @@ async fn public_rust_worker_sdk_builds_and_proxies_replies_without_receiving_a_t
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .build(),
+            .build()
+            .expect("valid bot configuration"),
     );
     bot.cache().set_me(me()).await;
     let project = WorkerProject::example(
@@ -599,7 +606,7 @@ async fn rust_worker_shares_api_errors_permissions_and_runtime_schemas() {
     }
     let source = r#"
 use rappin::*;
-use serde_json::{json,Value};
+use serde_json::{json, Value};
 use uuid::Uuid;
 async fn common(api:&(impl Api+?Sized),path:&str)->Result<Value> {
     api.api_json::<_,()>("GET".parse().unwrap(),path,None).await
@@ -617,7 +624,7 @@ async fn main()->Result<()> {
             assert!(ctx.evaluate_permissions(Uuid::nil(),Uuid::nil(),Freshness::PreferCache).await?.administrator);
             let error=ctx.wait_for_event(EventFilter::default(),std::time::Duration::from_millis(10)).await.unwrap_err();
             assert_eq!(error.to_json()["kind"],"event_wait");
-            Err(YappinError::Api{status:418,message:"worker failure".into(),retry_after:None})
+            Err(Error::Api{status:418,message:"worker failure".into(),retry_after:None})
         })
         .dynamic_command(schema,|ctx,values|async move {ctx.say(format!("dynamic {}",values["n"])).await?;Ok(())})?
         .run().await
@@ -660,7 +667,8 @@ async fn main()->Result<()> {
         .lookup_cache(rappin::CachePolicy::new(8, Duration::from_secs(60)))
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache().set_me(me()).await;
     let _reload = HotReload::load(bot.handle(), project.spec()).await.unwrap();
     let error = bot.process_event(event("probe")).await.unwrap_err();
@@ -682,12 +690,17 @@ async fn main()->Result<()> {
 }
 #[async_trait::async_trait]
 impl rappin::EventHandler for ReadyGate {
-    async fn on_ready(&self, _: &Client, _: &rappin::BotProfile) {
+    async fn on_ready(&self, _: &Client, _: &rappin::BotProfile) -> rappin::Result<()> {
         self.ready.notify_one();
         self.resume.notified().await;
+        Ok(())
     }
-    async fn on_message(&self, ctx: &rappin::MessageContext) {
+    async fn on_message(
+        &self,
+        ctx: &rappin::MessageContext,
+    ) -> rappin::Result<rappin::MessageDisposition> {
         ctx.bot().unwrap().stop();
+        Ok(rappin::MessageDisposition::Continue)
     }
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -728,7 +741,8 @@ async fn failed_slash_sync_preserves_old_worker_and_main_bot_still_handles_event
             ready: ready.clone(),
             resume: resume.clone(),
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let reload = HotReload::load(bot.handle(), project.spec()).await.unwrap();
     let old = reload.process_id().await;
     let runner = tokio::spawn(bot.run());
@@ -795,7 +809,8 @@ async fn polling_and_unrelated_native_commands_continue_during_recompilation() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let reload = HotReload::load(bot.handle(), project.spec()).await.unwrap();
     let runner = tokio::spawn(bot.run());
     tokio::time::timeout(Duration::from_secs(10), async {
@@ -856,7 +871,8 @@ async fn worker_inherits_no_credentials_and_unload_prevents_future_reloads() {
     let bot = Bot::builder("yb_private_fixture")
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let reload = HotReload::load(bot.handle(), project.spec()).await.unwrap();
     let watch = reload.watch(Duration::from_millis(30)).await.unwrap();
     reload.unload().await.unwrap();
@@ -888,7 +904,8 @@ async fn compiler_codes_spans_and_build_script_effects_are_reported_without_sour
     let bot = Bot::builder("yb_report_private")
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let error = match HotReload::load(bot.handle(), project.spec()).await {
         Ok(_) => panic!("must not compile"),
         Err(error) => error,
@@ -947,7 +964,8 @@ async fn candidate_timeout_exit_and_protocol_phases_are_explicit() {
     let bot = Bot::builder("fixture")
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     tokio::fs::write(
         project.0.join("src/main.rs"),
         "fn main() { std::thread::sleep(std::time::Duration::from_secs(60)); }",
@@ -1033,7 +1051,7 @@ async fn structured_candidate_failure_crosses_worker_and_callback_without_implic
         "phase":"compilation","message":"Cargo compilation failed", "diagnostics":[{"code":"E0425","level":"error","message":"cannot find value","spans":[{"file":"src/main.rs","line_start":2,"line_end":2,"column_start":1,"column_end":4,"is_primary":true}],"children":[]}],
         "truncated":false,"exit":{"code":101,"signal":null},"timed_out":false,"candidate_started":false,"publication_attempted":false,"routes_published":false,"source":null
     })).unwrap();
-    let original = YappinError::HotReload {
+    let original = Error::HotReload {
         failure: Box::new(failure.clone()),
     };
     let ready = json!({"op":"ready","protocol":3,"manifest":{"name":"fixture","commands":[Command::new("proposal","test")],"buttons":[],"listeners":[]}}).to_string();
@@ -1059,7 +1077,8 @@ async fn structured_candidate_failure_crosses_worker_and_callback_without_implic
                 Ok(FailureDisposition::Stop)
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache().set_me(me()).await;
     let reload = HotReload::load(bot.handle(), project.spec()).await.unwrap();
     let error = bot.process_event(event("proposal")).await.unwrap_err();
@@ -1088,7 +1107,7 @@ async fn worker_role_policy_preserves_independent_checks_and_single_attempt_outc
         std::os::unix::fs::symlink(cache, project.0.join("target/rappin-hot")).unwrap();
     }
     let source = r#"
-use rappin::{*,capabilities::*};
+use rappin::{*, capabilities::*};
 use serde_json::json;
 use uuid::Uuid;
 #[tokio::main]
@@ -1169,7 +1188,8 @@ async fn main()->Result<()> {
                 Ok(rappin::FailureDisposition::Handled)
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache().set_me(me()).await;
     let _reload = HotReload::load(
         bot.handle(),
@@ -1217,7 +1237,8 @@ async fn main()->Result<()> {
         .base_url("http://127.0.0.1:1")
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache().set_me(me()).await;
     let _reload = HotReload::load(
         bot.handle(),
@@ -1249,7 +1270,7 @@ async fn ui_worker_preserves_values_callbacks_and_failure_causes() {
 use rappin::*;
 #[tokio::main]
 async fn main()->Result<()> {
-    WorkerCog::new("ui-worker").on_ui_interaction(|ctx|async move {
+    WorkerCog::new("ui-worker").on_interaction(|ctx|async move {
         let data=ctx.ui_interaction().expect("extended event");
         match data.interaction.kind.as_deref() {
             Some("select")=>{
@@ -1258,11 +1279,11 @@ async fn main()->Result<()> {
             },
             Some("modal_submit")=>{
                 assert!(matches!(&data.values,Some(InteractionValues::Submitted(v)) if matches!(v.get("name"),Some(ModalValue::Text(t)) if t=="Rust")));
-                Err(YappinError::Api{status:503,message:"structured worker failure".into(),retry_after:Some(2.0)})
+                Err(Error::Api{status:503,message:"structured worker failure".into(),retry_after:Some(2.0)})
             },
             Some("command")=>{
                 assert_eq!(data.command.as_deref(),Some("apply"));
-                ctx.respond_ui(&data.interaction,InteractionCallbackType::Reply,&UiMessageBody::new("Command received")).await
+                ctx.respond(&data.interaction,InteractionCallbackType::Reply,&CreateMessage::new("Command received")).await
             },
             _=>panic!("unexpected event"),
         }
@@ -1294,7 +1315,8 @@ async fn main()->Result<()> {
                 Ok(rappin::FailureDisposition::Handled)
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache().set_me(me()).await;
     let _reload = HotReload::load(
         bot.handle(),
@@ -1326,4 +1348,197 @@ async fn main()->Result<()> {
     assert!(second.contains("Command received"));
     assert!(!second.contains("private_interaction_token"));
     http.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shared_worker_specs_prepare_aliases_groups_state_and_identified_partial_effects() {
+    use rappin::{MessageDisposition, OperationId};
+    let project = Project::new().await;
+    let manifest = format!("[package]\nname=\"shared-spec-worker\"\nversion=\"0.0.0\"\nedition=\"2021\"\n[workspace]\n[dependencies]\nrappin={{package=\"rappin-rs\",path={:?},features=[\"hot-reload\",\"derive\"]}}\ntokio={{version=\"1\",features=[\"macros\",\"rt-multi-thread\"]}}\nserde_json=\"1\"\n", env!("CARGO_MANIFEST_DIR"));
+    tokio::fs::write(project.0.join("Cargo.toml"), manifest)
+        .await
+        .unwrap();
+    tokio::fs::write(project.0.join("src/main.rs"), r#"
+use rappin::{prelude::*, WorkerCog};
+use std::sync::{Arc,atomic::{AtomicU32,Ordering}};
+#[derive(FromArgs)]
+struct Roll { #[arg(min = 2, max = 100)] sides: u32 }
+#[tokio::main]
+async fn main() -> Result<()> {
+ WorkerCog::new("shared-spec")
+ .state(Arc::new(AtomicU32::new(0)))
+ .command_spec(CommandSpec::<Roll>::new("math roll","Roll").alias("roll").check(Check::server_only()), |ctx,args|async move {
+    let count = ctx.state::<AtomicU32>()?.fetch_add(1,Ordering::SeqCst)+1;
+    let id = ctx.operation_id().unwrap().as_str();
+    ctx.reply(format!("{id}:d{}:count{count}",args.sides)).await
+ })
+ .command_spec(CommandSpec::<()>::new("member","Role check").check(Check::roles(["00000000-0000-0000-0000-000000000000".parse().unwrap()])), |ctx,()|async move {
+    let count = ctx.state::<AtomicU32>()?.fetch_add(1,Ordering::SeqCst)+1;
+    ctx.reply(format!("member:count{count}")).await
+ })
+ .command_spec(CommandSpec::<()>::new("broken","Partial").check(Check::server_only()), |ctx,()|async move {
+    let first=ctx.say("confirmed").await?;
+    let source=ctx.say("uncertain").await.unwrap_err();
+    Err(Error::PartialWrite {completed:vec![serde_json::json!({"message":first})],failed_step:2,source:Box::new(source)})
+ }).run().await
+}
+"#).await.unwrap();
+    let response = json!({"message":rappin::Message::default()});
+    let member =
+        |roles| json!({"member":{"id":uuid::Uuid::nil(),"username":"requester","roles":roles}});
+    let (base, mut requests, http) = support::mock(vec![
+        support::response(200, response.clone()), // Denied DM reply, no worker handler.
+        support::response(200, response.clone()),
+        support::response(200, response.clone()),
+        support::response(200, response.clone()),
+        support::response(200, member(vec![uuid::Uuid::nil()])),
+        support::response(200, response.clone()),
+        support::response(200, member(vec![])),
+        support::response(200, response.clone()), // Revoked role reply, no worker handler.
+        support::response(200, response),
+        support::response(502, json!({"error":"unknown write outcome"})),
+    ])
+    .await;
+    let bot = Bot::builder("unused-fixture")
+        .base_url(base)
+        .sync_commands(false)
+        .log(false)
+        .message_gate(|_| async { Ok(MessageDisposition::Continue) })
+        .command("plan", "Prepare the full plan", |ctx| async move {
+            let bot = ctx.bot().unwrap();
+            assert!(bot.prepare_invocation(&ctx, "roll", "101").await.is_err());
+            let a = bot
+                .prepare_invocation_with_operation_id(
+                    &ctx,
+                    "roll",
+                    "20",
+                    OperationId::new("step/a")?,
+                )
+                .await?;
+            let b = bot
+                .prepare_invocation_with_operation_id(
+                    &ctx,
+                    "math roll",
+                    "30",
+                    OperationId::new("step/b")?,
+                )
+                .await?;
+            assert!(a
+                .report()
+                .deferred
+                .iter()
+                .any(|check| check == "worker command checks"));
+            assert!(a
+                .report()
+                .assessed
+                .iter()
+                .any(|check| check.contains("argument schema")));
+            bot.invoke_prepared(a).await.into_result()?;
+            bot.invoke_prepared(b).await.into_result()?;
+            bot.invoke_command_with_operation_id(&ctx, "roll", "20", OperationId::new("step/a")?)
+                .await
+                .into_result()
+        })
+        .build()
+        .unwrap();
+    bot.cache().set_me(me()).await;
+    let reload = HotReload::load(
+        bot.handle(),
+        WorkerProject::new(project.0.join("Cargo.toml"), "shared-spec-worker").offline(true),
+    )
+    .await
+    .unwrap();
+    let mut denied = serde_json::to_value(event("roll")).unwrap();
+    denied["data"]["args"] = json!("20");
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        bot.process_event(serde_json::from_value(denied).unwrap()),
+    )
+    .await
+    .expect("denied invocation timed out")
+    .unwrap();
+    let rejection = tokio::time::timeout(Duration::from_secs(5), requests.recv())
+        .await
+        .expect("missing rejection reply")
+        .unwrap();
+    assert!(rejection.contains("requires a server"));
+    assert!(!rejection.contains("count"));
+    let mut input = serde_json::to_value(event("plan")).unwrap();
+    input["data"]["server_id"] = json!(uuid::Uuid::nil());
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        bot.process_event(serde_json::from_value(input).unwrap()),
+    )
+    .await
+    .expect("plan execution timed out")
+    .unwrap();
+    for expected in [
+        "step/a:d20:count1",
+        "step/b:d30:count2",
+        "step/a:d20:count3",
+    ] {
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), requests.recv())
+                .await
+                .expect("missing recorded API request")
+                .unwrap()
+                .contains(expected)
+        );
+    }
+    for granted in [true, false] {
+        let mut input = serde_json::to_value(event("member")).unwrap();
+        input["data"]["server_id"] = json!(uuid::Uuid::nil());
+        bot.process_event(serde_json::from_value(input).unwrap())
+            .await
+            .unwrap();
+        let read = tokio::time::timeout(Duration::from_secs(5), requests.recv())
+            .await
+            .expect("missing membership read")
+            .unwrap();
+        assert!(read.starts_with(&format!("GET /servers/{0}/members/{0}", uuid::Uuid::nil())));
+        let reply = tokio::time::timeout(Duration::from_secs(5), requests.recv())
+            .await
+            .expect("missing membership reply")
+            .unwrap();
+        if granted {
+            assert!(reply.contains("member:count4"));
+        } else {
+            assert!(reply.contains("required role is missing"));
+            assert!(!reply.contains("count"));
+        }
+    }
+    let mut input = serde_json::to_value(event("broken")).unwrap();
+    input["data"]["server_id"] = json!(uuid::Uuid::nil());
+    let error = bot
+        .process_event(serde_json::from_value(input).unwrap())
+        .await
+        .unwrap_err();
+    let value = error.to_json();
+    assert_eq!(value["kind"], "partial_write");
+    assert_eq!(value["completed_steps"].as_array().unwrap().len(), 1);
+    assert_eq!(value["status"], 502);
+    assert_eq!(value["outcome"], "unknown");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), requests.recv())
+            .await
+            .expect("missing recorded API request")
+            .unwrap()
+            .contains("confirmed")
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), requests.recv())
+            .await
+            .expect("missing recorded API request")
+            .unwrap()
+            .contains("uncertain")
+    );
+    assert!(requests.try_recv().is_err());
+    tokio::time::timeout(Duration::from_secs(5), reload.unload())
+        .await
+        .expect("unload timed out")
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), http)
+        .await
+        .expect("mock HTTP fixture did not finish")
+        .unwrap();
 }

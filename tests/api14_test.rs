@@ -32,7 +32,7 @@ impl Api for MockApi {
             .push((method.clone(), path.into(), body));
         if method != Method::GET {
             if self.uncertain_write.load(Ordering::SeqCst) {
-                return Err(YappinError::Remote(RemoteError {
+                return Err(Error::Remote(RemoteError {
                     kind: "fixture_partial".into(),
                     message: "write may have completed".into(),
                     status: Some(504),
@@ -186,8 +186,9 @@ fn stickers_are_standalone_and_legacy_messages_still_validate() {
             .validate(&json!({"channel":id(3),"body":body}))
             .is_err());
     }
-    let body: UiMessageBody = serde_json::from_value(json!({"sticker_id":id(8)})).unwrap();
-    assert!(body.validate(false).is_err());
+    let body: CreateMessage = serde_json::from_value(json!({"sticker_id":id(8)})).unwrap();
+    body.validate().unwrap();
+    assert!(serde_json::from_value::<EditMessage>(json!({"sticker_id":id(8)})).is_err());
     CreateMessage::new("legacy text").validate().unwrap();
     assert!(capability("send_files").unwrap().validate(&json!({"channel":id(3),"body":{"sticker_id":id(8)},"files":[{"name":"a.txt","data":"eA=="}]})).is_err());
 }
@@ -388,7 +389,7 @@ impl EventHandler for ResourceObserver {
     async fn on_resource_event(&self, _client: &Client, event: &ResourceEvent) -> Result<()> {
         self.0.lock().unwrap().push(event.kind.as_str().into());
         if event.kind == ResourceEventKind::ChannelUpdate {
-            return Err(YappinError::Remote(RemoteError {
+            return Err(Error::Remote(RemoteError {
                 kind: "resource_listener_failure".into(),
                 message: "incomplete resource work".into(),
                 status: Some(502),
@@ -418,9 +419,10 @@ async fn resource_listener_failure_keeps_ordered_polling_checkpoint_and_cause() 
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&path)
+        .configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new(&path)))
         .event_handler(ResourceObserver(seen.clone()))
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .update_channel(
             serde_json::from_value(
@@ -571,17 +573,21 @@ async fn resource_events_keep_duplicate_and_failure_barriers_over_gateway() {
     let seen = std::sync::Arc::new(Mutex::new(vec![]));
     let bot = Bot::builder("fixture")
         .base_url(base)
-        .gateway_only(url)
+        .configure(|settings| {
+            settings.transport.gateway_url = Some(url);
+            settings.transport.mode = rappin::TransportMode::GatewayOnly;
+        })
         .sync_commands(false)
         .log(false)
-        .cursor_file(&path)
+        .configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new(&path)))
         .event_handler(ResourceObserver(seen.clone()))
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let error = tokio::time::timeout(std::time::Duration::from_secs(5), bot.run())
         .await
         .unwrap()
         .unwrap_err();
-    let YappinError::EventProcessing { report } = error else {
+    let Error::EventProcessing { report } = error else {
         panic!("expected checkpoint report")
     };
     assert_eq!(report.failed_events[0].error.details["outcome"], "unknown");

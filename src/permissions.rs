@@ -1,5 +1,5 @@
 //! Server permission evaluation, independent of command routing or storage.
-use crate::{MemberDetail, Permission, Result, Role, Server, YappinError};
+use crate::{Error, MemberDetail, Permission, Result, Role, Server};
 use std::collections::{BTreeSet, HashSet};
 use uuid::Uuid;
 
@@ -17,7 +17,7 @@ use uuid::Uuid;
 /// let access = snapshot.evaluate()?;
 /// assert!(access.owner);
 /// assert!(access.allows(&Permission::manage_messages()));
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct PermissionSnapshot {
     /// Server evidence, including the actual owner ID.
@@ -45,7 +45,7 @@ pub struct PermissionSnapshot {
 /// let access = snapshot.evaluate()?;
 /// assert!(access.owner);
 /// assert!(access.allows(&Permission::manage_messages()));
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct PermissionEvaluation {
     /// Server scope of this evaluation.
@@ -74,7 +74,7 @@ impl PermissionEvaluation {
     /// let access = snapshot.evaluate()?;
     /// assert!(access.owner);
     /// assert!(access.allows(&Permission::manage_messages()));
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn allows(&self, permission: &Permission) -> bool {
         self.owner || self.administrator || self.granted.contains(permission.as_str())
@@ -93,7 +93,7 @@ impl PermissionEvaluation {
     /// let access = snapshot.evaluate()?;
     /// assert!(access.owner);
     /// assert!(access.allows_all(&[Permission::manage_messages()]));
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn allows_all(&self, permissions: &[Permission]) -> bool {
         permissions.iter().all(|p| self.allows(p))
@@ -112,7 +112,7 @@ impl PermissionEvaluation {
     /// let access = snapshot.evaluate()?;
     /// assert!(access.owner);
     /// assert!(access.require(&[Permission::manage_messages()]).is_ok());
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn require(&self, permissions: &[Permission]) -> Result<()> {
         if let Some(permission) = permissions.iter().find(|p| !self.allows(p)) {
@@ -141,7 +141,7 @@ impl PermissionSnapshot {
     /// let access = snapshot.evaluate()?;
     /// assert!(access.owner);
     /// assert!(access.allows(&Permission::manage_messages()));
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn evaluate(&self) -> Result<PermissionEvaluation> {
         let mut result = PermissionEvaluation {
@@ -159,14 +159,14 @@ impl PermissionSnapshot {
             .as_ref()
             .filter(|m| m.member.user.id == self.actor)
             .ok_or_else(|| {
-                YappinError::validation(
+                Error::validation(
                     "permissions",
                     "matching membership is required for a non-owner",
                 )
             })?;
         let ids: HashSet<_> = self.roles.iter().map(|r| r.id).collect();
         if member.member.roles.iter().any(|id| !ids.contains(id)) || ids.len() != self.roles.len() {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "permissions",
                 "role snapshot is incomplete or contains duplicate IDs",
             ));

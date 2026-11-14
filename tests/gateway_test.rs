@@ -237,8 +237,11 @@ async fn bot_gateway_keeps_heartbeating_while_a_single_handler_waits_for_a_reply
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .handler_concurrency(1)
-        .gateway_only(format!("ws://{address}"))
+        .configure(|settings| settings.execution.concurrency = 1)
+        .configure(|settings| {
+            settings.transport.gateway_url = Some(format!("ws://{address}"));
+            settings.transport.mode = rappin::TransportMode::GatewayOnly;
+        })
         .command(
             "hold",
             "Wait without blocking gateway heartbeats",
@@ -265,7 +268,8 @@ async fn bot_gateway_keeps_heartbeating_while_a_single_handler_waits_for_a_reply
                 }
             },
         )
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     tokio::time::timeout(Duration::from_secs(3), bot.run())
         .await

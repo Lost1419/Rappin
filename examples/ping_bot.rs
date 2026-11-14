@@ -6,7 +6,7 @@
 //! cargo run --example ping_bot
 //! ```
 
-use rappin::prelude::*;
+use rappin::*;
 use std::env;
 
 #[tokio::main]
@@ -14,8 +14,8 @@ async fn main() -> Result<()> {
     // Enable tracing/logging
     tracing_subscriber::fmt::init();
 
-    let token = env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+    let token =
+        env::var("YAPPER_BOT_TOKEN").map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
 
     let bot = Bot::builder(token)
         .prefix("!")
@@ -71,7 +71,8 @@ async fn main() -> Result<()> {
             }
             Ok(())
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
 
     println!("Starting Yapin' bot... Press Ctrl+C to exit.");
     bot.run().await?;

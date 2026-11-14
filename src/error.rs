@@ -7,8 +7,8 @@ use thiserror::Error;
 /// # Example
 ///
 /// ```rust
-/// use rappin::YappinError;
-/// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+/// use rappin::Error;
+/// let error = Error::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
 /// assert_eq!(error.status_code(), Some(429));
 /// assert!(error.is_rate_limit());
 /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
@@ -83,8 +83,8 @@ impl RemoteError {
     /// # Example
     ///
     /// ```rust
-    /// use rappin::YappinError;
-    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// use rappin::Error;
+    /// let error = Error::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
     /// assert_eq!(error.status_code(), Some(429));
     /// assert!(error.is_rate_limit());
     /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
@@ -116,8 +116,8 @@ impl serde::Serialize for RemoteError {
 /// # Example
 ///
 /// ```rust
-/// use rappin::YappinError;
-/// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+/// use rappin::Error;
+/// let error = Error::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
 /// assert_eq!(error.status_code(), Some(429));
 /// assert!(error.is_rate_limit());
 /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
@@ -125,7 +125,7 @@ impl serde::Serialize for RemoteError {
 /// assert_eq!(remote.to_json()["status"], 429);
 /// // A retry hint does not authorize replaying a handler or uncertain mutation.
 /// ```
-pub enum YappinError {
+pub enum Error {
     #[error("conflicting event payload for event {event_id}", event_id = .conflict.event_id)]
     /// Conflicting payloads were delivered for the same event identity; original receipts remain retained.
     IngressConflict {
@@ -140,7 +140,7 @@ pub enum YappinError {
         operation_id: crate::OperationId,
         #[source]
         /// Original incomplete invocation cause.
-        source: Box<YappinError>,
+        source: Box<Error>,
     },
     /// An explicitly invoked command did not complete. The outer handler owns
     /// reconciliation; this wrapper never triggers typed-rejection auto-replies.
@@ -154,7 +154,7 @@ pub enum YappinError {
         effects_possible: bool,
         #[source]
         /// Original structured cause when available.
-        source: Option<Box<YappinError>>,
+        source: Option<Box<Error>>,
     },
     #[error("retry wait budget exhausted after {waited:?} (budget {budget:?}): {source}")]
     /// The server-advised/shared rate-limit wait budget was exhausted.
@@ -165,7 +165,7 @@ pub enum YappinError {
         budget: std::time::Duration,
         #[source]
         /// Original cause/status/retry hint that exhausted the allowance.
-        source: Box<YappinError>,
+        source: Box<Error>,
     },
     #[error("{failure}")]
     /// Candidate build/startup/protocol/registration/publication failed; inspect its bounded report.
@@ -186,9 +186,9 @@ pub enum YappinError {
     /// The failure callback or error reply failed as well as the original operation.
     FailureHandling {
         /// Original invocation failure.
-        source: Box<YappinError>,
+        source: Box<Error>,
         /// Additional failure while replying or running the failure callback.
-        handling_error: Box<YappinError>,
+        handling_error: Box<Error>,
     },
     #[error("handler completion is uncertain: {reason}{cause}",cause=.source.as_ref().map(|e|format!(": {e}")).unwrap_or_default())]
     /// Handler completion became uncertain, including cancellation or panic.
@@ -197,7 +197,7 @@ pub enum YappinError {
         reason: String,
         #[source]
         /// Original failure, if one was captured before interruption.
-        source: Option<Box<YappinError>>,
+        source: Option<Box<Error>>,
     },
     #[error("operation authorization is denied or incomplete: {operation}",operation=.report.operation)]
     /// Required scoped access was Denied or Unknown.
@@ -235,7 +235,7 @@ pub enum YappinError {
         failed_step: usize,
         #[source]
         /// Original failed-step cause, including any unknown mutation outcome.
-        source: Box<YappinError>,
+        source: Box<Error>,
     },
     #[error(transparent)]
     /// Typed command input/policy failure; invalid definitions remain unexpected.
@@ -311,13 +311,13 @@ pub enum YappinError {
     ),
 }
 
-impl YappinError {
+impl Error {
     /// Recover bounded ingress diagnostics from native, remote, or pipeline errors.
     /// # Example
     ///
     /// ```rust
-    /// use rappin::YappinError;
-    /// fn inspect(error: &YappinError) {
+    /// use rappin::Error;
+    /// fn inspect(error: &Error) {
     ///     if let Some(report) = error.ingress_conflict() { println!("{report:?}"); }
     /// }
     /// ```
@@ -346,8 +346,8 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// use rappin::YappinError;
-    /// fn inspect(error: &YappinError) {
+    /// use rappin::Error;
+    /// fn inspect(error: &Error) {
     ///     if let Some(report) = error.availability_failure() { println!("{report:?}"); }
     /// }
     /// ```
@@ -367,8 +367,8 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// use rappin::YappinError;
-    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// use rappin::Error;
+    /// let error = Error::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
     /// assert_eq!(error.status_code(), Some(429));
     /// assert!(error.is_rate_limit());
     /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
@@ -412,9 +412,9 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// use rappin::error::YappinError;
+    /// use rappin::error::Error;
     ///
-    /// let err = YappinError::RateLimited { retry_after: 2.5 };
+    /// let err = Error::RateLimited { retry_after: 2.5 };
     /// assert!(err.is_rate_limit());
     /// ```
     pub fn is_rate_limit(&self) -> bool {
@@ -428,8 +428,8 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// use rappin::YappinError;
-    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// use rappin::Error;
+    /// let error = Error::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
     /// assert_eq!(error.status_code(), Some(429));
     /// assert!(error.is_rate_limit());
     /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
@@ -487,7 +487,7 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// let error = rappin::YappinError::validation("content", "must not be empty");
+    /// let error = rappin::Error::validation("content", "must not be empty");
     /// assert_eq!(error.to_json()["field"], "content");
     /// ```
     pub fn validation(field: impl Into<String>, message: impl Into<String>) -> Self {
@@ -501,8 +501,8 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// use rappin::YappinError;
-    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// use rappin::Error;
+    /// let error = Error::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
     /// assert_eq!(error.status_code(), Some(429));
     /// assert!(error.is_rate_limit());
     /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
@@ -646,8 +646,8 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// use rappin::YappinError;
-    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// use rappin::Error;
+    /// let error = Error::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
     /// assert_eq!(error.status_code(), Some(429));
     /// assert!(error.is_rate_limit());
     /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
@@ -664,8 +664,8 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// use rappin::YappinError;
-    /// fn inspect(error: &YappinError) {
+    /// use rappin::Error;
+    /// fn inspect(error: &Error) {
     ///     if let Some(report) = error.hot_reload_failure() { println!("{report:?}"); }
     /// }
     /// ```
@@ -687,7 +687,7 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// let error = rappin::YappinError::Api { status: 401, message: "Example".into(), retry_after: None };
+    /// let error = rappin::Error::Api { status: 401, message: "Example".into(), retry_after: None };
     /// assert!(error.is_unauthorized());
     /// ```
     pub fn is_unauthorized(&self) -> bool {
@@ -698,8 +698,8 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// use rappin::YappinError;
-    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// use rappin::Error;
+    /// let error = Error::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
     /// assert_eq!(error.status_code(), Some(429));
     /// assert!(error.is_rate_limit());
     /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
@@ -716,8 +716,8 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// use rappin::YappinError;
-    /// let error = YappinError::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
+    /// use rappin::Error;
+    /// let error = Error::Api { status: 429, message: "Rate limited".into(), retry_after: Some(2.0) };
     /// assert_eq!(error.status_code(), Some(429));
     /// assert!(error.is_rate_limit());
     /// assert_eq!(error.retry_after(), Some(std::time::Duration::from_secs(2)));
@@ -734,7 +734,7 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// let error = rappin::YappinError::Api { status: 403, message: "Example".into(), retry_after: None };
+    /// let error = rappin::Error::Api { status: 403, message: "Example".into(), retry_after: None };
     /// assert!(error.is_forbidden());
     /// ```
     pub fn is_forbidden(&self) -> bool {
@@ -746,9 +746,9 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// use rappin::error::YappinError;
+    /// use rappin::error::Error;
     ///
-    /// let err = YappinError::Api {
+    /// let err = Error::Api {
     ///     status: 404,
     ///     message: "Channel not found".to_string(),
     ///     retry_after: None,
@@ -763,7 +763,7 @@ impl YappinError {
     /// # Example
     ///
     /// ```rust
-    /// let error = rappin::YappinError::Api { status: 503, message: "Example".into(), retry_after: None };
+    /// let error = rappin::Error::Api { status: 503, message: "Example".into(), retry_after: None };
     /// assert!(error.is_server_error());
     /// ```
     pub fn is_server_error(&self) -> bool {
@@ -773,9 +773,9 @@ impl YappinError {
 }
 
 /// A specialized Result type for Yapin' operations.
-pub type Result<T> = std::result::Result<T, YappinError>;
+pub type Result<T> = std::result::Result<T, Error>;
 
-impl From<reqwest::Error> for YappinError {
+impl From<reqwest::Error> for Error {
     fn from(error: reqwest::Error) -> Self {
         Self::Http(error.without_url())
     }

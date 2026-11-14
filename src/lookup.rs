@@ -6,7 +6,7 @@
 //! assert_eq!(result.status(), LookupStatus::Unique);
 //! ```
 //! Bounded name searches that distinguish uniqueness from an unfinished scan.
-use crate::{Client, Member, Result, YappinError};
+use crate::{Client, Error, Member, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -108,23 +108,23 @@ impl<T> LookupResult<T> {
     /// let result = LookupResult { matches: vec![42], complete: true, scanned: 1, pages: 1, next_cursor: None, stop: SearchStop::Exhausted };
     /// assert_eq!(result.into_unique("member").unwrap(), 42);
     /// let unfinished = LookupResult { matches: vec![42], complete: false, scanned: 1, pages: 1, next_cursor: None, stop: SearchStop::PageLimit };
-    /// assert!(matches!(unfinished.into_unique("member"), Err(rappin::YappinError::IncompleteSearch { .. })));
+    /// assert!(matches!(unfinished.into_unique("member"), Err(rappin::Error::IncompleteSearch { .. })));
     /// ```
     pub fn into_unique(mut self, resource: &str) -> Result<T> {
         match self.status() {
             LookupStatus::Unique => Ok(self.matches.remove(0)),
-            LookupStatus::Incomplete => Err(YappinError::IncompleteSearch {
+            LookupStatus::Incomplete => Err(Error::IncompleteSearch {
                 resource: resource.into(),
                 scanned: self.scanned,
                 pages: self.pages,
                 next_cursor: self.next_cursor,
                 matches: self.matches.len(),
             }),
-            LookupStatus::NotFound => Err(YappinError::validation(
+            LookupStatus::NotFound => Err(Error::validation(
                 resource,
                 "no match in the requested search scope",
             )),
-            LookupStatus::Ambiguous => Err(YappinError::validation(
+            LookupStatus::Ambiguous => Err(Error::validation(
                 resource,
                 "ambiguous name; use a stable ID or narrower scope",
             )),
@@ -215,15 +215,12 @@ where
     PF: std::future::Future<Output = Result<Vec<Member>>> + Send,
 {
     if !(1..=100).contains(&max_pages) {
-        return Err(YappinError::validation(
-            "max_pages",
-            "must be between 1 and 100",
-        ));
+        return Err(Error::validation("max_pages", "must be between 1 and 100"));
     }
     if let Ok(id) = name.parse::<Uuid>() {
         let member = get_member(id).await?.member;
         if member.user.id != id {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "member",
                 "API returned a different member ID",
             ));

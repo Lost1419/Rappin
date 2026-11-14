@@ -158,7 +158,7 @@ impl CogButton {
 /// #[async_trait]
 /// impl Cog for Greetings {
 ///     fn name(&self) -> &str { "greetings" }
-///     async fn on_message_result(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
+///     async fn on_message(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
 ///         if ctx.content() == "hello" { ctx.reply("Hello!").await?; }
 ///         Ok(MessageDisposition::Continue)
 ///     }
@@ -213,7 +213,7 @@ pub trait Cog: Send + Sync + 'static {
     /// #[async_trait]
     /// impl Cog for Greetings {
     ///     fn name(&self) -> &str { "greetings" }
-    ///     async fn on_message_result(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
+    ///     async fn on_message(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
     ///         if ctx.content() == "hello" { ctx.reply("Hello!").await?; }
     ///         Ok(MessageDisposition::Continue)
     ///     }
@@ -308,22 +308,8 @@ pub trait Cog: Send + Sync + 'static {
         Ok(())
     }
 
-    /// Optional message listener hook.
-    /// # Example
-    ///
-    /// ```rust
-    /// use async_trait::async_trait;
-    /// use rappin::Cog;
-    /// struct Module;
-    /// #[async_trait]
-    /// impl Cog for Module {
-    ///     fn name(&self) -> &str { "module" }
-    ///     async fn on_message(&self, ctx: &rappin::MessageContext) { tracing::debug!(message = %ctx.message_id(), "Message observed"); }
-    /// }
-    /// ```
-    async fn on_message(&self, _ctx: &MessageContext) {}
-    /// Fallible server-message listener. The default calls the legacy observer.
-    /// Override this for required I/O; errors enter the bot's message failure policy.
+    /// Fallible server-message listener. The default continues dispatch.
+    /// Errors enter the bot's message failure policy.
     /// # Example
     ///
     /// ```rust
@@ -333,14 +319,13 @@ pub trait Cog: Send + Sync + 'static {
     /// #[async_trait]
     /// impl Cog for Greetings {
     ///     fn name(&self) -> &str { "greetings" }
-    ///     async fn on_message_result(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
+    ///     async fn on_message(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
     ///         if ctx.content() == "hello" { ctx.reply("Hello!").await?; }
     ///         Ok(MessageDisposition::Continue)
     ///     }
     /// }
     /// ```
-    async fn on_message_result(&self, ctx: &MessageContext) -> Result<super::MessageDisposition> {
-        self.on_message(ctx).await;
+    async fn on_message(&self, _ctx: &MessageContext) -> Result<super::MessageDisposition> {
         Ok(super::MessageDisposition::Continue)
     }
     /// Fallible reaction listener; errors retain event completion barriers.
@@ -402,23 +387,6 @@ pub trait Cog: Send + Sync + 'static {
         Ok(())
     }
 
-    /// Fallible extended event hook; requires opt-in interactive_events on the parent.
-    /// # Example
-    ///
-    /// ```rust
-    /// use async_trait::async_trait;
-    /// use rappin::Cog;
-    /// struct Module;
-    /// #[async_trait]
-    /// impl Cog for Module {
-    ///     fn name(&self) -> &str { "module" }
-    ///     async fn on_ui_interaction(&self, ctx: &rappin::UiInteractionContext) -> rappin::Result<()> { ctx.respond_ui(rappin::InteractionCallbackType::Ephemeral, &rappin::UiMessageBody::new("Received")).await }
-    /// }
-    /// ```
-    async fn on_ui_interaction(&self, _ctx: &crate::UiInteractionContext) -> crate::Result<()> {
-        Ok(())
-    }
-
     /// Optional interaction listener hook.
     /// # Example
     ///
@@ -429,10 +397,12 @@ pub trait Cog: Send + Sync + 'static {
     /// #[async_trait]
     /// impl Cog for Module {
     ///     fn name(&self) -> &str { "module" }
-    ///     async fn on_interaction(&self, ctx: &rappin::InteractionContext) { tracing::debug!(interaction = ctx.interaction_id(), "Interaction observed"); }
+    ///     async fn on_interaction(&self, ctx: &rappin::InteractionContext) -> rappin::Result<()> { tracing::debug!(interaction = ctx.interaction_id(), "Interaction observed");  Ok(()) }
     /// }
     /// ```
-    async fn on_interaction(&self, _ctx: &InteractionContext) {}
+    async fn on_interaction(&self, _ctx: &InteractionContext) -> crate::Result<()> {
+        Ok(())
+    }
 
     /// Optional member join hook.
     /// # Example
@@ -444,10 +414,16 @@ pub trait Cog: Send + Sync + 'static {
     /// #[async_trait]
     /// impl Cog for Observer {
     ///     fn name(&self) -> &str { "observer" }
-    ///     async fn on_member_join(&self, _client: &rappin::Client, _event: &rappin::MemberJoinEvent) { tracing::debug!("Event observed"); }
+    ///     async fn on_member_join(&self, _client: &rappin::Client, _event: &rappin::MemberJoinEvent) -> rappin::Result<()> { tracing::debug!("Event observed");  Ok(()) }
     /// }
     /// ```
-    async fn on_member_join(&self, _client: &Client, _event: &MemberJoinEvent) {}
+    async fn on_member_join(
+        &self,
+        _client: &Client,
+        _event: &MemberJoinEvent,
+    ) -> crate::Result<()> {
+        Ok(())
+    }
 
     /// Optional member leave hook.
     /// # Example
@@ -459,10 +435,16 @@ pub trait Cog: Send + Sync + 'static {
     /// #[async_trait]
     /// impl Cog for Observer {
     ///     fn name(&self) -> &str { "observer" }
-    ///     async fn on_member_leave(&self, _client: &rappin::Client, _event: &rappin::MemberLeaveEvent) { tracing::debug!("Event observed"); }
+    ///     async fn on_member_leave(&self, _client: &rappin::Client, _event: &rappin::MemberLeaveEvent) -> rappin::Result<()> { tracing::debug!("Event observed");  Ok(()) }
     /// }
     /// ```
-    async fn on_member_leave(&self, _client: &Client, _event: &MemberLeaveEvent) {}
+    async fn on_member_leave(
+        &self,
+        _client: &Client,
+        _event: &MemberLeaveEvent,
+    ) -> crate::Result<()> {
+        Ok(())
+    }
     /// Optional invite-create listener (Manage Server; test servers only).
     /// # Example
     ///
@@ -473,10 +455,16 @@ pub trait Cog: Send + Sync + 'static {
     /// #[async_trait]
     /// impl Cog for Observer {
     ///     fn name(&self) -> &str { "observer" }
-    ///     async fn on_invite_create(&self, _client: &rappin::Client, _event: &rappin::InviteEvent) { tracing::debug!("Event observed"); }
+    ///     async fn on_invite_create(&self, _client: &rappin::Client, _event: &rappin::InviteEvent) -> rappin::Result<()> { tracing::debug!("Event observed");  Ok(()) }
     /// }
     /// ```
-    async fn on_invite_create(&self, _client: &Client, _event: &crate::InviteEvent) {}
+    async fn on_invite_create(
+        &self,
+        _client: &Client,
+        _event: &crate::InviteEvent,
+    ) -> crate::Result<()> {
+        Ok(())
+    }
     /// Optional invite-delete listener (Manage Server; test servers only).
     /// # Example
     ///
@@ -487,10 +475,16 @@ pub trait Cog: Send + Sync + 'static {
     /// #[async_trait]
     /// impl Cog for Observer {
     ///     fn name(&self) -> &str { "observer" }
-    ///     async fn on_invite_delete(&self, _client: &rappin::Client, _event: &rappin::InviteEvent) { tracing::debug!("Event observed"); }
+    ///     async fn on_invite_delete(&self, _client: &rappin::Client, _event: &rappin::InviteEvent) -> rappin::Result<()> { tracing::debug!("Event observed");  Ok(()) }
     /// }
     /// ```
-    async fn on_invite_delete(&self, _client: &Client, _event: &crate::InviteEvent) {}
+    async fn on_invite_delete(
+        &self,
+        _client: &Client,
+        _event: &crate::InviteEvent,
+    ) -> crate::Result<()> {
+        Ok(())
+    }
 }
 
 /// Builder for dynamically creating a [`Cog`] without implementing the full trait manually.

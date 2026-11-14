@@ -1,6 +1,6 @@
 mod support;
 use async_trait::async_trait;
-use rappin::prelude::*;
+use rappin::*;
 use rappin::{BotProfile, EventCursor};
 use serde_json::{json, Value};
 use std::{
@@ -21,14 +21,14 @@ fn event(id: u64, content: &str) -> Value {
 fn message() -> Value {
     json!({"message":{"id":Uuid::nil(),"channel_id":Uuid::nil(),"author_id":Uuid::nil(),"created_at":"2026-11-03T00:00:00Z"}})
 }
-fn rejected() -> YappinError {
+fn rejected() -> Error {
     CommandError::Denied("access rejected".into()).into()
 }
-fn uncertain() -> YappinError {
-    YappinError::PartialWrite {
+fn uncertain() -> Error {
+    Error::PartialWrite {
         completed: vec![json!({"receipt":"confirmed-step"})],
         failed_step: 2,
-        source: Box::new(YappinError::Api {
+        source: Box::new(Error::Api {
             status: 503,
             message: "outcome unknown".into(),
             retry_after: Some(0.25),
@@ -70,8 +70,9 @@ impl Drop for Cursor {
 struct Legacy(Trace);
 #[async_trait]
 impl EventHandler for Legacy {
-    async fn on_message(&self, _: &MessageContext) {
+    async fn on_message(&self, _: &MessageContext) -> rappin::Result<rappin::MessageDisposition> {
         record(&self.0, "legacy");
+        Ok(rappin::MessageDisposition::Continue)
     }
 }
 struct Probe(Trace);
@@ -94,8 +95,9 @@ impl Cog for Probe {
         record(&self.0, "check");
         true
     }
-    async fn on_message(&self, _: &MessageContext) {
+    async fn on_message(&self, _: &MessageContext) -> rappin::Result<rappin::MessageDisposition> {
         record(&self.0, "cog");
+        Ok(rappin::MessageDisposition::Continue)
     }
 }
 #[tokio::test]
@@ -123,7 +125,8 @@ async fn gate_precedes_prefix_checks_commands_and_legacy_observers() {
             }
         })
         .event_handler(Legacy(t.clone()))
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     bot.handle().add_cog(Probe(t.clone())).await.unwrap();
     process(&bot, 2, "?ping").await.unwrap();
@@ -162,7 +165,8 @@ async fn handled_rejected_and_stopped_gates_execute_zero_downstream_handlers() {
                 }
             })
             .event_handler(Legacy(t.clone()))
-            .build();
+            .build()
+            .expect("valid bot configuration");
         seed(&bot).await;
         bot.handle().add_cog(Probe(t.clone())).await.unwrap();
         let result = process(&bot, 2, "?ping").await;
@@ -208,7 +212,8 @@ async fn completing_a_failed_gate_never_dispatches_denied_messages() {
                 Ok(FailureDisposition::Handled)
             })
             .event_handler(Legacy(t.clone()))
-            .build();
+            .build()
+            .expect("valid bot configuration");
         seed(&bot).await;
         bot.handle().add_cog(Probe(t.clone())).await.unwrap();
         let result = process(&bot, 2, "!ping").await;
@@ -226,7 +231,7 @@ async fn completing_a_failed_gate_never_dispatches_denied_messages() {
 }
 #[async_trait]
 impl EventHandler for Natural {
-    async fn on_message_result(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
+    async fn on_message(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
         record(&self.trace, "natural");
         if self.fail {
             return Err(uncertain());
@@ -260,7 +265,8 @@ async fn natural_language_handled_skips_cogs_and_rejection_completes_only_its_li
                 fail: false,
                 handled,
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         seed(&bot).await;
         bot.handle().add_cog(Probe(t.clone())).await.unwrap();
         process(&bot, 2, if handled { "ordinary text" } else { "question" })
@@ -313,7 +319,7 @@ async fn message_failures_preserve_original_effects_callback_errors_and_disposit
                 }
             });
         }
-        let bot = builder.build();
+        let bot = builder.build().expect("valid bot configuration");
         seed(&bot).await;
         bot.handle().add_cog(Probe(t.clone())).await.unwrap();
         let result = process(&bot, 2, "natural language").await;
@@ -362,8 +368,10 @@ async fn duplicate_intake_commits_handled_gate_once_then_runs_subsequent_command
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .handler_concurrency(1)
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| settings.execution.concurrency = 1)
         .message_gate(move |ctx| {
             let t = g.clone();
             async move {
@@ -383,7 +391,8 @@ async fn duplicate_intake_commits_handled_gate_once_then_runs_subsequent_command
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     run(bot).await.unwrap();
     assert_eq!(cursor.last().await, 3);
     assert_eq!(*t.lock().unwrap(), ["denied", "!next", "next"]);
@@ -416,8 +425,10 @@ async fn failed_gate_or_error_reply_retains_prefix_and_never_dispatches_later_me
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
-            .handler_concurrency(1)
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
+            .configure(|settings| settings.execution.concurrency = 1)
             .message_gate(move |ctx| async move {
                 if ctx.content() == "handled" {
                     return Ok(MessageDisposition::Handled);
@@ -442,9 +453,11 @@ async fn failed_gate_or_error_reply_retains_prefix_and_never_dispatches_later_me
                 Ok(FailureDisposition::Default)
             });
         }
-        let error = run(builder.build()).await.unwrap_err();
+        let error = run(builder.build().expect("valid bot configuration"))
+            .await
+            .unwrap_err();
         let report = match error {
-            YappinError::EventProcessing { report } => report,
+            Error::EventProcessing { report } => report,
             other => panic!("{other:?}"),
         };
         assert_eq!(cursor.last().await, 2);
@@ -488,7 +501,7 @@ impl Cog for FallibleCog {
     fn name(&self) -> &str {
         "natural_cog"
     }
-    async fn on_message_result(&self, _: &MessageContext) -> Result<MessageDisposition> {
+    async fn on_message(&self, _: &MessageContext) -> Result<MessageDisposition> {
         record(&self.0, "fallible_cog");
         Err(uncertain())
     }
@@ -511,7 +524,8 @@ async fn native_cog_listener_failure_has_its_own_identity_and_explicit_completio
                 Ok(FailureDisposition::Handled)
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     bot.handle().add_cog(FallibleCog(t.clone())).await.unwrap();
     process(&bot, 2, "natural language").await.unwrap();
@@ -540,8 +554,10 @@ async fn concurrent_gate_failure_drains_started_work_without_crossing_the_cursor
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .handler_concurrency(2)
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| settings.execution.concurrency = 2)
         .message_gate(move |ctx| {
             let entered = entered.clone();
             let resume = resume.clone();
@@ -569,10 +585,11 @@ async fn concurrent_gate_failure_drains_started_work_without_crossing_the_cursor
         .command("later", "must not start", |_| async {
             panic!("barrier crossed")
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let error = run(bot).await.unwrap_err();
     let report = match error {
-        YappinError::EventProcessing { report } => report,
+        Error::EventProcessing { report } => report,
         other => panic!("{other:?}"),
     };
     assert_eq!(cursor.last().await, 2);

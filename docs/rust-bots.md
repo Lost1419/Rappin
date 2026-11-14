@@ -1,16 +1,20 @@
 # Rust bot workflows
 
-These APIs are available starting with `rappin-rs` 0.1.7. Existing `.command(name, description, |ctx| async move { ... })`
-handlers continue to work. Start with `cargo run --example typed_bot` and set
+Use ordinary Rust handlers, command specs and the optional argument derive. Start with `cargo run --example typed_bot` and set
 `YAPPER_BOT_TOKEN` in the environment.
 
 ## Typed commands and live help
 
-Use ordinary Rust structs and `FromStr` parsers. No macro expansion, runtime type
-coercion, or automatic member lookup is involved:
+Enable `derive` for a named-field struct with generated parsing, bounds, help
+and a pure preparation schema. See the [tutorial](tutorial.md#2-add-typed-arguments)
+for that path. Custom types use their `FromStr` implementation. Preparation
+reports custom parsers and rounding-sensitive `f32` validation as deferred.
+
+Implement `FromArgs` manually when the parser needs custom behavior. This example
+uses `BoundedU32` and keeps its help metadata alongside the parser.
 
 ```rust,no_run
-use rappin::prelude::*;
+use rappin::*;
 
 struct Roll { sides: BoundedU32<2, 100>, label: Option<String> }
 impl FromArgs for Roll {
@@ -31,7 +35,7 @@ let bot = Bot::builder("yb_token")
             Ok(())
         })
     .help_command("help")
-    .build();
+    .build().expect("valid bot configuration");
 ```
 
 `!dice roll 20 "lucky die"`, `/dice roll 20`, and `!roll 20` share one handler.
@@ -39,7 +43,7 @@ Only the root `dice` is advertised to Yapin; nested paths and aliases are local
 routing. Names are normalized to lowercase and paths have at most eight segments.
 Invalid arguments and denied checks complete after their error/usage reply
 succeeds. Failed replies and unexpected errors stop intake by default. The
-[handler failure policy](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md) provides explicit completion
+[handler failure policy](https://github.com/Lost1419/Rappin/blob/dev/docs/handler-failures.md) provides explicit completion
 callbacks and retains original and reply causes.
 The same specs can be registered with `CogBuilder::command_spec` or returned by
 `Cog::registered_commands`. Metadata, checks, and aliases follow cog replacement.
@@ -75,7 +79,7 @@ until expiry or invalidation. Prefer fresh checks for moderation actions. Custom
 checks implement `CommandCheck` or use `check_fn`:
 
 ```rust,no_run
-use rappin::prelude::*;
+use rappin::*;
 let spec = CommandSpec::<()>::new("maintain", "Owner maintenance")
     .check(Check::owner_only())
     .check(check_fn(|ctx| async move {
@@ -92,7 +96,7 @@ Register **before** posting a prompt. `subscribe()` is synchronous; a builder's
 `.wait().await` registers only when polled.
 
 ```rust,no_run
-use rappin::prelude::*;
+use rappin::*;
 use std::time::Duration;
 async fn ask(ctx: MessageContext) -> Result<()> {
     let reply = ctx.replies().timeout(Duration::from_secs(30)).subscribe()?;
@@ -161,25 +165,25 @@ Polling is the default and needs no public HTTP endpoint. To prefer WebSocket
 delivery, enable the `gateway` feature and select the default gateway:
 
 ```toml
-rappin-rs = { version = "0.1.29", features = ["gateway"] }
+rappin-rs = { git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "2.0.0-dev.1", features = ["gateway"] }
 ```
 
 ```rust,no_run
 # #[cfg(feature = "gateway")]
 # mod gateway_example {
-use rappin::prelude::*;
+use rappin::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let token = std::env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+        .map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
     let bot = Bot::builder(token)
-        .gateway(rappin::gateway::DEFAULT_GATEWAY)
+        .configure(|settings| { settings.transport.gateway_url = Some((rappin::gateway::DEFAULT_GATEWAY).into()); settings.transport.mode = rappin::TransportMode::GatewayPreferred; })
         .command("ping", "Check the bot", |ctx| async move {
             ctx.reply("pong").await?;
             Ok(())
         })
-        .build();
+        .build().expect("valid bot configuration");
     bot.run().await
 }
 # }
@@ -187,8 +191,8 @@ async fn main() -> Result<()> {
 ```
 
 Run the same flow with `cargo run --features gateway --example gateway_bot`.
-`.gateway(url)` selects preferred mode: Rappin resumes WebSocket delivery and
-falls back to polling when needed. Use `.gateway_only(url)` only when polling
+`.configure(|settings| { settings.transport.gateway_url = Some(url); settings.transport.mode = rappin::TransportMode::GatewayPreferred; })` selects preferred mode: Rappin resumes WebSocket delivery and
+falls back to polling when needed. Use `.configure(|settings| { settings.transport.gateway_url = Some(url); settings.transport.mode = rappin::TransportMode::GatewayOnly; })` only when polling
 fallback is unsuitable. You do not need to configure gateway API requests to
 receive events; JSON API calls remain on HTTPS unless that separate option is
 enabled. `BotHandle::transport_status()` reports the active transport and
@@ -197,13 +201,13 @@ fallback reason.
 `BotHandle::transport_status()`/`subscribe_transport()` expose configured mode,
 active transport, fallback reason, heartbeat RTT, received/committed cursors, and
 active batch count. `Gateway::status()` offers the same transport view for direct
-users. Defaults remain polling. With `gateway` enabled, `.gateway(url)` prefers
-WebSocket with REST fallback; `.gateway_only(url)` fails if WebSocket cannot be
-used. `.transport_mode(TransportMode::GatewayPreferred)` uses the default gateway.
+users. Defaults remain polling. With `gateway` enabled, `.configure(|settings| { settings.transport.gateway_url = Some(url); settings.transport.mode = rappin::TransportMode::GatewayPreferred; })` prefers
+WebSocket with REST fallback; `.configure(|settings| { settings.transport.gateway_url = Some(url); settings.transport.mode = rappin::TransportMode::GatewayOnly; })` fails if WebSocket cannot be
+used. `.configure(|settings| settings.transport.mode = TransportMode::GatewayPreferred)` uses the default gateway.
 Gateway mode without that Cargo feature returns a configuration error.
 
 ```rust,no_run
-use rappin::prelude::*;
+use rappin::*;
 async fn monitor(handle: BotHandle) {
     let mut changes = handle.subscribe_transport();
     while changes.changed().await.is_ok() {
@@ -231,7 +235,7 @@ remain real API calls, subject to Yapin's limits. Separate Client instances do n
 share this state.
 
 Explicitly call `.defer().await?` before slow button work, or opt into
-`.auto_ack_after(Duration::from_millis(250))` on BotBuilder. Automatic acks start at
+`.configure(|settings| settings.execution.auto_ack_after = Some(Duration::from_millis(250)))` on BotBuilder. Automatic acks start at
 intake, account for delivery age when available, and reserve one second of the
 initial deadline for the API. They are best effort, disabled by default, and
 bounded to 128 pending tasks. They cannot make a late-delivered event or a slow API
@@ -261,8 +265,7 @@ member. Unobserved changes elsewhere remain subject to TTL. Use
 
 ## Hot workers
 
-`WorkerCog::command_typed` uses the same FromArgs parser and advertises its help to
-the parent. `WorkerContext::parse` works in existing handlers. Parent-side native
+`WorkerCog::command_spec` accepts the same command metadata, parser and built-in checks as native cogs and advertises its schema/help to the parent. `WorkerContext::parse` works in existing handlers. Parent-side native
 CommandSpecs can enforce checks; a worker may also explicitly request authorized
 resource lookups through its API proxy. Closures are never serialized over IPC.
 
@@ -273,21 +276,22 @@ also subject to WorkerProject's handler timeout, which includes queueing and API
 work. Waits count toward the 128 requests per invocation budget. In-flight old
 workers can finish their existing waits during reload; subscriptions do not migrate
 into the new process. Structured errors and parent-owned permission lookups are
-available from protocol v3. The current host accepts v1–v9; ordinary new worker
+available from protocol v3. The current host accepts v1–v10; ordinary new worker
 handlers use v4. Upgrade the parent before enabling newer worker capabilities.
 
 | Worker opt-in | Minimum parent protocol |
 | --- | --- |
 | `on_message` fallible server-message listener | v5 |
 | `single_attempt_api()` / `api_once` | v6 |
-| `ui_api()` / `on_ui_interaction` | v7 |
+| `ui_api()` / `on_interaction` | v7 |
 | `operation_identity()` | v8 |
 | `listen(Listener::ResourceEvent, handler)` | v9 |
+| `command_spec` schemas, aliases and groups | v10 |
 
-Enabling one capability does not implicitly enable the others. See
-[shared SDK workflows](https://github.com/Lost1419/Rappin/blob/main/docs/sdk-workflows.md) for runtime command schemas, registration
+A worker command_spec enables UI, single-attempt API and operation identity together. Other legacy-style opt-ins select their own supported contracts. See
+[shared SDK workflows](https://github.com/Lost1419/Rappin/blob/dev/docs/sdk-workflows.md) for runtime command schemas, registration
 preflight and shared native/worker helpers.
 
-See [hot-reloading](https://github.com/Lost1419/Rappin/blob/main/docs/hot-reloading.md) and `examples/hot_cog_worker.rs`. There is no
+See [hot-reloading](https://github.com/Lost1419/Rappin/blob/dev/docs/hot-reloading.md) and `examples/hot_cog_worker.rs`. There is no
 JavaScript-style manager hierarchy, hidden resource fetching, general middleware
 pipeline, or advanced voice player added by these APIs.

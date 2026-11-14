@@ -5,5 +5,6 @@ edition = "2021"
 rust-version = "1.89"
 
 [dependencies]
-rappin-rs = "0.1.21"
+rappin-rs = { git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "2.0.0-dev.1", features = ["gateway", "derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = "0.3"

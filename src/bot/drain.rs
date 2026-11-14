@@ -1,6 +1,6 @@
 //! Shutdown evidence for ordinary intake, which has no durable ingress ledger.
 use super::{Bot, EventProcessingFailure};
-use crate::{RemoteError, Result, YappinError};
+use crate::{Error, RemoteError, Result};
 use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 #[derive(Default)]
 pub(super) struct Ledger(Mutex<BTreeMap<u64, State>>);
@@ -63,8 +63,8 @@ impl Ledger {
         }
     }
 }
-pub(super) fn timeout(limit: Duration) -> YappinError {
-    YappinError::Remote(RemoteError {
+pub(super) fn timeout(limit: Duration) -> Error {
+    Error::Remote(RemoteError {
         kind: "event_drain".into(),
         message: "handler drain deadline reached; effects may be incomplete or uncertain".into(),
         status: None,
@@ -77,9 +77,9 @@ pub(super) fn timeout(limit: Duration) -> YappinError {
         ]),
     })
 }
-pub(super) fn attach(report: &mut EventProcessingFailure, cause: YappinError) {
+pub(super) fn attach(report: &mut EventProcessingFailure, cause: Error) {
     report.intake_error = Some(match report.intake_error.take() {
-        Some(original) => YappinError::FailureHandling {
+        Some(original) => Error::FailureHandling {
             source: Box::new(original.into()),
             handling_error: Box::new(cause),
         }

@@ -174,7 +174,8 @@ async fn database_prefixes_stay_dynamic_and_cog_root_index_updates() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.process_event(raw("first!tool run")).await.unwrap();
     *prefix.write().await = "second!".into();
     bot.process_event(raw("first!tool run")).await.unwrap();
@@ -228,7 +229,8 @@ async fn static_prefixes_prefer_longest_and_keep_mentions() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     for content in [
         "!!ping",
         "!ping",
@@ -400,7 +402,8 @@ async fn member_events_invalidate_the_application_backend() {
         .lookup_cache_backend(backend.clone())
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.client()
         .cache()
         .set_me(serde_json::from_value(profile()).unwrap())

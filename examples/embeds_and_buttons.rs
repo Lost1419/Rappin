@@ -6,13 +6,13 @@
 //! cargo run --example embeds_and_buttons
 //! ```
 
-use rappin::prelude::*;
+use rappin::*;
 use std::env;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let token = env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+    let token =
+        env::var("YAPPER_BOT_TOKEN").map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
 
     let bot = Bot::builder(token)
         .command("card", "Send a rich embed card", |ctx| async move {
@@ -65,7 +65,8 @@ async fn main() -> Result<()> {
                 .await?;
             Ok(())
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
 
     println!("Bot started! Try typing /card or /v2");
     bot.run().await?;

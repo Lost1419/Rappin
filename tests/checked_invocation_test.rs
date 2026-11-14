@@ -26,7 +26,7 @@ impl FromArgs for Roll {
         vec![ArgumentInfo::required("sides", "2 to 100")]
     }
 }
-fn deny() -> YappinError {
+fn deny() -> Error {
     CommandError::Denied("revoked".into()).into()
 }
 
@@ -70,7 +70,8 @@ async fn aliases_groups_typed_checks_and_original_identity_share_dispatch() {
             );
             Ok(())
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     bot.process_event(event(7, "outer")).await.unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -144,7 +145,8 @@ async fn preparation_never_grants_access_and_revocation_runs_zero_handlers() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     bot.process_event(event(2, "outer")).await.unwrap();
 }
@@ -218,7 +220,8 @@ async fn preparation_defers_arbitrary_parsers_checks_and_cooldowns() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     bot.process_event(event(3, "outer")).await.unwrap();
     assert_eq!(PARSED.load(Ordering::SeqCst), 2);
@@ -268,7 +271,8 @@ async fn plans_reject_replacement_and_unload_without_registry_locking_handlers()
             );
             Ok(())
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     bot.handle()
         .add_cog(
@@ -342,7 +346,8 @@ async fn identity_replacement_detached_tasks_and_depth_are_rejected() {
             );
             Ok(())
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     bot.process_event(event(5, "outer")).await.unwrap();
     assert_eq!(seen.load(Ordering::SeqCst), 7);
@@ -383,7 +388,8 @@ async fn gate_rechecks_and_cog_checks_deny_without_target_execution() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     bot.process_event(event(6, "outer")).await.unwrap();
     assert_eq!(gatecalls.load(Ordering::SeqCst), 2);
@@ -392,8 +398,9 @@ async fn gate_rechecks_and_cog_checks_deny_without_target_execution() {
 struct Listener(Arc<AtomicUsize>);
 #[async_trait]
 impl EventHandler for Listener {
-    async fn on_message(&self, _: &MessageContext) {
+    async fn on_message(&self, _: &MessageContext) -> rappin::Result<rappin::MessageDisposition> {
         self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(rappin::MessageDisposition::Continue)
     }
 }
 #[tokio::test]
@@ -417,10 +424,10 @@ async fn partial_and_failed_reply_causes_reach_one_outer_callback_without_automa
             Ok(())
         })
         .command("partial", "partial", |_| async {
-            Err(YappinError::PartialWrite {
+            Err(Error::PartialWrite {
                 completed: vec![json!({"receipt":"step-one"})],
                 failed_step: 2,
-                source: Box::new(YappinError::Api {
+                source: Box::new(Error::Api {
                     status: 502,
                     message: "uncertain".into(),
                     retry_after: Some(0.5),
@@ -447,7 +454,8 @@ async fn partial_and_failed_reply_causes_reach_one_outer_callback_without_automa
                 Ok(FailureDisposition::Stop)
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     for id in [8, 9] {
         let err = bot.process_event(event(id, "outer")).await.unwrap_err();
@@ -512,7 +520,8 @@ async fn dynamic_schema_preparation_validates_bounds_and_builtin_scope_without_e
                 .is_err());
             Ok(())
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     bot.process_event(event(10, "outer")).await.unwrap();
 }
@@ -543,13 +552,13 @@ async fn nested_uncertain_effect_stops_polling_with_duplicate_and_cursor_barrier
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&path)
-        .handler_concurrency(1)
+        .configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new(&path)))
+        .configure(|settings| settings.execution.concurrency = 1)
         .command("effect", "one attempt", move |_| {
             let c = c.clone();
             async move {
                 c.fetch_add(1, Ordering::SeqCst);
-                Err(YappinError::Api {
+                Err(Error::Api {
                     status: 502,
                     message: "unknown write".into(),
                     retry_after: None,
@@ -567,14 +576,15 @@ async fn nested_uncertain_effect_stops_polling_with_duplicate_and_cursor_barrier
         .command("later", "barrier", |_| async {
             panic!("crossed failure barrier")
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let err = tokio::time::timeout(Duration::from_secs(3), bot.run())
         .await
         .unwrap()
         .unwrap_err();
     http.await.unwrap();
     let report = match err {
-        YappinError::EventProcessing { report } => report,
+        Error::EventProcessing { report } => report,
         other => panic!("{other:?}"),
     };
     assert_eq!(calls.load(Ordering::SeqCst), 1);

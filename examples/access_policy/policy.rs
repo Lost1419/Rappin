@@ -1,7 +1,7 @@
 //! Pre-1.4 evidence-composition reference. Current applications can use
 //! ComputedPermissionsPolicy for authoritative channel checks; see docs/api-1.4.md.
 use async_trait::async_trait;
-use rappin::{capabilities::*, Api, ApiExt, Freshness, Permission, Result, YappinError};
+use rappin::{capabilities::*, Api, ApiExt, Error, Freshness, Permission, Result};
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -175,7 +175,7 @@ pub async fn native(
 ) -> Result<OperationResult> {
     let server = ctx
         .server_id()
-        .ok_or_else(|| YappinError::validation("server", "server message required"))?;
+        .ok_or_else(|| Error::validation("server", "server message required"))?;
     execute(
         ctx,
         &OperationContext::server(server, ctx.author_id()).freshness(Freshness::Refresh),
@@ -202,10 +202,10 @@ pub async fn worker(
     let message = ctx
         .event
         .message()
-        .ok_or_else(|| YappinError::validation("event", "message command required"))?;
+        .ok_or_else(|| Error::validation("event", "message command required"))?;
     let server = message
         .server_id
-        .ok_or_else(|| YappinError::validation("server", "server message required"))?;
+        .ok_or_else(|| Error::validation("server", "server message required"))?;
     execute(
         ctx,
         &OperationContext::server(server, message.author_id).freshness(Freshness::Refresh),

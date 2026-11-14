@@ -470,7 +470,7 @@ impl AuthorizationReport {
             error,
         });
     }
-    pub(super) fn failure(&mut self, check: &str, principal: Principal, error: YappinError) {
+    pub(super) fn failure(&mut self, check: &str, principal: Principal, error: Error) {
         self.record(
             check,
             principal,

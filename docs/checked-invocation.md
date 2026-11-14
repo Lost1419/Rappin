@@ -48,7 +48,7 @@ just like ordinary dispatch. Registry locks are released before application code
 ## Completion, replies and failures
 
 `InvocationOutcome::status` is `NotFound`, `Denied`, `Completed` or `Failed`.
-`error` retains the original structured `YappinError` where one exists.
+`error` retains the original structured `Error` where one exists.
 `effects_possible` is conservative: arbitrary gate/check/handler code may already
 have replied or mutated state, even if its final result is a denial. False means
 execution was rejected before those callbacks; it does not describe earlier work
@@ -57,7 +57,7 @@ in the outer handler. A Boolean cog denial has no structured cause to recover.
 Nested invocation does not call framework error callbacks or send automatic error
 replies. Target handlers/checks still own their own replies. Use
 `outcome.into_result()?` to leave incomplete work visible to the outer handler's
-failure policy and checkpoint barrier. This produces `YappinError::Invocation`,
+failure policy and checkpoint barrier. This produces `Error::Invocation`,
 which preserves its source, HTTP status, retry hint and partial receipts in error
 JSON and across remote serialization. Its replay safety is always
 `do_not_replay_workflow`. It is an unexpected failure to the default outer policy,
@@ -137,7 +137,7 @@ Preparing a different step does not change the caller's current ID.
 
 Outcomes retain their ID even for missing commands, denial, stale bindings and
 incomplete effects. `into_result()` wraps identified incomplete invocations in
-`YappinError::IdentifiedInvocation { operation_id, source }` around the existing
+`Error::IdentifiedInvocation { operation_id, source }` around the existing
 `Invocation` cause. Native source chains remain available; structured remote and
 failure-callback JSON keep `kind: command_invocation`, `operation_id`, status,
 retry hints, original partial receipts and unknown outcomes. This wrapper never

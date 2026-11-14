@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.0 — Unreleased
+
+- Consolidate typed API extensions, rich message/component models and interaction contexts. Preserve lossless response fields and explicit null edits. Accept resource-specific IDs at typed API boundaries.
+- Make bot construction fallible. Group advanced configuration and add process-local typed state for native and worker handlers.
+- Add optional FromArgs derives for parsing, bounds and help, with pure schema metadata for checked invocation.
+- Add worker command specs with aliases, groups and protocol10 schema negotiation. Worker checks, operation identities and partial/uncertain write causes remain explicit.
+- Use fallible event/cog listeners and explicit failure callbacks throughout. Remove legacy void failure observers.
+- Add gateway-first project generation, human-readable init/doctor output, an ordered tutorial and a 0.1-to-2.0 migration guide.
+
 ## 0.1.33 — 2026-11-13
 
 - Raise the declared minimum Rust version to 1.89 to match UUID 1.29.2. Test locked builds and fresh consumer dependency resolution on that compiler.

@@ -22,16 +22,16 @@ mod consumer {
             return Ok(());
         }
         if !(args.len() == 5 || args.len() == 7 && args[5] == "--approve") {
-            return Err(YappinError::Config("use --help for arguments".into()));
+            return Err(Error::Config("use --help for arguments".into()));
         }
         let bot = args[1]
             .parse()
-            .map_err(|_| YappinError::Config("invalid bot UUID".into()))?;
+            .map_err(|_| Error::Config("invalid bot UUID".into()))?;
         let event = args[2]
             .parse()
-            .map_err(|_| YappinError::Config("invalid event ID".into()))?;
+            .map_err(|_| Error::Config("invalid event ID".into()))?;
         let token = std::env::var("YAPPER_BOT_TOKEN")
-            .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+            .map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
         let store = Arc::new(Journal::open(PathBuf::from(&args[0]))?);
         let prepared = prepare_timestamp_reconciliation(
             &Client::new(token),

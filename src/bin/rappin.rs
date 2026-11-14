@@ -1,7 +1,7 @@
 //! Composable JSON interface to the Yapin Bot API.
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
-use rappin::{Client, CreateMessage, EventCursor, Result, UiApiExt, YappinError};
+use rappin::{Client, CreateMessage, Error, EventCursor, Result};
 use reqwest::Method;
 use serde_json::{json, Value};
 use std::{io::Read, path::PathBuf};
@@ -24,6 +24,9 @@ struct Args {
     /// Stable JSON envelope. JSON is also the default output format.
     #[arg(long, global = true)]
     json: bool,
+    /// Readable setup and diagnostic output. Automation uses --json.
+    #[arg(long, global = true, conflicts_with = "json")]
+    human: bool,
     /// Preview writes without authentication or network access.
     #[arg(long, global = true)]
     dry_run: bool,
@@ -437,11 +440,11 @@ impl Context {
     fn client(&self) -> Result<&Client> {
         self.client
             .as_ref()
-            .ok_or_else(|| YappinError::Config("set YAPPER_BOT_TOKEN or config token".into()))
+            .ok_or_else(|| Error::Config("set YAPPER_BOT_TOKEN or config token".into()))
     }
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
         if !path.starts_with('/') || path.starts_with("//") || path.contains('#') {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "path",
                 "use a relative API path starting with one slash",
             ));
@@ -459,15 +462,12 @@ fn local_upload(path: &std::path::Path, maximum: usize) -> Result<rappin::Upload
     let mut bytes = Vec::new();
     file.take(maximum as u64 + 1).read_to_end(&mut bytes)?;
     if bytes.len() > maximum {
-        return Err(YappinError::validation(
-            "file",
-            "upload exceeds maximum bytes",
-        ));
+        return Err(Error::validation("file", "upload exceeds maximum bytes"));
     }
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .ok_or_else(|| YappinError::validation("file", "filename must be UTF-8"))?;
+        .ok_or_else(|| Error::validation("file", "filename must be UTF-8"))?;
     let file = rappin::UploadFile::new(name, bytes);
     file.validate()?;
     Ok(file)
@@ -481,7 +481,7 @@ fn input(path: &PathBuf) -> Result<Value> {
         std::fs::read(path)?
     };
     if bytes.len() > 131072 {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "body_file",
             "maximum JSON body is 128 KiB",
         ));
@@ -495,7 +495,7 @@ fn config(args: &Args) -> Result<Context> {
     let config = match &path {
         Some(p) => match std::fs::read_to_string(p) {
             Ok(s) => toml::from_str::<Config>(&s)
-                .map_err(|_| YappinError::Config("invalid TOML config".into()))?,
+                .map_err(|_| Error::Config("invalid TOML config".into()))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && args.config.is_none() => {
                 Config::default()
             }
@@ -520,15 +520,14 @@ fn config(args: &Args) -> Result<Context> {
         .or_else(|| std::env::var("YAPPER_API_BASE").ok())
         .or(config.base_url)
         .unwrap_or_else(|| rappin::DEFAULT_API_BASE.into());
-    let url =
-        url::Url::parse(&base).map_err(|_| YappinError::Config("invalid API base URL".into()))?;
+    let url = url::Url::parse(&base).map_err(|_| Error::Config("invalid API base URL".into()))?;
     if !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
     {
-        return Err(YappinError::Config(
+        return Err(Error::Config(
             "base URL must be HTTP(S), without credentials, query, or fragment".into(),
         ));
     }
@@ -537,7 +536,7 @@ fn config(args: &Args) -> Result<Context> {
             .or(config.max_retry_wait)
             .unwrap_or(30.0),
     )
-    .map_err(|_| YappinError::Config("max_retry_wait must be finite and nonnegative".into()))?;
+    .map_err(|_| Error::Config("max_retry_wait must be finite and nonnegative".into()))?;
     let client = token.as_ref().map(|t| {
         Client::builder(t)
             .base_url(&base)
@@ -588,9 +587,7 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
             };
             let descriptor = rappin::capabilities::capability(&operation)
                 .filter(|c| c.cli.first() == Some(&"platform"))
-                .ok_or_else(|| {
-                    YappinError::validation("operation", "unknown platform operation")
-                })?;
+                .ok_or_else(|| Error::validation("operation", "unknown platform operation"))?;
             let binding = descriptor.validate(&args)?;
             if ctx.dry && descriptor.write {
                 return Ok(binding.preview().data);
@@ -655,7 +652,7 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                 ctx.client()?.upload_emoji(server, &name, &file).await?,
             )?)
         }
-        Command::Mcp { .. } => Err(YappinError::Config("start MCP with rappin mcp".into())),
+        Command::Mcp { .. } => Err(Error::Config("start MCP with rappin mcp".into())),
         Command::Doctor { offline } => {
             let mut v = json!({"version":env!("CARGO_PKG_VERSION"),"base_url":ctx.base,"auth_source":ctx.source,"token_available":ctx.token.is_some(),"config_path":ctx.config_path,"offline":offline,"reachable":null,"authenticated":null,"setup":if ctx.token.is_none(){Some("set YAPPER_BOT_TOKEN")}else{None}});
             if !offline && ctx.client.is_some() {
@@ -711,7 +708,7 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                 Some(n) => spec["components"]["schemas"]
                     .get(&n)
                     .cloned()
-                    .ok_or_else(|| YappinError::validation("schema", "unknown component schema")),
+                    .ok_or_else(|| Error::validation("schema", "unknown component schema")),
                 None => Ok(spec.clone()),
             }
         }
@@ -879,7 +876,7 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                 for _ in 0..max_pages {
                     let page = ctx
                         .client()?
-                        .get_ui_messages(channel, Some(limit), cursor, forward)
+                        .get_messages(channel, Some(limit), cursor, forward)
                         .await?;
                     pages += 1;
                     more = page.messages.len() == limit as usize;
@@ -932,12 +929,12 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
             } => {
                 let mut message = match body_file {
                     Some(p) => {
-                        let mut body: rappin::UiMessageBody =
+                        let mut body: rappin::CreateMessage =
                             serde_json::from_value(ctx.body(&p)?)?;
                         if reply_to.is_some() {
                             body.reply_to = reply_to;
                         }
-                        body.validate(true)?;
+                        body.validate()?;
                         let response = ctx
                             .request(
                                 Method::POST,
@@ -948,7 +945,7 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                         return Ok(json!({"messages":[response]}));
                     }
                     None => CreateMessage::new(content.ok_or_else(|| {
-                        YappinError::validation("content", "pass --content or --body-file")
+                        Error::validation("content", "pass --content or --body-file")
                     })?),
                 };
                 if reply_to.is_some() {
@@ -957,16 +954,13 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                 let messages = if split {
                     rappin::split_message(message.content.as_deref().unwrap_or(""))
                         .into_iter()
-                        .map(|s| CreateMessage::new(s).with_reply_to_opt(reply_to))
+                        .map(|s| CreateMessage::new(s).reply_to_opt(reply_to))
                         .collect()
                 } else {
                     vec![message]
                 };
                 if messages.is_empty() {
-                    return Err(YappinError::validation(
-                        "content",
-                        "message cannot be empty",
-                    ));
+                    return Err(Error::validation("content", "message cannot be empty"));
                 }
                 for message in &messages {
                     message.validate()?;
@@ -986,7 +980,7 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                             if !split {
                                 return Err(source);
                             }
-                            return Err(YappinError::PartialWrite {
+                            return Err(Error::PartialWrite {
                                 completed: sent,
                                 failed_step: step + 1,
                                 source: Box::new(source),
@@ -1001,8 +995,8 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                 message,
                 body_file,
             } => {
-                let body: rappin::UiMessageBody = serde_json::from_value(ctx.body(&body_file)?)?;
-                body.validate(false)?;
+                let body: rappin::EditMessage = serde_json::from_value(ctx.body(&body_file)?)?;
+                body.validate()?;
                 ctx.request(
                     Method::PATCH,
                     &format!("/channels/{channel}/messages/{message}"),
@@ -1100,7 +1094,7 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
             body_file,
         } => {
             let method = Method::from_bytes(method.to_uppercase().as_bytes())
-                .map_err(|_| YappinError::validation("method", "invalid HTTP method"))?;
+                .map_err(|_| Error::validation("method", "invalid HTTP method"))?;
             ctx.request(
                 method,
                 &path,
@@ -1173,7 +1167,7 @@ fn read_only(command: &Command) -> bool {
         _ => false,
     }
 }
-fn error_json(error: &YappinError, read_only: bool) -> Value {
+fn error_json(error: &Error, read_only: bool) -> Value {
     let mut value = error.to_json();
     if read_only && value["retry_safety"] == "unknown_write_outcome" {
         value["retry_safety"] = "safe_read".into();
@@ -1183,14 +1177,61 @@ fn error_json(error: &YappinError, read_only: bool) -> Value {
 }
 // Keep optional reply construction local to the CLI.
 trait OptionalReply {
-    fn with_reply_to_opt(self, id: Option<Uuid>) -> Self;
+    fn reply_to_opt(self, id: Option<Uuid>) -> Self;
 }
 impl OptionalReply for CreateMessage {
-    fn with_reply_to_opt(mut self, id: Option<Uuid>) -> Self {
+    fn reply_to_opt(mut self, id: Option<Uuid>) -> Self {
         self.reply_to = id;
         self
     }
 }
+fn output(value: Value, human: bool) {
+    if !human {
+        println!("{value}");
+        return;
+    }
+    if value["ok"] != true {
+        eprintln!(
+            "{}",
+            serde_json::to_string_pretty(&value["error"]).expect("JSON value")
+        );
+        return;
+    }
+    let data = &value["data"];
+    if let Some(destination) = data["destination"].as_str() {
+        let action = if data["dry_run"] == true {
+            "Previewed"
+        } else {
+            "Created"
+        };
+        println!("{action} {destination}");
+        println!("\nSet YAPPER_BOT_TOKEN in the bot process environment, and open the project directory. Then run\n\n  cargo run\n\nEdit src/main.rs to add commands. See README.md for this starter's configuration.");
+    } else {
+        println!("Rappin {}", data["version"].as_str().unwrap_or("unknown"));
+        for (label, key) in [
+            ("Token available", "token_available"),
+            ("API reachable", "reachable"),
+            ("Authenticated", "authenticated"),
+        ] {
+            let state = match data[key].as_bool() {
+                Some(true) => "yes",
+                Some(false) => "no",
+                None => "unchecked",
+            };
+            println!("{label} — {state}");
+        }
+        if let Some(setup) = data["setup"].as_str() {
+            println!("{setup}");
+        }
+        if !data["error"].is_null() {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&data["error"]).expect("JSON value")
+            );
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let parsed = Args::try_parse();
@@ -1211,11 +1252,18 @@ async fn main() {
             std::process::exit(2);
         }
     };
+    let human = args.human;
+    if human && !matches!(args.command, Command::Init(_) | Command::Doctor { .. }) {
+        eprintln!(
+            "--human is available for init and doctor. Use --json for API operations and MCP."
+        );
+        std::process::exit(2);
+    }
     if let Command::Init(options) = &args.command {
         match scaffold::generate(options, args.dry_run) {
-            Ok(data) => println!("{}", json!({"ok":true,"data":data})),
+            Ok(data) => output(json!({"ok":true,"data":data}), human),
             Err(error) => {
-                println!("{}", json!({"ok":false,"error":error_json(&error,true)}));
+                output(json!({"ok":false,"error":error_json(&error,true)}), human);
                 std::process::exit(2);
             }
         }
@@ -1240,15 +1288,15 @@ async fn main() {
     let read_only = read_only(&args.command);
     let result = match &context {
         Ok(ctx) => run(args, ctx).await,
-        Err(e) => Err(YappinError::Config(e.to_string())),
+        Err(e) => Err(Error::Config(e.to_string())),
     };
     match result {
-        Ok(data) => println!(
-            "{}",
+        Ok(data) => output(
             redact(
                 json!({"ok":true,"data":data}),
-                context.as_ref().ok().and_then(|ctx| ctx.token.as_deref())
-            )
+                context.as_ref().ok().and_then(|ctx| ctx.token.as_deref()),
+            ),
+            human,
         ),
         Err(e) => {
             let mut value = json!({"ok":false,"error":error_json(&e,read_only)});
@@ -1256,9 +1304,9 @@ async fn main() {
                 value,
                 context.as_ref().ok().and_then(|ctx| ctx.token.as_deref()),
             );
-            println!("{value}");
+            output(value, human);
             std::process::exit(
-                if matches!(e, YappinError::Validation { .. } | YappinError::Config(_)) {
+                if matches!(e, Error::Validation { .. } | Error::Config(_)) {
                     2
                 } else {
                     1

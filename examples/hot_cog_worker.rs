@@ -1,5 +1,5 @@
 //! A separately compiled cog: edit the reply while hot_reload_bot stays running.
-use rappin::{hot_reload::WorkerCog, prelude::*};
+use rappin::{hot_reload::WorkerCog, *};
 struct Roll(BoundedU32<2, 100>);
 impl FromArgs for Roll {
     fn parse(args: &mut Arguments) -> std::result::Result<Self, CommandError> {

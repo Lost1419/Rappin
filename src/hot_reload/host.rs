@@ -1,7 +1,6 @@
 use super::protocol::{self, CogEvent, Listener, Manifest, Wire};
 use crate::{
-    BotHandle, Client, Cog, CogButton, CogCommand, Command, InteractionContext, MessageContext,
-    Result, YappinError,
+    BotHandle, Client, Cog, CogButton, CogCommand, Command, Error, MessageContext, Result,
 };
 use serde_json::Value;
 use std::{
@@ -239,7 +238,7 @@ impl WorkerProject {
                     }
                     if line.len() > 1024 * 1024 {
                         report.failure.truncated = true;
-                        return Err(YappinError::Config("compiler frame exceeds 1 MiB".into()));
+                        return Err(Error::Config("compiler frame exceeds 1 MiB".into()));
                     }
                     if let Ok(value) = serde_json::from_slice::<Value>(&line) {
                         if value["reason"] == "compiler-artifact"
@@ -262,7 +261,7 @@ impl WorkerProject {
                 tokio::io::copy(&mut stderr, &mut tokio::io::sink())
                     .await
                     .map(|_| ())
-                    .map_err(YappinError::from)
+                    .map_err(Error::from)
             };
             let (executable, _) = tokio::try_join!(output, drain)?;
             let status = child.wait().await?;
@@ -275,14 +274,14 @@ impl WorkerProject {
             if executable.is_none() {
                 report.failure.message = "Cargo succeeded without a worker executable".into();
             }
-            Ok::<_, YappinError>(executable)
+            Ok::<_, Error>(executable)
         };
         match tokio::time::timeout(self.build_timeout, build).await {
             Ok(Ok(Some(executable))) => return Ok(executable),
             Ok(Ok(None)) => (),
             Ok(Err(cause)) => {
                 report.failure.message = "Cargo output could not be processed".into();
-                if let YappinError::HotReload { failure } = error(
+                if let Error::HotReload { failure } = error(
                     Compilation,
                     "Cargo output could not be processed",
                     Some(&cause),
@@ -303,7 +302,7 @@ impl WorkerProject {
             report.failure.exit = child.try_wait().ok().flatten().map(Into::into);
         }
         let _ = child.kill().await;
-        Err(YappinError::HotReload {
+        Err(Error::HotReload {
             failure: Box::new(report.failure),
         })
     }
@@ -514,7 +513,7 @@ impl Generation {
                     let (phase, message, cause, timed_out) = match result {
                         Err(_) => (Startup, "candidate startup timed out", None, true),
                         Ok(Err(cause)) => {
-                            let exited = matches!(&cause, YappinError::Config(message) if message.contains("exited or closed"));
+                            let exited = matches!(&cause, Error::Config(message) if message.contains("exited or closed"));
                             (if exited { Startup } else { Protocol }, "candidate did not send a valid ready frame", Some(cause), false)
                         },
                         _ => unreachable!(),
@@ -525,7 +524,7 @@ impl Generation {
                     if failure.exit.is_none() && phase == Startup && !timed_out {
                         failure.exit = tokio::time::timeout(Duration::from_millis(25), child.wait()).await.ok().and_then(std::result::Result::ok).map(Into::into);
                     }
-                    return Err(YappinError::HotReload { failure: Box::new(failure) });
+                    return Err(Error::HotReload { failure: Box::new(failure) });
                 }
             };
             let (version, manifest) = match ready {
@@ -534,7 +533,9 @@ impl Generation {
                     manifest,
                 } if (1..=protocol::VERSION).contains(&version)
                     && (version >= 5 || !manifest.listeners.contains(&Listener::ServerMessage))
-                    && (version >= 9 || !manifest.listeners.contains(&Listener::ResourceEvent)) => (version, manifest),
+                    && (version >= 9 || !manifest.listeners.contains(&Listener::ResourceEvent))
+                    && (version >= 10 || manifest.schemas.is_empty()
+                        && manifest.help.iter().all(|info| info.aliases.is_empty() && !info.name.contains(' '))) => (version, manifest),
                 _ => return Err(error(Protocol, "candidate ready frame has an unsupported protocol", None, true, false, None)),
             };
             manifest.validate().map_err(|cause| error(Registration, "candidate manifest is invalid", Some(&cause), true, false, None))?;
@@ -575,7 +576,7 @@ impl Generation {
         operation_id: Option<crate::OperationId>,
     ) -> Result<crate::MessageDisposition> {
         if operation_id.is_some() && self.protocol < 8 {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "invocation.operation_id",
                 "worker requires protocol v8 operation identity support",
             ));
@@ -586,7 +587,7 @@ impl Generation {
         let call = async {
             let mut io = self.io.lock().await;
             if io.poisoned {
-                return Err(YappinError::Config(
+                return Err(Error::Config(
                     "cog connection is no longer usable; reload it".into(),
                 ));
             }
@@ -611,13 +612,13 @@ impl Generation {
                     } => {
                         calls += 1;
                         if calls > 128 {
-                            return Err(YappinError::Config(
+                            return Err(Error::Config(
                                 "worker exceeded 128 requests per event".into(),
                             ));
                         }
                         let result = async {
                             if timeout_ms == 0 || timeout_ms > 300_000 {
-                                return Err(YappinError::validation(
+                                return Err(Error::validation(
                                     "timeout",
                                     "worker waits require 1 through 300000 milliseconds",
                                 ));
@@ -631,13 +632,13 @@ impl Generation {
                                 .subscribe()?;
                             if let Some(message) = prompt {
                                 let channel = channel.ok_or_else(|| {
-                                    YappinError::validation("channel", "prompt requires a channel")
+                                    Error::validation("channel", "prompt requires a channel")
                                 })?;
                                 client.send_message(channel, &message).await?;
                             }
                             let event = waiter.wait().await?;
                             let value = client.worker_output(serde_json::to_value(event)?);
-                            Ok::<crate::Event, YappinError>(serde_json::from_value(value)?)
+                            Ok::<crate::Event, Error>(serde_json::from_value(value)?)
                         }
                         .await;
                         let message = match result {
@@ -687,7 +688,7 @@ impl Generation {
                             return Err(error.into());
                         }
                         return match error {
-                            Some(error) => Err(YappinError::Config(
+                            Some(error) => Err(Error::Config(
                                 client
                                     .worker_output(Value::String(error))
                                     .as_str()
@@ -703,7 +704,7 @@ impl Generation {
                     | Wire::Upload { .. }) => {
                         calls += 1;
                         if calls > 128 {
-                            return Err(YappinError::Config(
+                            return Err(Error::Config(
                                 "worker exceeded 128 API requests per event".into(),
                             ));
                         }
@@ -719,7 +720,7 @@ impl Generation {
                                             )
                                             .await
                                     }
-                                    Err(_) => Err(YappinError::validation(
+                                    Err(_) => Err(Error::validation(
                                         "method",
                                         "invalid worker API method",
                                     )),
@@ -730,7 +731,7 @@ impl Generation {
                                     Ok(method) => {
                                         crate::Api::request_once(client, method, &path, body).await
                                     }
-                                    Err(_) => Err(YappinError::validation(
+                                    Err(_) => Err(Error::validation(
                                         "method",
                                         "invalid worker API method",
                                     )),
@@ -776,7 +777,7 @@ impl Generation {
                     } => {
                         calls += 1;
                         if calls > 128 {
-                            return Err(YappinError::Config(
+                            return Err(Error::Config(
                                 "worker exceeded 128 requests per event".into(),
                             ));
                         }
@@ -822,12 +823,12 @@ impl Generation {
             }
         };
         match tokio::time::timeout(self.timeout, call).await {
-            Ok(Err(error)) if !completed.load(Ordering::SeqCst) => Err(YappinError::HandlerInterrupted {
+            Ok(Err(error)) if !completed.load(Ordering::SeqCst) => Err(Error::HandlerInterrupted {
                 reason: "worker exchange ended before a completion frame; reconcile writes before reloading".into(),
                 source: Some(Box::new(error)),
             }),
             Ok(result) => result,
-            Err(_) => Err(YappinError::HandlerInterrupted {
+            Err(_) => Err(Error::HandlerInterrupted {
                 reason: "worker handler timed out; reconcile writes before reloading".into(), source: None,
             }),
         }
@@ -901,7 +902,18 @@ impl Cog for ProcessCog {
                     .map(|info| crate::commands::RegisteredCommand {
                         info: info.clone(),
                         handler: command.handler,
-                        preparation: None,
+                        preparation: Some(crate::commands::CommandPreparation {
+                            schema: self
+                                .generation
+                                .manifest
+                                .schemas
+                                .iter()
+                                .find(|schema| schema.name == command.name)
+                                .cloned()
+                                .map(Arc::new),
+                            checks: Arc::new(vec![]),
+                            worker_checks: true,
+                        }),
                     })
             })
             .collect()
@@ -967,7 +979,7 @@ impl Cog for ProcessCog {
         )
         .await
     }
-    async fn on_message_result(&self, ctx: &MessageContext) -> Result<crate::MessageDisposition> {
+    async fn on_message(&self, ctx: &MessageContext) -> Result<crate::MessageDisposition> {
         if self
             .generation
             .manifest
@@ -983,21 +995,19 @@ impl Cog for ProcessCog {
                 )
                 .await
         } else {
-            self.on_message(ctx).await;
+            self.listen_result(
+                Listener::Message,
+                CogEvent::Message {
+                    message: ctx.event.clone(),
+                },
+                &ctx.client,
+            )
+            .await?;
             Ok(crate::MessageDisposition::Continue)
         }
     }
-    async fn on_message(&self, ctx: &MessageContext) {
-        self.listen(
-            Listener::Message,
-            CogEvent::Message {
-                message: ctx.event.clone(),
-            },
-            &ctx.client,
-        )
-        .await;
-    }
-    async fn on_ui_interaction(&self, ctx: &crate::UiInteractionContext) -> Result<()> {
+
+    async fn on_interaction(&self, ctx: &crate::InteractionContext) -> Result<()> {
         if self
             .generation
             .manifest
@@ -1005,47 +1015,50 @@ impl Cog for ProcessCog {
             .contains(&Listener::UiInteraction)
         {
             self.generation
-                .invoke(
-                    CogEvent::UiInteraction {
-                        event: ctx.data.clone(),
-                    },
-                    &ctx.context.client,
-                )
+                .invoke(CogEvent::UiInteraction { event: ctx.data() }, &ctx.client)
                 .await
                 .map(|_| ())
         } else {
-            Ok(())
+            self.listen_result(
+                Listener::Interaction,
+                CogEvent::Interaction {
+                    interaction: ctx.event.clone(),
+                },
+                &ctx.client,
+            )
+            .await
         }
     }
-    async fn on_interaction(&self, ctx: &InteractionContext) {
-        self.listen(
-            Listener::Interaction,
-            CogEvent::Interaction {
-                interaction: ctx.event.clone(),
-            },
-            &ctx.client,
-        )
-        .await;
-    }
-    async fn on_member_join(&self, client: &Client, event: &crate::MemberJoinEvent) {
-        self.listen(
+
+    async fn on_member_join(
+        &self,
+        client: &Client,
+        event: &crate::MemberJoinEvent,
+    ) -> crate::Result<()> {
+        self.listen_result(
             Listener::MemberJoin,
             CogEvent::MemberJoin {
                 event: event.clone(),
             },
             client,
         )
-        .await;
+        .await?;
+        Ok(())
     }
-    async fn on_member_leave(&self, client: &Client, event: &crate::MemberLeaveEvent) {
-        self.listen(
+    async fn on_member_leave(
+        &self,
+        client: &Client,
+        event: &crate::MemberLeaveEvent,
+    ) -> crate::Result<()> {
+        self.listen_result(
             Listener::MemberLeave,
             CogEvent::MemberLeave {
                 event: event.clone(),
             },
             client,
         )
-        .await;
+        .await?;
+        Ok(())
     }
     async fn on_resource_event(&self, client: &Client, event: &crate::ResourceEvent) -> Result<()> {
         self.listen_result(
@@ -1057,25 +1070,35 @@ impl Cog for ProcessCog {
         )
         .await
     }
-    async fn on_invite_create(&self, client: &Client, event: &crate::InviteEvent) {
-        self.listen(
+    async fn on_invite_create(
+        &self,
+        client: &Client,
+        event: &crate::InviteEvent,
+    ) -> crate::Result<()> {
+        self.listen_result(
             Listener::InviteCreate,
             CogEvent::InviteCreate {
                 event: event.clone(),
             },
             client,
         )
-        .await;
+        .await?;
+        Ok(())
     }
-    async fn on_invite_delete(&self, client: &Client, event: &crate::InviteEvent) {
-        self.listen(
+    async fn on_invite_delete(
+        &self,
+        client: &Client,
+        event: &crate::InviteEvent,
+    ) -> crate::Result<()> {
+        self.listen_result(
             Listener::InviteDelete,
             CogEvent::InviteDelete {
                 event: event.clone(),
             },
             client,
         )
-        .await;
+        .await?;
+        Ok(())
     }
 }
 impl ProcessCog {
@@ -1115,13 +1138,6 @@ impl ProcessCog {
             self.generation.invoke(event, client).await
         } else {
             Ok(())
-        }
-    }
-    async fn listen(&self, kind: Listener, event: CogEvent, client: &Client) {
-        if self.generation.manifest.listeners.contains(&kind) {
-            if let Err(error) = self.generation.invoke(event, client).await {
-                tracing::error!("Cog listener failed: {error}");
-            }
         }
     }
 }
@@ -1224,13 +1240,13 @@ impl HotReload {
         .await;
         // Also scrub the parent's known credential, which need not be in env.
         result.map_err(|cause| match cause {
-            YappinError::HotReload { failure } => {
+            Error::HotReload { failure } => {
                 let failure =
                     serde_json::from_value(client.redact_credentials(
                         serde_json::to_value(failure).expect("candidate report"),
                     ))
                     .expect("redacted candidate report");
-                YappinError::HotReload { failure }
+                Error::HotReload { failure }
             }
             cause => cause,
         })
@@ -1419,7 +1435,7 @@ impl HotReload {
     /// ```
     pub async fn watch(&self, interval: Duration) -> Result<WatchGuard> {
         if interval.is_zero() {
-            return Err(YappinError::validation("interval", "must be positive"));
+            return Err(Error::validation("interval", "must be positive"));
         }
         let source = self.inner.source.clone();
         let mut previous = fingerprint(source.clone()).await?;
@@ -1443,7 +1459,7 @@ impl HotReload {
                             previous = next;
                             let error = controller.reload().await.err();
                             next_status.reload_failure =
-                                error.as_ref().and_then(YappinError::hot_reload_failure);
+                                error.as_ref().and_then(Error::hot_reload_failure);
                             next_status.reload_error = error.map(|e| e.to_string());
                             if let Some(error) = &next_status.reload_error {
                                 tracing::warn!("Hot reload failed; active cog kept: {error}");

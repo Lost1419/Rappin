@@ -36,7 +36,7 @@ typed_id!(ScheduledEventId);
 /// let tagged = rappin::ApiObject::<rappin::ResolvedObject>::decode(serde_json::json!({
 ///     "id":uuid::Uuid::nil(),"object":"channel"}), "channel")?;
 /// assert_eq!(tagged.object, "channel");
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -53,14 +53,14 @@ impl<T: serde::de::DeserializeOwned> ApiObject<T> {
     /// let tagged = rappin::ApiObject::<rappin::ResolvedObject>::decode(serde_json::json!({
     ///     "id":uuid::Uuid::nil(),"object":"user"}), "user")?;
     /// assert_eq!(tagged.data.object, "user");
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn decode(value: serde_json::Value, expected: &str) -> crate::Result<Self> {
         let object = value["object"]
             .as_str()
             .filter(|kind| *kind == expected)
             .ok_or_else(|| {
-                crate::YappinError::validation(
+                crate::Error::validation(
                     "object",
                     "unexpected or missing platform object discriminator",
                 )

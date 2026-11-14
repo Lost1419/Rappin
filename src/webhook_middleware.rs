@@ -31,7 +31,7 @@
 //! }
 //! ```
 
-use crate::{Event, YappinError};
+use crate::{Error, Event};
 use axum::{
     body::Body,
     extract::{Request, State},
@@ -113,8 +113,8 @@ impl IntoResponse for WebhookError {
     }
 }
 
-/// Convert a YappinError to an axum Response.
-fn yappin_error_to_response(err: YappinError) -> Response {
+/// Convert a Error to an axum Response.
+fn yappin_error_to_response(err: Error) -> Response {
     let status = err
         .status_code()
         .and_then(|c| StatusCode::from_u16(c).ok())
@@ -140,7 +140,7 @@ fn yappin_error_to_response(err: YappinError) -> Response {
 /// let app = Router::<()>::new()
 ///     .route("/webhook", post(verified_handler(|event| Box::pin(async move {
 ///         tracing::debug!(event_id = event.id, "Verified event");
-///         Ok::<(), rappin::YappinError>(())
+///         Ok::<(), rappin::Error>(())
 ///     }))))
 ///     .layer(middleware::from_fn_with_state(config, verify_middleware));
 /// // Verification must run before verified_handler; missing extensions otherwise panic.
@@ -246,7 +246,7 @@ pub fn get_verified_event(request: &Request) -> Option<&Event> {
 /// let app = Router::<()>::new()
 ///     .route("/webhook", post(verified_handler(|event| Box::pin(async move {
 ///         tracing::debug!(event_id = event.id, "Verified event");
-///         Ok::<(), rappin::YappinError>(())
+///         Ok::<(), rappin::Error>(())
 ///     }))))
 ///     .layer(middleware::from_fn_with_state(config, verify_middleware));
 /// // Verification must run before verified_handler; missing extensions otherwise panic.
@@ -255,10 +255,7 @@ pub fn verified_handler<F, R>(
     handler: F,
 ) -> impl Fn(Request) -> std::pin::Pin<Box<dyn std::future::Future<Output = Response> + Send>> + Clone
 where
-    F: Fn(
-            Event,
-        )
-            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R, YappinError>> + Send>>
+    F: Fn(Event) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R, Error>> + Send>>
         + Clone
         + Send
         + Sync
@@ -302,10 +299,7 @@ pub fn route<F, R>(
     handler: F,
 ) -> axum::routing::MethodRouter
 where
-    F: Fn(
-            Event,
-        )
-            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R, YappinError>> + Send>>
+    F: Fn(Event) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R, Error>> + Send>>
         + Clone
         + Send
         + Sync
@@ -319,9 +313,7 @@ where
             let event = match get_verified_event(&req).cloned() {
                 Some(event) => event,
                 None => {
-                    return yappin_error_to_response(YappinError::Config(
-                        "verified event missing".into(),
-                    ))
+                    return yappin_error_to_response(Error::Config("verified event missing".into()))
                 }
             };
             match handler(event).await {
@@ -372,7 +364,7 @@ mod tests {
             .route(
                 "/webhook",
                 post(verified_handler(|_event| {
-                    Box::pin(async { Ok::<(), YappinError>(()) })
+                    Box::pin(async { Ok::<(), Error>(()) })
                 })),
             )
             .layer(axum::middleware::from_fn_with_state(
@@ -409,7 +401,7 @@ mod tests {
             .route(
                 "/webhook",
                 post(verified_handler(|_event| {
-                    Box::pin(async { Ok::<(), YappinError>(()) })
+                    Box::pin(async { Ok::<(), Error>(()) })
                 })),
             )
             .layer(axum::middleware::from_fn_with_state(
@@ -453,7 +445,7 @@ mod tests {
             .route(
                 "/webhook",
                 post(verified_handler(|_event| {
-                    Box::pin(async { Ok::<(), YappinError>(()) })
+                    Box::pin(async { Ok::<(), Error>(()) })
                 })),
             )
             .layer(axum::middleware::from_fn_with_state(

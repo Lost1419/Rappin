@@ -1,6 +1,6 @@
 //! Optional encrypted playback using Node, ffmpeg, @livekit/rtc-node and the official Yapin SDK.
 //! No media/crypto protocol is reimplemented here. Download the SDK to a trusted local .mjs file.
-use crate::{Client, Result, YappinError};
+use crate::{Client, Error, Result};
 use std::{
     path::{Path, PathBuf},
     process::Stdio,
@@ -113,7 +113,7 @@ impl Client {
             Ok(output) => output?,
             Err(_) => {
                 let _ = self.leave_voice(server).await;
-                return Err(YappinError::Config(
+                return Err(Error::Config(
                     "voice playback timed out and was disconnected".into(),
                 ));
             }
@@ -121,7 +121,7 @@ impl Client {
         if !output.status.success() {
             let _ = self.leave_voice(server).await;
             let error = String::from_utf8_lossy(&output.stderr).replace(self.token(), "[REDACTED]");
-            return Err(YappinError::Config(format!(
+            return Err(Error::Config(format!(
                 "voice bridge failed: {}",
                 error.trim()
             )));

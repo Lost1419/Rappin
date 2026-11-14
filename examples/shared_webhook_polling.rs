@@ -11,8 +11,8 @@ use axum::{
 use rappin::{
     webhook::VerifiedEvent,
     webhook_middleware::{verify_middleware, WebhookConfig},
-    AdmissionStatus, Bot, EventIngress, IngressConfig, IngressConflictPolicy, ReceiptStage, Result,
-    YappinError,
+    AdmissionStatus, Bot, Error, EventIngress, IngressConfig, IngressConflictPolicy, ReceiptStage,
+    Result,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -52,11 +52,7 @@ async fn receive(
         AdmissionStatus::Full | AdmissionStatus::Stopped => StatusCode::SERVICE_UNAVAILABLE,
         _ => StatusCode::CONFLICT,
     };
-    if let Some(conflict) = admission
-        .error
-        .as_ref()
-        .and_then(YappinError::ingress_conflict)
-    {
+    if let Some(conflict) = admission.error.as_ref().and_then(Error::ingress_conflict) {
         // The bounded report contains sources, hashes and schema paths/types,
         // never message text, interaction credentials or arbitrary payload values.
         return (
@@ -67,7 +63,7 @@ async fn receive(
     (status, Json(json!({"admission":"not_accepted"})))
 }
 fn required(name: &str) -> Result<String> {
-    std::env::var(name).map_err(|_| YappinError::Config(format!("set {name}")))
+    std::env::var(name).map_err(|_| Error::Config(format!("set {name}")))
 }
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -75,7 +71,7 @@ async fn main() -> Result<()> {
     let bot_id = required("YAPIN_BOT_ID")?;
     bot_id
         .parse::<uuid::Uuid>()
-        .map_err(|_| YappinError::Config("YAPIN_BOT_ID must be a UUID".into()))?;
+        .map_err(|_| Error::Config("YAPIN_BOT_ID must be a UUID".into()))?;
     let secret = required("YAPIN_WEBHOOK_SECRET")?;
     let cursor =
         std::env::var("YAPIN_CURSOR_FILE").unwrap_or_else(|_| "shared-example-cursor.json".into());
@@ -84,25 +80,26 @@ async fn main() -> Result<()> {
         if arg == "--retain-completed-and-poll" {
             config.conflict_policy = IngressConflictPolicy::RetainCompletedAndPoll;
         } else {
-            return Err(YappinError::Config(
+            return Err(Error::Config(
                 "supported argument: --retain-completed-and-poll".into(),
             ));
         }
     }
     let bot = Bot::builder(token)
-        .shared_ingress(config)
-        .cursor_file(cursor)
+        .configure(|settings| settings.persistence.ingress = Some(config))
+        .configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new(cursor)))
         .command("ping", "Reply once across transports", |ctx| async move {
             ctx.reply("pong").await?;
             Ok(())
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let ingress = handle.ingress().expect("shared ingress configured");
     let mut runner = tokio::spawn(bot.run());
     tokio::select! {
-        ready=ingress.wait_ready()=>{if ready.is_err(){return runner.await.map_err(|_|YappinError::Config("runner task failed".into()))?;}},
-        result=&mut runner=>return result.map_err(|_|YappinError::Config("runner task failed".into()))?,
+        ready=ingress.wait_ready()=>{if ready.is_err(){return runner.await.map_err(|_|Error::Config("runner task failed".into()))?;}},
+        result=&mut runner=>return result.map_err(|_|Error::Config("runner task failed".into()))?,
     }
     // Signature middleware retains the exact raw body and expected bot identity.
     // HTTP admission is independent of handler completion. This example's
@@ -125,8 +122,8 @@ async fn main() -> Result<()> {
             .await
     });
     let result = tokio::select! {
-        result=&mut runner=>result.map_err(|_|YappinError::Config("runner task failed".into()))?,
-        _=tokio::signal::ctrl_c()=>{handle.stop();runner.await.map_err(|_|YappinError::Config("runner task failed".into()))?},
+        result=&mut runner=>result.map_err(|_|Error::Config("runner task failed".into()))?,
+        _=tokio::signal::ctrl_c()=>{handle.stop();runner.await.map_err(|_|Error::Config("runner task failed".into()))?},
     };
     let _ = shutdown.send(());
     let _ = server.await;

@@ -6,10 +6,10 @@
 //! let policy = AvailabilityPolicy::new(5, Duration::from_secs(120))?
 //!     .backoff(Duration::from_millis(500), Duration::from_secs(10))?
 //!     .jitter_percent(20)?;
-//! # Ok::<(), rappin::YappinError>(())
+//! # Ok::<(), rappin::Error>(())
 //! ```
 //! Opt-in availability budgets for startup and event-intake reads.
-use crate::{RemoteError, Result, YappinError};
+use crate::{Error, RemoteError, Result};
 use serde::{Deserialize, Serialize};
 use std::{future::Future, time::Duration};
 use tokio::{sync::watch, time::Instant};
@@ -26,7 +26,7 @@ use tokio::{sync::watch, time::Instant};
 /// let policy = AvailabilityPolicy::new(5, Duration::from_secs(120))?
 ///     .backoff(Duration::from_millis(500), Duration::from_secs(10))?
 ///     .jitter_percent(20)?;
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct AvailabilityPolicy {
     max_attempts: u32,
@@ -57,14 +57,14 @@ impl AvailabilityPolicy {
     /// let policy = AvailabilityPolicy::new(5, Duration::from_secs(120))?
     ///     .backoff(Duration::from_millis(500), Duration::from_secs(10))?
     ///     .jitter_percent(20)?;
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn new(max_attempts: u32, max_elapsed: Duration) -> Result<Self> {
         if !(1..=1000).contains(&max_attempts)
             || max_elapsed.is_zero()
             || Instant::now().checked_add(max_elapsed).is_none()
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "availability",
                 "requires 1..=1000 attempts and a positive representable elapsed budget",
             ));
@@ -85,11 +85,11 @@ impl AvailabilityPolicy {
     /// let policy = AvailabilityPolicy::new(5, Duration::from_secs(120))?
     ///     .backoff(Duration::from_millis(500), Duration::from_secs(10))?
     ///     .jitter_percent(20)?;
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn backoff(mut self, initial: Duration, maximum: Duration) -> Result<Self> {
         if initial.is_zero() || maximum < initial || Instant::now().checked_add(maximum).is_none() {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "availability.backoff",
                 "requires positive initial <= maximum with representable duration",
             ));
@@ -107,7 +107,7 @@ impl AvailabilityPolicy {
     /// ```
     pub fn jitter_percent(mut self, percent: u8) -> Result<Self> {
         if percent > 100 {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "availability.jitter",
                 "maximum 100 percent",
             ));
@@ -115,7 +115,7 @@ impl AvailabilityPolicy {
         self.jitter_percent = percent;
         Ok(self)
     }
-    fn delay(&self, failure: u32, error: &YappinError) -> Duration {
+    fn delay(&self, failure: u32, error: &Error) -> Duration {
         let base = self
             .initial_backoff
             .saturating_mul(1u32 << failure.saturating_sub(1).min(31))
@@ -294,14 +294,14 @@ impl Telemetry {
     }
 }
 
-pub(crate) fn retryable_read(error: &YappinError) -> bool {
+pub(crate) fn retryable_read(error: &Error) -> bool {
     match error {
-        YappinError::Http(e) => {
+        Error::Http(e) => {
             !e.is_builder() && (e.is_connect() || e.is_timeout() || e.is_request() || e.is_body())
         }
         // Exhausting the client's shared/advised wait budget is terminal here.
-        YappinError::RetryWaitExceeded { .. } => false,
-        YappinError::Remote(e) if e.kind == "gateway_transport" => true,
+        Error::RetryWaitExceeded { .. } => false,
+        Error::Remote(e) if e.kind == "gateway_transport" => true,
         _ => {
             matches!(
                 error.status_code(),
@@ -428,7 +428,7 @@ impl Episode {
             },
         }
     }
-    pub(crate) async fn retry(&mut self, mut error: YappinError) -> Result<()> {
+    pub(crate) async fn retry(&mut self, mut error: Error) -> Result<()> {
         if self.finished {
             return Err(error);
         }
@@ -502,7 +502,7 @@ impl Episode {
             });
         }
     }
-    fn end(&mut self, reason: AvailabilityEnd) -> YappinError {
+    fn end(&mut self, reason: AvailabilityEnd) -> Error {
         self.end_wait();
         self.finished = true;
         self.telemetry.update(|s| {
@@ -526,7 +526,7 @@ impl Episode {
             max_elapsed: self.policy.max_elapsed,
             last_error: self.last_error.clone(),
         };
-        YappinError::Remote(RemoteError {
+        Error::Remote(RemoteError {
             kind: "availability".into(),
             message: format!(
                 "read availability ended during {:?}: {:?}",
@@ -571,7 +571,7 @@ mod tests {
             .backoff(Duration::from_secs(2), Duration::from_secs(1))
             .is_err());
         let policy = AvailabilityPolicy::default();
-        let error = YappinError::Api {
+        let error = Error::Api {
             status: 503,
             message: "busy".into(),
             retry_after: None,
@@ -586,7 +586,7 @@ mod tests {
                 assert!(delay <= base && delay >= base.mul_f64(0.8));
             }
         }
-        let advised = YappinError::Api {
+        let advised = Error::Api {
             status: 503,
             message: "wait".into(),
             retry_after: Some(30.0),

@@ -12,8 +12,10 @@ and run `cargo run`. Do not overwrite an existing project with the starter.
 
 The package is `rappin-rs`; imports use `rappin`. Rust 1.89+ is required. Ordinary
 commands are async closures returning `rappin::Result<()>`. Use `CommandSpec` /
-`FromArgs` for typed parsing, bounds, aliases, checks and help. Do not invent
-derive macros. The default library needs neither CLI/Clap nor Node.
+`FromArgs` for typed parsing, bounds, aliases, checks and help. Enable `derive`
+for `#[derive(FromArgs)]` with documented `#[arg(default, min, max, rest)]` fields.
+Manual parsers remain supported. Build with `.build()?` and use `Bot::from_env()?`
+for environment credentials. Use `.state(Arc<T>)` and `ctx.state::<T>()?` for typed state. The default library needs neither CLI/Clap nor Node.
 
 Choose the reference only when relevant:
 
@@ -40,4 +42,4 @@ was tested and any remaining platform limitations. Read API docs matching the
 selected dependency at https://docs.rs/rappin-rs/ rather than assuming `latest`
 matches an older lockfile. Public guide modules include `guide`,
 `capability_bindings_guide`, `message_policy_guide`, `handler_failures_guide`, and
-`availability_and_hierarchy_guide` (the last requires Rappin 0.1.20+).
+`availability_and_hierarchy_guide`.

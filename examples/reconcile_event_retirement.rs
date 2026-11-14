@@ -23,16 +23,16 @@ async fn main() -> rappin::Result<()> {
             && args[7] == "--assessment"
             && args[9] == "--evidence")
     {
-        return Err(YappinError::Config("use --help for arguments".into()));
+        return Err(Error::Config("use --help for arguments".into()));
     }
     let bot = args[1]
         .parse()
-        .map_err(|_| YappinError::Config("invalid bot UUID".into()))?;
+        .map_err(|_| Error::Config("invalid bot UUID".into()))?;
     let event = args[2]
         .parse()
-        .map_err(|_| YappinError::Config("invalid event ID".into()))?;
+        .map_err(|_| Error::Config("invalid event ID".into()))?;
     let token = std::env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+        .map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
     let store = Arc::new(journal::Journal::open(PathBuf::from(&args[0]))?);
     let request = if args[4] == "retained-execution" {
         EventRetirementRequest::retained_execution(bot, event, &args[3])
@@ -48,7 +48,7 @@ async fn main() -> rappin::Result<()> {
             "attested-applied" => EventRetirementAssessment::AttestedApplied,
             "attested-not-applied" => EventRetirementAssessment::AttestedNotApplied,
             _ => {
-                return Err(YappinError::Config(
+                return Err(Error::Config(
                     "select an explicit assessment from --help".into(),
                 ))
             }

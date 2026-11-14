@@ -112,7 +112,7 @@ fn builder(http: &Http) -> BotBuilder {
         .base_url(&http.url)
         .sync_commands(false)
         .log(false)
-        .shared_ingress(IngressConfig::default())
+        .configure(|settings| settings.persistence.ingress = Some(IngressConfig::default()))
 }
 
 #[tokio::test]
@@ -123,7 +123,7 @@ async fn simultaneous_webhooks_polling_sparse_ids_conflicts_and_identity_are_sha
     let mut config = IngressConfig::default();
     config.conflict_policy = IngressConflictPolicy::RetainCompletedAndPoll;
     let bot = builder(&http)
-        .shared_ingress(config)
+        .configure(|settings| settings.persistence.ingress = Some(config))
         .command("ping", "record", move |ctx| {
             let c = c.clone();
             async move {
@@ -131,7 +131,8 @@ async fn simultaneous_webhooks_polling_sparse_ids_conflicts_and_identity_are_sha
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let ingress = handle.ingress().unwrap();
     let run = tokio::spawn(bot.run());
@@ -204,9 +205,9 @@ async fn saturation_retains_unresolved_claims_and_cancellation_drains_started_wo
     let mut config = IngressConfig::default();
     config.max_claims = 4;
     let bot = builder(&http)
-        .shared_ingress(config)
-        .pending_batches(2)
-        .handler_concurrency(1)
+        .configure(|settings| settings.persistence.ingress = Some(config))
+        .configure(|settings| settings.execution.pending_batches = 2)
+        .configure(|settings| settings.execution.concurrency = 1)
         .command("hold", "wait", move |_| {
             let started = started.clone();
             let wait = wait.clone();
@@ -216,7 +217,8 @@ async fn saturation_retains_unresolved_claims_and_cancellation_drains_started_wo
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let ingress = handle.ingress().unwrap();
     let run = tokio::spawn(bot.run());
@@ -251,7 +253,7 @@ async fn saturation_retains_unresolved_claims_and_cancellation_drains_started_wo
         .await
         .unwrap()
         .unwrap();
-    if let Err(YappinError::EventProcessing { report }) = drained {
+    if let Err(Error::EventProcessing { report }) = drained {
         assert!(report
             .failed_events
             .iter()
@@ -307,7 +309,7 @@ impl IngressStore for Store {
         }
         let fail = self.fail_conflict.load(Ordering::SeqCst);
         if fail == 1 || fail == 2 && report.disposition == ConflictDisposition::PollingConfirmed {
-            return Err(YappinError::Api {
+            return Err(Error::Api {
                 status: 503,
                 message: "fixture conflict persistence failed".into(),
                 retry_after: Some(0.1),
@@ -337,7 +339,7 @@ impl IngressStore for Store {
         decision.validate_write(&data)?;
         let fail = self.fail_reconciliation.load(Ordering::SeqCst);
         if fail == 1 || fail == 3 && decision.state == TimestampReconciliationState::Confirmed {
-            return Err(YappinError::Api {
+            return Err(Error::Api {
                 status: 503,
                 message: "fixture transaction rolled back".into(),
                 retry_after: Some(0.5),
@@ -351,7 +353,7 @@ impl IngressStore for Store {
                 && data.timestamp_reconciliations.last().unwrap().state
                     == TimestampReconciliationState::Confirmed
         {
-            return Err(YappinError::Api {
+            return Err(Error::Api {
                 status: 503,
                 message: "fixture commit response lost".into(),
                 retry_after: Some(0.5),
@@ -365,7 +367,7 @@ impl IngressStore for Store {
         decision.validate_write(&data)?;
         let fail = self.fail_retirement.load(Ordering::SeqCst);
         if fail == 1 || fail == 3 && decision.state == EventRetirementState::PollingConfirmed {
-            return Err(YappinError::Api {
+            return Err(Error::Api {
                 status: 503,
                 message: "fixture retirement transaction rollback".into(),
                 retry_after: Some(0.2),
@@ -385,7 +387,7 @@ impl IngressStore for Store {
             .unwrap()
             .push((decision.clone(), original));
         if fail == 2 || fail == 4 && decision.state == EventRetirementState::PollingConfirmed {
-            return Err(YappinError::Api {
+            return Err(Error::Api {
                 status: 503,
                 message: "fixture retirement commit response lost".into(),
                 retry_after: Some(0.2),
@@ -395,7 +397,7 @@ impl IngressStore for Store {
     }
     async fn checkpoint(&self, _: Uuid, cursor: u64) -> Result<()> {
         if cursor > 0 && self.fail_checkpoint.load(Ordering::SeqCst) > 0 {
-            return Err(YappinError::Config(
+            return Err(Error::Config(
                 "fixture checkpoint persistence failed".into(),
             ));
         }
@@ -430,8 +432,8 @@ async fn unpublished_lower_claim_blocks_checkpoint_and_recovers_without_duplicat
     let calls = Arc::new(AtomicUsize::new(0));
     let c = calls.clone();
     let bot = builder(&http)
-        .ingress_store(store.clone())
-        .pending_batches(3)
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
+        .configure(|settings| settings.execution.pending_batches = 3)
         .command("ping", "test", move |_| {
             let c = c.clone();
             async move {
@@ -439,7 +441,8 @@ async fn unpublished_lower_claim_blocks_checkpoint_and_recovers_without_duplicat
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let ingress = handle.ingress().unwrap();
     let run = tokio::spawn(bot.run());
@@ -474,8 +477,10 @@ async fn failed_checkpoint_keeps_durable_completion_and_restart_never_reexecutes
         let mut http = Http::new(vec![]).await;
         let c = calls.clone();
         let bot = builder(&http)
-            .cursor_file(&path)
-            .ingress_store(store.clone())
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&path))
+            })
+            .configure(|settings| settings.persistence.store = Some(store.clone()))
             .command("ping", "test", move |_| {
                 let c = c.clone();
                 async move {
@@ -483,7 +488,8 @@ async fn failed_checkpoint_keeps_durable_completion_and_restart_never_reexecutes
                     Ok(())
                 }
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         let ingress = handle.ingress().unwrap();
         let run = tokio::spawn(bot.run());
@@ -495,7 +501,7 @@ async fn failed_checkpoint_keeps_durable_completion_and_restart_never_reexecutes
         if round == 0 {
             let error = run.await.unwrap().unwrap_err();
             let report = match error {
-                YappinError::EventProcessing { report } => report,
+                Error::EventProcessing { report } => report,
                 other => panic!("{other:?}"),
             };
             assert!(report.cursor_error.is_some());
@@ -521,9 +527,9 @@ async fn collectors_keep_receiving_with_one_handler_and_duplicate_buttons_ack_on
     let buttons = Arc::new(AtomicUsize::new(0));
     let b = buttons.clone();
     let bot = builder(&http)
-        .pending_batches(1)
-        .handler_concurrency(1)
-        .auto_ack_after(Duration::from_millis(5))
+        .configure(|settings| settings.execution.pending_batches = 1)
+        .configure(|settings| settings.execution.concurrency = 1)
+        .configure(|settings| settings.execution.auto_ack_after = Some(Duration::from_millis(5)))
         .command("question", "collect", move |ctx| {
             let r = r.clone();
             async move {
@@ -546,7 +552,8 @@ async fn collectors_keep_receiving_with_one_handler_and_duplicate_buttons_ack_on
                 ctx.ack().await
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let ingress = handle.ingress().unwrap();
     let run = tokio::spawn(bot.run());
@@ -602,7 +609,7 @@ async fn handled_failures_continue_but_failed_replies_preserve_causes_and_barrie
         let later = Arc::new(AtomicUsize::new(0));
         let l = later.clone();
         let bot = builder(&http)
-            .handler_concurrency(1)
+            .configure(|settings| settings.execution.concurrency = 1)
             .command("reject", "reject", |_| async {
                 Err(CommandError::Denied("expected rejection".into()).into())
             })
@@ -622,7 +629,8 @@ async fn handled_failures_continue_but_failed_replies_preserve_causes_and_barrie
                     Ok(FailureDisposition::Default)
                 }
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         let ingress = handle.ingress().unwrap();
         let run = tokio::spawn(bot.run());
@@ -631,7 +639,7 @@ async fn handled_failures_continue_but_failed_replies_preserve_causes_and_barrie
         if failed_reply {
             let error = run.await.unwrap().unwrap_err();
             let report = match error {
-                YappinError::EventProcessing { report } => report,
+                Error::EventProcessing { report } => report,
                 other => panic!("{other:?}"),
             };
             assert_eq!(report.committed_cursor, 0);
@@ -662,7 +670,7 @@ async fn uncertain_effects_and_cancelled_started_records_block_restart() {
         let calls = Arc::new(AtomicUsize::new(0));
         let c = calls.clone();
         let bot = builder(&http)
-            .ingress_store(store.clone())
+            .configure(|settings| settings.persistence.store = Some(store.clone()))
             .command("effect", "uncertain", move |_| {
                 let notify = notify.clone();
                 let c = c.clone();
@@ -672,10 +680,10 @@ async fn uncertain_effects_and_cancelled_started_records_block_restart() {
                     if cancelled {
                         std::future::pending::<()>().await;
                     }
-                    Err(YappinError::PartialWrite {
+                    Err(Error::PartialWrite {
                         completed: vec![json!({"receipt":"confirmed"})],
                         failed_step: 2,
-                        source: Box::new(YappinError::Api {
+                        source: Box::new(Error::Api {
                             status: 502,
                             message: "unknown write".into(),
                             retry_after: None,
@@ -683,7 +691,8 @@ async fn uncertain_effects_and_cancelled_started_records_block_restart() {
                     })
                 }
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let ingress = bot.handle().ingress().unwrap();
         let run = tokio::spawn(bot.run());
         ingress.wait_ready().await.unwrap();
@@ -698,7 +707,7 @@ async fn uncertain_effects_and_cancelled_started_records_block_restart() {
         } else {
             let error = run.await.unwrap().unwrap_err();
             let report = match error {
-                YappinError::EventProcessing { report } => report,
+                Error::EventProcessing { report } => report,
                 other => panic!("{other:?}"),
             };
             assert_eq!(
@@ -708,7 +717,7 @@ async fn uncertain_effects_and_cancelled_started_records_block_restart() {
         }
         let c = calls.clone();
         let bot = builder(&http)
-            .ingress_store(store)
+            .configure(|settings| settings.persistence.store = Some(store))
             .command("effect", "no replay", move |_| {
                 let c = c.clone();
                 async move {
@@ -716,7 +725,8 @@ async fn uncertain_effects_and_cancelled_started_records_block_restart() {
                     Ok(())
                 }
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let next = bot.handle().ingress().unwrap();
         let error = bot.run().await.unwrap_err();
         assert_eq!(error.to_json()["kind"], "ingress_recovery");
@@ -736,8 +746,8 @@ async fn filesystem_cursor_failure_keeps_completed_evidence_and_durable_receipts
     EventCursor::new(&path).save(0).await.unwrap();
     let sabotage = path.clone();
     let bot = builder(&http)
-        .ingress_store(store.clone())
-        .cursor_file(&path)
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
+        .configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new(&path)))
         .command("work", "test", move |_| {
             let path = sabotage.clone();
             async move {
@@ -746,7 +756,8 @@ async fn filesystem_cursor_failure_keeps_completed_evidence_and_durable_receipts
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let ingress = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     ingress.wait_ready().await.unwrap();
@@ -755,7 +766,7 @@ async fn filesystem_cursor_failure_keeps_completed_evidence_and_durable_receipts
         .send(json!({"events":[event(10,"work")],"last":10}))
         .unwrap();
     let report = match run.await.unwrap().unwrap_err() {
-        YappinError::EventProcessing { report } => report,
+        Error::EventProcessing { report } => report,
         other => panic!("{other:?}"),
     };
     assert_eq!(report.committed_cursor, 0);
@@ -776,7 +787,7 @@ async fn worker_gates_duplicate_delivery_and_handled_failures_share_ingress() {
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("Cargo.toml"),format!("[package]\nname=\"shared-ingress-worker\"\nversion=\"0.0.0\"\nedition=\"2021\"\n[workspace]\n[dependencies]\nrappin={{package=\"rappin-rs\",path={},features=[\"hot-reload\"]}}\ntokio={{version=\"1\",features=[\"macros\",\"rt-multi-thread\"]}}\n",json!(env!("CARGO_MANIFEST_DIR")))).unwrap();
     std::fs::write(root.join("src/main.rs"),r#"
-use rappin::{*,hot_reload::WorkerCog};
+use rappin::{*, hot_reload::WorkerCog};
 #[tokio::main] async fn main()->Result<()> {
  WorkerCog::new("shared-worker")
  .command("worker","reply",|ctx|async move {ctx.reply("worker executed once").await})
@@ -808,7 +819,8 @@ use rappin::{*,hot_reload::WorkerCog};
                 Ok(FailureDisposition::Default)
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let reload = HotReload::load(
         handle.clone(),
@@ -901,7 +913,10 @@ async fn webhook_gateway_and_polling_share_claims_and_report_gateway_payload_con
     let calls = Arc::new(AtomicUsize::new(0));
     let c = calls.clone();
     let bot = builder(&http)
-        .gateway(format!("ws://{address}"))
+        .configure(|settings| {
+            settings.transport.gateway_url = Some(format!("ws://{address}"));
+            settings.transport.mode = rappin::TransportMode::GatewayPreferred;
+        })
         .command("ping", "test", move |_| {
             let c = c.clone();
             async move {
@@ -909,7 +924,8 @@ async fn webhook_gateway_and_polling_share_claims_and_report_gateway_payload_con
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let ingress = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     ingress.wait_ready().await.unwrap();
@@ -942,7 +958,7 @@ async fn webhook_gateway_and_polling_share_claims_and_report_gateway_payload_con
         .unwrap()
         .unwrap_err();
     let report = match error {
-        YappinError::EventProcessing { report } => report,
+        Error::EventProcessing { report } => report,
         other => panic!("{other:?}"),
     };
     assert_eq!(report.committed_cursor, 10);
@@ -977,9 +993,10 @@ async fn cancelling_admission_after_intake_started_stops_without_waiting_for_pol
     let cache = Arc::new(PausedCache(Notify::new()));
     let store = Arc::new(Store::default());
     let bot = builder(&http)
-        .ingress_store(store)
+        .configure(|settings| settings.persistence.store = Some(store))
         .lookup_cache_backend(cache.clone())
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let ingress = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     ingress.wait_ready().await.unwrap();
@@ -996,7 +1013,7 @@ async fn cancelling_admission_after_intake_started_stops_without_waiting_for_pol
         .unwrap()
         .unwrap_err();
     let report = match error {
-        YappinError::EventProcessing { report } => report,
+        Error::EventProcessing { report } => report,
         other => panic!("{other:?}"),
     };
     assert_eq!(report.committed_cursor, 0);
@@ -1012,9 +1029,9 @@ fn recover_config() -> IngressConfig {
     config.conflict_policy = IngressConflictPolicy::RetainCompletedAndPoll;
     config
 }
-fn pipeline_report(error: YappinError) -> Box<EventProcessingFailure> {
+fn pipeline_report(error: Error) -> Box<EventProcessingFailure> {
     match error {
-        YappinError::EventProcessing { report } => report,
+        Error::EventProcessing { report } => report,
         other => panic!("unexpected error: {other}"),
     }
 }
@@ -1032,7 +1049,8 @@ async fn conflicting_poll_timestamp_has_bounded_source_diagnostics_without_chang
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let ingress = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     ingress.wait_ready().await.unwrap();
@@ -1075,7 +1093,8 @@ async fn fast_webhook_conflict_stops_by_default_and_keeps_original_receipt() {
     let mut http = Http::new(vec![]).await;
     let bot = builder(&http)
         .command("ping", "record", |_| async { Ok(()) })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let ingress = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     ingress.wait_ready().await.unwrap();
@@ -1111,7 +1130,7 @@ async fn completed_conflict_requires_matching_polling_payload_not_just_a_waterma
     let calls = Arc::new(AtomicUsize::new(0));
     let c = calls.clone();
     let bot = builder(&http)
-        .shared_ingress(recover_config())
+        .configure(|settings| settings.persistence.ingress = Some(recover_config()))
         .command("ping", "record", move |_| {
             let c = c.clone();
             async move {
@@ -1119,7 +1138,8 @@ async fn completed_conflict_requires_matching_polling_payload_not_just_a_waterma
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let ingress = handle.ingress().unwrap();
     let run = tokio::spawn(bot.run());
@@ -1168,8 +1188,8 @@ async fn durable_restarts_keep_conflict_evidence_and_original_completion_without
         let mut http = Http::new(vec![]).await;
         let c = calls.clone();
         let bot = builder(&http)
-            .shared_ingress(recover_config())
-            .ingress_store(store.clone())
+            .configure(|settings| settings.persistence.ingress = Some(recover_config()))
+            .configure(|settings| settings.persistence.store = Some(store.clone()))
             .command("ping", "record", move |_| {
                 let c = c.clone();
                 async move {
@@ -1177,7 +1197,8 @@ async fn durable_restarts_keep_conflict_evidence_and_original_completion_without
                     Ok(())
                 }
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         let ingress = handle.ingress().unwrap();
         let run = tokio::spawn(bot.run());
@@ -1238,8 +1259,8 @@ async fn durable_conflict_confirmation_and_checkpoint_failures_never_reexecute_c
         let calls = Arc::new(AtomicUsize::new(0));
         let c = calls.clone();
         let bot = builder(&http)
-            .shared_ingress(recover_config())
-            .ingress_store(store.clone())
+            .configure(|settings| settings.persistence.ingress = Some(recover_config()))
+            .configure(|settings| settings.persistence.store = Some(store.clone()))
             .command("ping", "record", move |_| {
                 let c = c.clone();
                 async move {
@@ -1247,7 +1268,8 @@ async fn durable_conflict_confirmation_and_checkpoint_failures_never_reexecute_c
                     Ok(())
                 }
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let ingress = bot.handle().ingress().unwrap();
         let run = tokio::spawn(bot.run());
         ingress.wait_ready().await.unwrap();
@@ -1284,7 +1306,7 @@ async fn durable_conflict_confirmation_and_checkpoint_failures_never_reexecute_c
             assert_eq!(error.status, Some(503));
             assert_eq!(error.details["handling_error"]["kind"], "ingress_storage");
             assert_eq!(
-                YappinError::from(error.clone())
+                Error::from(error.clone())
                     .ingress_conflict()
                     .unwrap()
                     .event_id,
@@ -1303,8 +1325,8 @@ async fn durable_conflict_confirmation_and_checkpoint_failures_never_reexecute_c
         let mut restart_http = Http::new(vec![]).await;
         let c = calls.clone();
         let restart = builder(&restart_http)
-            .shared_ingress(recover_config())
-            .ingress_store(store.clone())
+            .configure(|settings| settings.persistence.ingress = Some(recover_config()))
+            .configure(|settings| settings.persistence.store = Some(store.clone()))
             .command("ping", "record", move |_| {
                 let c = c.clone();
                 async move {
@@ -1312,7 +1334,8 @@ async fn durable_conflict_confirmation_and_checkpoint_failures_never_reexecute_c
                     Ok(())
                 }
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let handle = restart.handle();
         let input = handle.ingress().unwrap();
         let run = tokio::spawn(restart.run());
@@ -1342,7 +1365,8 @@ async fn conflicting_polling_batch_is_rejected_before_any_event_effects() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let input = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     input.wait_ready().await.unwrap();
@@ -1367,9 +1391,10 @@ async fn unanswered_recovery_times_out_and_uncertain_handler_effects_cannot_use_
     let mut config = recover_config();
     config.conflict_recovery_timeout = Duration::from_millis(40);
     let bot = builder(&http)
-        .shared_ingress(config)
+        .configure(|settings| settings.persistence.ingress = Some(config))
         .command("ping", "record", |_| async { Ok(()) })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let input = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     input.wait_ready().await.unwrap();
@@ -1409,7 +1434,7 @@ async fn unanswered_recovery_times_out_and_uncertain_handler_effects_cannot_use_
     let release = Arc::new(Notify::new());
     let wait = release.clone();
     let bot = builder(&http)
-        .shared_ingress(recover_config())
+        .configure(|settings| settings.persistence.ingress = Some(recover_config()))
         .command("write", "write", move |ctx| {
             let started = started.clone();
             let wait = wait.clone();
@@ -1420,7 +1445,8 @@ async fn unanswered_recovery_times_out_and_uncertain_handler_effects_cannot_use_
                 Err(error)
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let input = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     input.wait_ready().await.unwrap();
@@ -1463,10 +1489,11 @@ async fn durable_recovery_refuses_an_unimplemented_conflict_store_hook() {
     let mut http = Http::new(vec![]).await;
     let store = Arc::new(Store::default());
     let bot = builder(&http)
-        .shared_ingress(recover_config())
-        .ingress_store(Arc::new(Legacy(store.clone())))
+        .configure(|settings| settings.persistence.ingress = Some(recover_config()))
+        .configure(|settings| settings.persistence.store = Some(Arc::new(Legacy(store.clone()))))
         .command("ping", "record", |_| async { Ok(()) })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let input = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     input.wait_ready().await.unwrap();
@@ -1499,8 +1526,8 @@ async fn simultaneous_conflicting_claims_never_run_the_second_handler_or_resolve
     let calls = Arc::new(AtomicUsize::new(0));
     let c = calls.clone();
     let bot = builder(&http)
-        .shared_ingress(recover_config())
-        .ingress_store(store.clone())
+        .configure(|settings| settings.persistence.ingress = Some(recover_config()))
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
         .command("ping", "record", move |_| {
             let c = c.clone();
             async move {
@@ -1508,7 +1535,8 @@ async fn simultaneous_conflicting_claims_never_run_the_second_handler_or_resolve
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let input = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     input.wait_ready().await.unwrap();
@@ -1577,8 +1605,11 @@ async fn gateway_conflict_can_wait_for_polling_without_repeating_the_completed_h
     let calls = Arc::new(AtomicUsize::new(0));
     let c = calls.clone();
     let bot = builder(&http)
-        .shared_ingress(recover_config())
-        .gateway(format!("ws://{address}"))
+        .configure(|settings| settings.persistence.ingress = Some(recover_config()))
+        .configure(|settings| {
+            settings.transport.gateway_url = Some(format!("ws://{address}"));
+            settings.transport.mode = rappin::TransportMode::GatewayPreferred;
+        })
         .command("ping", "record", move |_| {
             let c = c.clone();
             async move {
@@ -1586,7 +1617,8 @@ async fn gateway_conflict_can_wait_for_polling_without_repeating_the_completed_h
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let input = handle.ingress().unwrap();
     let run = tokio::spawn(bot.run());
@@ -1624,8 +1656,8 @@ async fn cancelled_conflict_publication_keeps_diagnostic_cause_and_completion_ba
     let calls = Arc::new(AtomicUsize::new(0));
     let c = calls.clone();
     let bot = builder(&http)
-        .shared_ingress(recover_config())
-        .ingress_store(store.clone())
+        .configure(|settings| settings.persistence.ingress = Some(recover_config()))
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
         .command("ping", "record", move |_| {
             let c = c.clone();
             async move {
@@ -1633,7 +1665,8 @@ async fn cancelled_conflict_publication_keeps_diagnostic_cause_and_completion_ba
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let input = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     input.wait_ready().await.unwrap();
@@ -1655,7 +1688,7 @@ async fn cancelled_conflict_publication_keeps_diagnostic_cause_and_completion_ba
     admission.abort();
     let _ = admission.await;
     let report = pipeline_report(run.await.unwrap().unwrap_err());
-    let error = YappinError::from(report.intake_error.unwrap());
+    let error = Error::from(report.intake_error.unwrap());
     assert_eq!(error.ingress_conflict().unwrap().event_id, 10);
     assert_eq!(report.completed_uncommitted_events, [10]);
     assert_eq!(report.committed_cursor, 0);
@@ -1672,10 +1705,11 @@ async fn stopping_during_confirmation_publication_reports_the_retained_conflict_
     let mut http = Http::new(vec![]).await;
     let store = Arc::new(Store::default());
     let bot = builder(&http)
-        .shared_ingress(recover_config())
-        .ingress_store(store.clone())
+        .configure(|settings| settings.persistence.ingress = Some(recover_config()))
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
         .command("ping", "record", |_| async { Ok(()) })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let input = handle.ingress().unwrap();
     let run = tokio::spawn(bot.run());
@@ -1699,7 +1733,7 @@ async fn stopping_during_confirmation_publication_reports_the_retained_conflict_
     handle.stop();
     let report = pipeline_report(run.await.unwrap().unwrap_err());
     assert_eq!(
-        YappinError::from(report.intake_error.unwrap())
+        Error::from(report.intake_error.unwrap())
             .ingress_conflict()
             .unwrap()
             .event_id,
@@ -1722,7 +1756,7 @@ async fn diagnostic_capacity_keeps_unresolved_evidence_and_reports_the_new_confl
     let calls = Arc::new(AtomicUsize::new(0));
     let c = calls.clone();
     let bot = builder(&http)
-        .shared_ingress(config)
+        .configure(|settings| settings.persistence.ingress = Some(config))
         .command("ping", "record", move |_| {
             let c = c.clone();
             async move {
@@ -1730,7 +1764,8 @@ async fn diagnostic_capacity_keeps_unresolved_evidence_and_reports_the_new_confl
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let input = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     input.wait_ready().await.unwrap();
@@ -1797,7 +1832,7 @@ async fn legacy_fixture(http: &mut Http) -> (Arc<Store>, Event, Arc<AtomicUsize>
     let calls = Arc::new(AtomicUsize::new(0));
     let c = calls.clone();
     let bot = builder(http)
-        .ingress_store(store.clone())
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
         .command("ping", "fixture", move |_| {
             let c = c.clone();
             async move {
@@ -1805,7 +1840,8 @@ async fn legacy_fixture(http: &mut Http) -> (Arc<Store>, Event, Arc<AtomicUsize>
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let ingress = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     ingress.wait_ready().await.unwrap();
@@ -1889,7 +1925,7 @@ async fn explicit_timestamp_approval_preserves_completion_and_requires_normal_po
     // A fresh process restores only the original Completed receipt and approval.
     let c = calls.clone();
     let bot = builder(&http)
-        .ingress_store(store.clone())
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
         .command("ping", "fixture", move |_| {
             let c = c.clone();
             async move {
@@ -1897,7 +1933,8 @@ async fn explicit_timestamp_approval_preserves_completion_and_requires_normal_po
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let ingress = handle.ingress().unwrap();
     let run = tokio::spawn(bot.run());
@@ -1931,11 +1968,12 @@ async fn explicit_timestamp_approval_preserves_completion_and_requires_normal_po
     run.await.unwrap().unwrap();
     // A third start from the committed checkpoint still does not replay.
     let bot = builder(&http)
-        .ingress_store(store.clone())
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
         .command("ping", "fixture", |_| async {
             panic!("completed handler replayed")
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let ingress = handle.ingress().unwrap();
     let run = tokio::spawn(bot.run());
@@ -1984,9 +2022,10 @@ async fn timestamp_approval_atomic_failures_and_ambiguous_commits_do_not_replay(
             .fail_reconciliation
             .store(if failure == 3 { 3 } else { 0 }, Ordering::SeqCst);
         let bot = builder(&http)
-            .ingress_store(store.clone())
+            .configure(|settings| settings.persistence.store = Some(store.clone()))
             .command("ping", "never replay", |_| async { panic!("replayed") })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         let ingress = handle.ingress().unwrap();
         let run = tokio::spawn(bot.run());
@@ -2115,7 +2154,7 @@ async fn timestamp_approval_rejects_stale_preparation_expiry_and_ineligible_rece
     }
     store.data.lock().unwrap().records[0].status.stage = ReceiptStage::Completed;
     store.data.lock().unwrap().records[0].status.error =
-        Some(YappinError::Config("uncertain fixture".into()).to_remote());
+        Some(Error::Config("uncertain fixture".into()).to_remote());
     let client = Client::builder("fixture").base_url(&http.url).build();
     assert!(prepare_timestamp_reconciliation(
         &client,
@@ -2146,9 +2185,10 @@ async fn timestamp_confirmation_lost_response_and_failed_checkpoint_recover_from
             store.fail_checkpoint.store(1, Ordering::SeqCst);
         }
         let bot = builder(&http)
-            .ingress_store(store.clone())
+            .configure(|settings| settings.persistence.store = Some(store.clone()))
             .command("ping", "no replay", |_| async { panic!("replayed") })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let ingress = bot.handle().ingress().unwrap();
         let run = tokio::spawn(bot.run());
         ingress.wait_ready().await.unwrap();
@@ -2170,9 +2210,10 @@ async fn timestamp_confirmation_lost_response_and_failed_checkpoint_recover_from
         store.fail_reconciliation.store(0, Ordering::SeqCst);
         store.fail_checkpoint.store(0, Ordering::SeqCst);
         let bot = builder(&http)
-            .ingress_store(store.clone())
+            .configure(|settings| settings.persistence.store = Some(store.clone()))
             .command("ping", "no replay", |_| async { panic!("replayed") })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         let ingress = handle.ingress().unwrap();
         let run = tokio::spawn(bot.run());
@@ -2200,7 +2241,10 @@ async fn cancelled_timestamp_confirmation_keeps_original_completion_and_checkpoi
         .await
         .unwrap();
     store.block_confirmation.store(true, Ordering::SeqCst);
-    let bot = builder(&http).ingress_store(store.clone()).build();
+    let bot = builder(&http)
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
+        .build()
+        .expect("valid bot configuration");
     let ingress = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     ingress.wait_ready().await.unwrap();
@@ -2223,7 +2267,10 @@ async fn cancelled_timestamp_confirmation_keeps_original_completion_and_checkpoi
         );
     }
     store.block_confirmation.store(false, Ordering::SeqCst);
-    let bot = builder(&http).ingress_store(store.clone()).build();
+    let bot = builder(&http)
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let ingress = handle.ingress().unwrap();
     let run = tokio::spawn(bot.run());
@@ -2248,7 +2295,10 @@ async fn original_timestamp_polling_does_not_confirm_a_different_approved_finger
         .approve(OperationId::new("fixture/approval").unwrap())
         .await
         .unwrap();
-    let bot = builder(&http).ingress_store(store.clone()).build();
+    let bot = builder(&http)
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let ingress = handle.ingress().unwrap();
     let run = tokio::spawn(bot.run());
@@ -2308,7 +2358,10 @@ async fn timestamp_decisions_bind_receipt_and_conflicts_and_cannot_replace_prior
     assert_eq!(store.reconciliation_writes.load(Ordering::SeqCst), 1);
     // A stored decision cannot be used after its binding is corrupted.
     store.data.lock().unwrap().timestamp_reconciliations[0].polling_fingerprint = "b".repeat(64);
-    let bot = builder(&http).ingress_store(store.clone()).build();
+    let bot = builder(&http)
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
+        .build()
+        .expect("valid bot configuration");
     assert!(bot.run().await.is_err());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(store.data.lock().unwrap().polling_checkpoint, Some(0));
@@ -2324,7 +2377,10 @@ async fn unapproved_payload_after_timestamp_approval_stops_and_retains_checkpoin
         .approve(OperationId::new("fixture/approval").unwrap())
         .await
         .unwrap();
-    let bot = builder(&http).ingress_store(store.clone()).build();
+    let bot = builder(&http)
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
+        .build()
+        .expect("valid bot configuration");
     let ingress = bot.handle().ingress().unwrap();
     let run = tokio::spawn(bot.run());
     ingress.wait_ready().await.unwrap();
@@ -2340,7 +2396,10 @@ async fn unapproved_payload_after_timestamp_approval_stops_and_retains_checkpoin
         TimestampReconciliationState::Approved
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    let bot = builder(&http).ingress_store(store.clone()).build();
+    let bot = builder(&http)
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
+        .build()
+        .expect("valid bot configuration");
     assert!(bot.run().await.is_err());
 }
 
@@ -2582,10 +2641,10 @@ async fn failed_retirement_fixture(
             None
         } else {
             Some(
-                YappinError::PartialWrite {
+                Error::PartialWrite {
                     completed: vec![json!({"receipt_id":"fixture-confirmed-first-step"})],
                     failed_step: 2,
-                    source: Box::new(YappinError::Remote(RemoteError {
+                    source: Box::new(Error::Remote(RemoteError {
                         kind: "gateway_request".into(),
                         message: "fixture submitted response unknown".into(),
                         status: None,
@@ -2657,12 +2716,13 @@ async fn explicit_failed_retirement_preserves_original_error_and_unknown_assessm
         let mut config = IngressConfig::default();
         config.admission_policy = IngressAdmissionPolicy::PollingOnly;
         let bot = builder(&http)
-            .shared_ingress(config)
-            .ingress_store(store.clone())
+            .configure(|settings| settings.persistence.ingress = Some(config))
+            .configure(|settings| settings.persistence.store = Some(store.clone()))
             .command("ping", "must not replay", |_| async {
                 panic!("retired handler replayed")
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         let input = handle.ingress().unwrap();
         let run = tokio::spawn(bot.run());
@@ -2736,7 +2796,10 @@ async fn operator_retirement_atomic_failures_and_stale_evidence_never_replay() {
             original
         );
         if failure == 1 {
-            let bot = builder(&http).ingress_store(store.clone()).build();
+            let bot = builder(&http)
+                .configure(|settings| settings.persistence.store = Some(store.clone()))
+                .build()
+                .expect("valid bot configuration");
             assert!(bot.run().await.is_err());
             continue;
         }
@@ -2744,11 +2807,12 @@ async fn operator_retirement_atomic_failures_and_stale_evidence_never_replay() {
             store.fail_retirement.store(0, Ordering::SeqCst);
         }
         let bot = builder(&http)
-            .ingress_store(store.clone())
+            .configure(|settings| settings.persistence.store = Some(store.clone()))
             .command("ping", "no replay", |_| async {
                 panic!("replayed failed work")
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         let input = handle.ingress().unwrap();
         let run = tokio::spawn(bot.run());
@@ -2782,9 +2846,10 @@ async fn operator_retirement_atomic_failures_and_stale_evidence_never_replay() {
             }
             store.fail_retirement.store(0, Ordering::SeqCst);
             let bot = builder(&http)
-                .ingress_store(store.clone())
+                .configure(|settings| settings.persistence.store = Some(store.clone()))
                 .command("ping", "no replay", |_| async { panic!("replayed") })
-                .build();
+                .build()
+                .expect("valid bot configuration");
             let handle = bot.handle();
             let input = handle.ingress().unwrap();
             let run = tokio::spawn(bot.run());
@@ -2813,7 +2878,7 @@ async fn operator_retirement_atomic_failures_and_stale_evidence_never_replay() {
         .await
         .unwrap();
     store.data.lock().unwrap().records[0].status.error =
-        Some(YappinError::Config("changed failure facts".into()).to_remote());
+        Some(Error::Config("changed failure facts".into()).to_remote());
     assert!(prepared
         .approve(
             OperationId::new("stale").unwrap(),
@@ -2861,7 +2926,7 @@ async fn polling_only_admission_ignores_both_webhook_timestamp_representations()
         let mut policy = IngressConfig::default();
         policy.admission_policy = IngressAdmissionPolicy::PollingOnly;
         let bot = builder(&http)
-            .shared_ingress(policy)
+            .configure(|settings| settings.persistence.ingress = Some(policy))
             .command("ping", "canonical", move |_| {
                 let called = called.clone();
                 async move {
@@ -2869,7 +2934,8 @@ async fn polling_only_admission_ignores_both_webhook_timestamp_representations()
                     Ok(())
                 }
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         let input = handle.ingress().unwrap();
         let run = tokio::spawn(bot.run());
@@ -2958,12 +3024,13 @@ async fn retained_execution_requires_explicit_unknown_acceptance_and_normal_poll
     let mut config = IngressConfig::default();
     config.admission_policy = IngressAdmissionPolicy::PollingOnly;
     let bot = builder(&http)
-        .shared_ingress(config)
-        .ingress_store(store.clone())
+        .configure(|settings| settings.persistence.ingress = Some(config))
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
         .command("ping", "must not replay", |_| async {
             panic!("replayed unknown work")
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let input = handle.ingress().unwrap();
     let run = tokio::spawn(bot.run());
@@ -3099,9 +3166,10 @@ async fn retirement_without_conflict_reports_times_out_or_retains_failed_checkpo
         let mut config = IngressConfig::default();
         config.conflict_recovery_timeout = Duration::from_millis(100);
         let bot = builder(&http)
-            .shared_ingress(config)
-            .ingress_store(store.clone())
-            .build();
+            .configure(|settings| settings.persistence.ingress = Some(config))
+            .configure(|settings| settings.persistence.store = Some(store.clone()))
+            .build()
+            .expect("valid bot configuration");
         let input = bot.handle().ingress().unwrap();
         let run = tokio::spawn(bot.run());
         input.wait_ready().await.unwrap();
@@ -3135,7 +3203,10 @@ async fn retirement_without_conflict_reports_times_out_or_retains_failed_checkpo
                 EventRetirementState::PollingConfirmed
             );
             store.fail_checkpoint.store(0, Ordering::SeqCst);
-            let bot = builder(&http).ingress_store(store.clone()).build();
+            let bot = builder(&http)
+                .configure(|settings| settings.persistence.store = Some(store.clone()))
+                .build()
+                .expect("valid bot configuration");
             let handle = bot.handle();
             let input = handle.ingress().unwrap();
             let run = tokio::spawn(bot.run());

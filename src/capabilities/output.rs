@@ -13,7 +13,7 @@ use super::*;
 /// let result = apply(serde_json::json!({"channels":[{"id":"a","name":"A"},{"id":"b","name":"B"}]}), "channels", &limits)?;
 /// assert_eq!(result["channels"].as_array().unwrap().len(), 1);
 /// assert!(result["channels"][0].get("name").is_none());
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct Limits {
     /// Top-level item fields to retain; empty retains all.
@@ -38,7 +38,7 @@ impl Limits {
     /// let result = apply(serde_json::json!({"channels":[{"id":"a","name":"A"},{"id":"b","name":"B"}]}), "channels", &limits)?;
     /// assert_eq!(result["channels"].as_array().unwrap().len(), 1);
     /// assert!(result["channels"][0].get("name").is_none());
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn active(&self) -> bool {
         !self.fields.is_empty()
@@ -59,20 +59,20 @@ impl Limits {
 /// let result = apply(serde_json::json!({"channels":[{"id":"a","name":"A"},{"id":"b","name":"B"}]}), "channels", &limits)?;
 /// assert_eq!(result["channels"].as_array().unwrap().len(), 1);
 /// assert!(result["channels"][0].get("name").is_none());
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub fn validate(limits: &Limits, key: Option<&str>) -> Result<()> {
     if !limits.active() {
         return Ok(());
     }
     if key.is_none() {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "output",
             "output limits apply only to collection reads",
         ));
     }
     if limits.offset.is_some() && matches!(key, Some("messages" | "members")) {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "offset",
             "use API cursors for messages and members",
         ));
@@ -82,7 +82,7 @@ pub fn validate(limits: &Limits, key: Option<&str>) -> Result<()> {
         .iter()
         .any(|s| s.is_empty() || !s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
     {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "fields",
             "use comma-separated top-level field names",
         ));
@@ -101,7 +101,7 @@ pub fn validate(limits: &Limits, key: Option<&str>) -> Result<()> {
 /// let result = apply(serde_json::json!({"channels":[{"id":"a","name":"A"},{"id":"b","name":"B"}]}), "channels", &limits)?;
 /// assert_eq!(result["channels"].as_array().unwrap().len(), 1);
 /// assert!(result["channels"][0].get("name").is_none());
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub fn apply(mut data: Value, key: &str, limits: &Limits) -> Result<Value> {
     if !limits.active() {
@@ -109,7 +109,7 @@ pub fn apply(mut data: Value, key: &str, limits: &Limits) -> Result<Value> {
     }
     let items = data[key]
         .as_array_mut()
-        .ok_or_else(|| YappinError::validation("output", "response is missing its collection"))?;
+        .ok_or_else(|| Error::validation("output", "response is missing its collection"))?;
     let all = std::mem::take(items);
     let total = all.len();
     let offset = limits.offset.unwrap_or(0).min(total);
@@ -141,7 +141,7 @@ pub fn apply(mut data: Value, key: &str, limits: &Limits) -> Result<Value> {
         usize::from(!available.is_empty())
     };
     if cap < minimum {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "max_items",
             "budget would split messages sharing a timestamp; increase max_items",
         ));
@@ -244,7 +244,7 @@ pub fn apply(mut data: Value, key: &str, limits: &Limits) -> Result<Value> {
         return Ok(candidate);
     }
     if cap == 0 || !fits(&make(minimum)) {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "max_bytes",
             "budget cannot fit an item/timestamp group and continuation metadata; increase max_bytes",
         ));

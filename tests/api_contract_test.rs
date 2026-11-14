@@ -76,7 +76,7 @@ async fn retry_after_zero_retries_and_invalid_delay_does_not_panic() {
         .unwrap_err()
         .retry_after()
         .is_none());
-    assert!(YappinError::RateLimited { retry_after: -1.0 }
+    assert!(Error::RateLimited { retry_after: -1.0 }
         .retry_after()
         .is_none());
     task.await.unwrap();
@@ -158,7 +158,7 @@ fn validation_and_unicode_splitting() {
         .validate()
         .is_err());
     assert!(
-        CreateMessage::layout(vec![Container::new().add(TextDisplay::new("hello"))], None)
+        CreateMessage::layout(vec![Container::new().add(TextDisplay::new("hello"))])
             .validate()
             .is_ok()
     );

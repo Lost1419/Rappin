@@ -41,6 +41,18 @@ pub struct MessageContext {
 }
 
 impl MessageContext {
+    /// Retrieve process-local application state registered on the bot builder.
+    ///
+    /// ```rust
+    /// fn settings(ctx: &rappin::MessageContext) -> rappin::Result<std::sync::Arc<String>> {
+    ///     ctx.state::<String>()
+    /// }
+    /// ```
+    pub fn state<T: Send + Sync + 'static>(&self) -> Result<Arc<T>> {
+        self.bot()
+            .ok_or_else(|| crate::Error::Config("context has no bot state".into()))?
+            .state::<T>()
+    }
     /// Active consumer operation key. None for legacy explicit dispatch and
     /// outside the authenticated task. This is metadata, never permission proof.
     /// # Example
@@ -253,7 +265,7 @@ impl MessageContext {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     ///
     /// async fn on_ping(ctx: MessageContext) -> Result<()> {
     ///     ctx.reply("pong! 🏓").await?;
@@ -289,7 +301,7 @@ impl MessageContext {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     ///
     /// async fn on_hello(ctx: MessageContext) -> Result<()> {
     ///     ctx.say("Hello everyone in the channel!").await?;
@@ -359,7 +371,7 @@ impl MessageContext {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     ///
     /// async fn show_help(ctx: MessageContext) -> Result<()> {
     ///     let pages = vec![
@@ -387,7 +399,7 @@ impl MessageContext {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     ///
     /// async fn ask_reset(ctx: MessageContext) -> Result<()> {
     ///     let (_msg, dialog) = ctx.send_confirm("Are you sure you want to reset settings?").await?;
@@ -417,6 +429,12 @@ impl MessageContext {
 /// }
 /// ```
 pub struct InteractionContext {
+    /// Typed selection or modal values delivered by the original event.
+    pub values: Option<crate::InteractionValues>,
+    /// Original slash command name when supplied by Yapin.
+    pub command: Option<String>,
+    /// Original slash command argument text.
+    pub args: Option<String>,
     /// Parent authenticated API client.
     pub client: Arc<Client>,
     /// Original interaction, including its sensitive callback credential.
@@ -426,7 +444,91 @@ pub struct InteractionContext {
 }
 
 impl InteractionContext {
-    async fn respond(&self, callback: &InteractionCallback) -> Result<()> {
+    /// Update the original message, including explicit field clearing.
+    ///
+    /// ```no_run
+    /// async fn clear(ctx: &rappin::InteractionContext) -> rappin::Result<()> {
+    ///     ctx.update_with(&rappin::EditMessage::new().clear_components()).await
+    /// }
+    /// ```
+    pub async fn update_with(&self, patch: &crate::EditMessage) -> Result<()> {
+        crate::ApiExt::update_interaction(self, &self.event, patch).await
+    }
+
+    /// Reply with a complete message builder through this interaction.
+    ///
+    /// ```no_run
+    /// async fn reply(ctx: &rappin::InteractionContext) -> rappin::Result<()> {
+    ///     ctx.reply_with(rappin::CreateMessage::new("Hello")).await
+    /// }
+    /// ```
+    pub async fn reply_with(&self, body: CreateMessage) -> Result<()> {
+        self.respond(crate::InteractionCallbackType::Reply, &body)
+            .await
+    }
+    #[cfg(feature = "hot-reload")]
+    pub(crate) fn data(&self) -> crate::UiInteraction {
+        crate::UiInteraction {
+            interaction: self.event.clone(),
+            values: self.values.clone(),
+            command: self.command.clone(),
+            args: self.args.clone(),
+        }
+    }
+
+    /// Parse command arguments with the same parser used by message commands.
+    ///
+    /// ```rust
+    /// fn no_arguments(ctx: &rappin::InteractionContext) -> rappin::Result<()> {
+    ///     ctx.parse::<()>()
+    /// }
+    /// ```
+    pub fn parse<A: crate::FromArgs>(&self) -> Result<A> {
+        let mut args = crate::Arguments::new(self.args.as_deref().unwrap_or(""))?;
+        let value = A::parse(&mut args)?;
+        args.finish()?;
+        Ok(value)
+    }
+
+    /// Open a modal using this interaction's tracked initial response.
+    ///
+    /// ```no_run
+    /// async fn ask(ctx: &rappin::InteractionContext) -> rappin::Result<()> {
+    ///     ctx.show_modal(&rappin::Modal::new("feedback", "Feedback").input(rappin::TextInput::short("name", "Name"))).await
+    /// }
+    /// ```
+    pub async fn show_modal(&self, modal: &crate::Modal) -> Result<()> {
+        crate::ApiExt::show_modal(self, &self.event, modal).await
+    }
+
+    /// Send a rich reply, ephemeral reply or message update through the original
+    /// callback identity. Reply ownership and deadlines are shared by clones.
+    ///
+    /// ```no_run
+    /// async fn reply(ctx: &rappin::InteractionContext) -> rappin::Result<()> {
+    ///     ctx.respond(rappin::InteractionCallbackType::Reply, &rappin::CreateMessage::new("Hello")).await
+    /// }
+    /// ```
+    pub async fn respond(
+        &self,
+        kind: crate::InteractionCallbackType,
+        body: &CreateMessage,
+    ) -> Result<()> {
+        crate::ApiExt::respond(self, &self.event, kind, body).await
+    }
+    /// Retrieve process-local application state registered on the bot builder.
+    ///
+    /// ```rust
+    /// fn settings(ctx: &rappin::InteractionContext) -> rappin::Result<std::sync::Arc<String>> {
+    ///     ctx.state::<String>()
+    /// }
+    /// ```
+    pub fn state<T: Send + Sync + 'static>(&self) -> Result<Arc<T>> {
+        self.bot()
+            .ok_or_else(|| crate::Error::Config("context has no bot state".into()))?
+            .state::<T>()
+    }
+    async fn respond_callback(&self, callback: &InteractionCallback) -> Result<()> {
         self.client.track_interaction(&self.event).await?;
         self.client
             .respond_interaction(&self.event.id, &self.event.token, callback)
@@ -472,8 +574,20 @@ impl InteractionContext {
     ///     InteractionContext::new(client, event, None)
     /// }
     /// ```
-    pub fn new(client: Arc<Client>, event: InteractionEvent, bot: Option<BotHandle>) -> Self {
-        Self { client, event, bot }
+    pub fn new(
+        client: Arc<Client>,
+        event: impl Into<crate::UiInteraction>,
+        bot: Option<BotHandle>,
+    ) -> Self {
+        let data = event.into();
+        Self {
+            client,
+            event: data.interaction,
+            bot,
+            values: data.values,
+            command: data.command,
+            args: data.args,
+        }
     }
 
     /// Access the bot handle to manage cogs or bot state dynamically.
@@ -513,7 +627,7 @@ impl InteractionContext {
         page: usize,
     ) -> Result<()> {
         let callback = paginator.build_update(page);
-        self.respond(&callback).await
+        self.respond_callback(&callback).await
     }
 
     /// The interaction ID.
@@ -626,7 +740,7 @@ impl InteractionContext {
     /// ```
     pub async fn reply(&self, content: impl Into<String>) -> Result<()> {
         let callback = InteractionCallback::reply(content);
-        self.respond(&callback).await
+        self.respond_callback(&callback).await
     }
 
     /// Sends an ephemeral message visible only to the person who clicked.
@@ -634,7 +748,7 @@ impl InteractionContext {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     ///
     /// async fn on_secret_click(ctx: InteractionContext) -> Result<()> {
     ///     ctx.ephemeral("🤫 Only you can see this message!").await?;
@@ -643,7 +757,7 @@ impl InteractionContext {
     /// ```
     pub async fn ephemeral(&self, content: impl Into<String>) -> Result<()> {
         let callback = InteractionCallback::ephemeral(content);
-        self.respond(&callback).await
+        self.respond_callback(&callback).await
     }
 
     /// Updates the message the clicked button is on.
@@ -651,7 +765,7 @@ impl InteractionContext {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     ///
     /// async fn on_vote(ctx: InteractionContext) -> Result<()> {
     ///     ctx.update("✅ Thank you for voting!").await?;
@@ -660,7 +774,7 @@ impl InteractionContext {
     /// ```
     pub async fn update(&self, content: impl Into<String>) -> Result<()> {
         let callback = InteractionCallback::update(content);
-        self.respond(&callback).await
+        self.respond_callback(&callback).await
     }
 
     /// Acknowledges the interaction silently ("got it").
@@ -675,7 +789,7 @@ impl InteractionContext {
     /// ```
     pub async fn ack(&self) -> Result<()> {
         let callback = InteractionCallback::ack();
-        self.respond(&callback).await
+        self.respond_callback(&callback).await
     }
 
     /// Replies with a Components V2 layout.
@@ -693,7 +807,7 @@ impl InteractionContext {
         components: impl IntoIterator<Item = impl Into<Component>>,
     ) -> Result<()> {
         let callback = InteractionCallback::reply_layout(components);
-        self.respond(&callback).await
+        self.respond_callback(&callback).await
     }
 
     /// Updates the message with a Components V2 layout.
@@ -711,6 +825,6 @@ impl InteractionContext {
         components: impl IntoIterator<Item = impl Into<Component>>,
     ) -> Result<()> {
         let callback = InteractionCallback::update_layout(components);
-        self.respond(&callback).await
+        self.respond_callback(&callback).await
     }
 }

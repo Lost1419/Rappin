@@ -1,5 +1,5 @@
 //! Outbound channel webhooks and authenticated inbound event webhooks.
-use crate::{CreateMessage, Event, Message, Result, YappinError};
+use crate::{CreateMessage, Error, Event, Message, Result};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -108,8 +108,8 @@ impl WebhookClient {
         }
     }
     fn request_url(&self, wait: Option<bool>) -> Result<url::Url> {
-        let mut url = url::Url::parse(&self.url)
-            .map_err(|_| YappinError::Config("invalid webhook URL".into()))?;
+        let mut url =
+            url::Url::parse(&self.url).map_err(|_| Error::Config("invalid webhook URL".into()))?;
         let mut destination = url.clone();
         destination.set_query(None);
         crate::security::endpoint(destination.as_str(), false)?;
@@ -147,10 +147,10 @@ impl WebhookClient {
             .get(self.request_url(None)?)
             .send()
             .await
-            .map_err(|error| YappinError::Http(error.without_url()))?;
+            .map_err(|error| Error::Http(error.without_url()))?;
         let status = response.status();
         if !status.is_success() {
-            return Err(YappinError::Api {
+            return Err(Error::Api {
                 status: status.as_u16(),
                 message: "webhook inspection failed".into(),
                 retry_after: response
@@ -164,9 +164,9 @@ impl WebhookClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|error| YappinError::Http(error.without_url()))?;
+            .map_err(|error| Error::Http(error.without_url()))?;
         serde_json::from_slice(&bytes)
-            .map_err(|_| YappinError::Config("invalid webhook metadata response".into()))
+            .map_err(|_| Error::Config("invalid webhook metadata response".into()))
     }
 
     async fn post<T: Serialize>(&self, message: &T, wait: bool) -> Result<Option<Message>> {
@@ -195,7 +195,7 @@ impl WebhookClient {
             .json(&value)
             .send()
             .await
-            .map_err(|e| YappinError::Http(e.without_url()))?;
+            .map_err(|e| Error::Http(e.without_url()))?;
         let status = res.status();
         let header = res
             .headers()
@@ -205,7 +205,7 @@ impl WebhookClient {
         let bytes = res.bytes().await?;
         if !status.is_success() {
             let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
-            return Err(YappinError::Api {
+            return Err(Error::Api {
                 status: status.as_u16(),
                 message: "webhook request failed".into(),
                 retry_after: header
@@ -234,7 +234,7 @@ impl WebhookClient {
     /// ```
     pub async fn send(&self, message: &CreateMessage) -> Result<Message> {
         self.post(message, true).await?.ok_or_else(|| {
-            YappinError::Config(
+            Error::Config(
                 "webhook accepted the message but ignored wait=true; do not resend".into(),
             )
         })
@@ -326,22 +326,22 @@ impl WebhookClient {
 pub fn verify_event(secret: &str, signature: &str, body: &[u8]) -> Result<Event> {
     let hex = signature
         .strip_prefix("sha256=")
-        .ok_or_else(|| YappinError::Config("invalid webhook signature".into()))?;
+        .ok_or_else(|| Error::Config("invalid webhook signature".into()))?;
     if hex.len() != 64 {
-        return Err(YappinError::Config("invalid webhook signature".into()));
+        return Err(Error::Config("invalid webhook signature".into()));
     }
     let mut digest = [0u8; 32];
     for (i, chunk) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         digest[i] = std::str::from_utf8(chunk)
             .ok()
             .and_then(|s| u8::from_str_radix(s, 16).ok())
-            .ok_or_else(|| YappinError::Config("invalid webhook signature".into()))?;
+            .ok_or_else(|| Error::Config("invalid webhook signature".into()))?;
     }
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
-        .map_err(|_| YappinError::Config("invalid webhook secret".into()))?;
+        .map_err(|_| Error::Config("invalid webhook secret".into()))?;
     mac.update(body);
     mac.verify_slice(&digest)
-        .map_err(|_| YappinError::Config("invalid webhook signature".into()))?;
+        .map_err(|_| Error::Config("invalid webhook signature".into()))?;
     Ok(serde_json::from_slice(body)?)
 }
 
@@ -456,7 +456,7 @@ pub fn verify_bot_event(
     body: &[u8],
 ) -> Result<VerifiedEvent> {
     if expected_bot.is_nil() || received_bot.parse::<uuid::Uuid>().ok() != Some(expected_bot) {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "webhook.bot_id",
             "authenticated bot identity does not match",
         ));

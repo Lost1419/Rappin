@@ -47,7 +47,8 @@ fn benchmark(c: &mut Criterion) {
         .sync_commands(false)
         .log(false)
         .command("ping", "No effects", |_| async { Ok(()) })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     runtime.block_on(bot.cache().set_me(
         serde_json::from_value(json!({"id":Uuid::from_u128(1),"username":"benchmark"})).unwrap(),
     ));

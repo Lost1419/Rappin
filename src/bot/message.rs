@@ -1,6 +1,6 @@
 //! Opt-in completion policy for server-message gates and listeners.
 use super::{failure::catch, FailureClass, FailureDisposition, MessageContext};
-use crate::{RemoteError, Result, YappinError};
+use crate::{Error, RemoteError, Result};
 use serde::{Deserialize, Serialize};
 
 /// Completion of a server-message gate or fallible listener.
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 ///         // Replace this condition with application authorization.
 ///         if ctx.content().trim().is_empty() { return Ok(MessageDisposition::Handled); }
 ///         Ok(MessageDisposition::Continue)
-///     }).build();
+///     }).build().expect("valid bot configuration");
 /// ```
 pub enum MessageDisposition {
     /// Run the next dispatch stage. This does not checkpoint the event yet.
@@ -60,7 +60,7 @@ pub enum MessageStage {
 ///     .on_message_failure(|_ctx, failure| async move {
 ///         eprintln!("{:?} / {}: {}", failure.stage, failure.handler, failure.error);
 ///         Ok(FailureDisposition::Stop)
-///     }).build();
+///     }).build().expect("valid bot configuration");
 /// ```
 pub struct MessageFailure {
     /// Authenticated original event ID.
@@ -85,7 +85,7 @@ impl MessageDisposition {
         match self {
             Self::Continue => Ok(false),
             Self::Handled => Ok(true),
-            Self::Stop => Err(YappinError::Remote(RemoteError {
+            Self::Stop => Err(Error::Remote(RemoteError {
                 kind: "message_stopped".into(),
                 message: "message processing explicitly stopped before completion".into(),
                 status: None,
@@ -136,7 +136,7 @@ impl super::Bot {
                 Ok(FailureDisposition::Stop) => return Err(error),
                 Ok(FailureDisposition::Default) => (),
                 Err(handling_error) => {
-                    return Err(YappinError::FailureHandling {
+                    return Err(Error::FailureHandling {
                         source: Box::new(error),
                         handling_error: Box::new(handling_error),
                     })
@@ -146,7 +146,7 @@ impl super::Bot {
         if info.class == FailureClass::Rejected {
             self.reply_rejection(ctx, &info.error, None)
                 .await
-                .map_err(|handling_error| YappinError::FailureHandling {
+                .map_err(|handling_error| Error::FailureHandling {
                     source: Box::new(error),
                     handling_error: Box::new(handling_error),
                 })?;

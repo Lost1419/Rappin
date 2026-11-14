@@ -75,9 +75,7 @@ impl Api for Mock {
             .push((method.clone(), path.into()));
         if method == Method::DELETE {
             self.ordinary_deletes.fetch_add(1, Ordering::SeqCst);
-            return Err(YappinError::Config(
-                "ordinary DELETE must not be used".into(),
-            ));
+            return Err(Error::Config("ordinary DELETE must not be used".into()));
         }
         let s = self.state.lock().unwrap();
         if path == "/me" {
@@ -450,7 +448,7 @@ async fn fresh_evidence_failures_keep_structured_status_instead_of_guessing_auth
     #[async_trait]
     impl Api for Unavailable {
         async fn request(&self, _: Method, _: &str, _: Option<Value>) -> Result<Value> {
-            Err(YappinError::Api {
+            Err(Error::Api {
                 status: 503,
                 message: "fresh role evidence unavailable".into(),
                 retry_after: Some(2.0),

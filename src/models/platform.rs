@@ -6,7 +6,7 @@
 //! rappin::validate_uploads(&[file]).unwrap();
 //! ```
 //! API 1.2 version discovery, custom emojis, bot-owned webhooks and uploads.
-use crate::{Result, YappinError};
+use crate::{Error, Result};
 use base64::Engine;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -233,12 +233,12 @@ impl CreateEmoji {
             let (header, body) = self
                 .image
                 .split_once(',')
-                .ok_or_else(|| YappinError::validation("image", "invalid image data URL"))?;
+                .ok_or_else(|| Error::validation("image", "invalid image data URL"))?;
             if !matches!(
                 header,
                 "data:image/png;base64" | "data:image/gif;base64" | "data:image/webp;base64"
             ) {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "image",
                     "requires PNG, GIF or WebP base64",
                 ));
@@ -248,16 +248,16 @@ impl CreateEmoji {
             &self.image
         };
         if image.len() > 2_796_204 {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "image",
                 "maximum decoded emoji image is 2 MiB",
             ));
         }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(image)
-            .map_err(|_| YappinError::validation("image", "invalid base64"))?;
+            .map_err(|_| Error::validation("image", "invalid base64"))?;
         if bytes.is_empty() || bytes.len() > 2_097_152 {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "image",
                 "requires 1 through 2097152 decoded bytes",
             ));
@@ -277,7 +277,7 @@ pub fn validate_emoji_name(name: &str) -> Result<()> {
     if !(2..=32).contains(&name.len())
         || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
     {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "name",
             "emoji names require 2 to 32 letters, digits or _",
         ));
@@ -372,7 +372,7 @@ impl CreateBotWebhook {
     /// ```
     pub fn validate(&self) -> Result<()> {
         if self.name.trim().is_empty() || self.name.chars().count() > 80 {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "name",
                 "webhook name requires 1 to 80 characters",
             ));
@@ -437,13 +437,13 @@ impl UploadFile {
                 .chars()
                 .any(|c| c.is_control() || matches!(c, '/' | '\\'))
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "file.name",
                 "use a filename, at most 255 bytes, without paths or control characters",
             ));
         }
         if self.data.is_empty() || self.data.len() > 10 * 1024 * 1024 {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "file.data",
                 "requires 1 byte through 10 MiB per file",
             ));
@@ -474,7 +474,7 @@ impl UploadFile {
             "txt" => Ok("text/plain"),
             "pdf" => Ok("application/pdf"),
             "zip" => Ok("application/zip"),
-            _ => Err(YappinError::validation(
+            _ => Err(Error::validation(
                 "file.name",
                 "unsupported attachment extension",
             )),
@@ -493,10 +493,7 @@ impl UploadFile {
 /// ```
 pub fn validate_uploads(files: &[UploadFile]) -> Result<()> {
     if files.is_empty() || files.len() > 4 {
-        return Err(YappinError::validation(
-            "files",
-            "requires 1 through 4 files",
-        ));
+        return Err(Error::validation("files", "requires 1 through 4 files"));
     }
     let mut total = 0;
     for file in files {
@@ -504,7 +501,7 @@ pub fn validate_uploads(files: &[UploadFile]) -> Result<()> {
         total += file.data.len();
     }
     if total > 12 * 1024 * 1024 {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "files",
             "maximum combined upload is 12 MiB",
         ));
@@ -549,7 +546,7 @@ impl UploadedMessages {
     /// ```rust
     /// let result: rappin::UploadedMessages = serde_json::from_value(serde_json::json!({"message":rappin::Message::default()})).unwrap();
     /// let error = result.into_result_for(2).unwrap_err();
-    /// assert!(matches!(error, rappin::YappinError::PartialWrite { .. }));
+    /// assert!(matches!(error, rappin::Error::PartialWrite { .. }));
     /// ```
     pub fn into_result_for(mut self, expected: usize) -> Result<Vec<crate::Message>> {
         let confirmed = if self.messages.is_empty() {
@@ -571,10 +568,10 @@ impl UploadedMessages {
                 .into_iter()
                 .map(|message| serde_json::json!({"message":message}))
                 .collect();
-            return Err(YappinError::PartialWrite {
+            return Err(Error::PartialWrite {
                 completed,
                 failed_step,
-                source: Box::new(YappinError::Remote(crate::RemoteError {
+                source: Box::new(Error::Remote(crate::RemoteError {
                     kind: "upload_incomplete".into(),
                     message,
                     status: None,

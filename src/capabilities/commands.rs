@@ -22,7 +22,7 @@ use std::{future::Future, sync::Arc};
 /// assert_eq!(schema.info().usage(), "/announce <text>");
 /// let operation = binding.prepare(&schema.parse("Hello everyone")?)?;
 /// assert_eq!(operation.arguments()["content"], "Hello everyone");
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct OperationParameter {
     /// Command argument key.
@@ -63,7 +63,7 @@ fn empty_object() -> Value {
 /// assert_eq!(schema.info().usage(), "/announce <text>");
 /// let operation = binding.prepare(&schema.parse("Hello everyone")?)?;
 /// assert_eq!(operation.arguments()["content"], "Hello everyone");
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct OperationCommandBinding {
     /// Canonical catalogue operation to validate.
@@ -99,22 +99,19 @@ impl OperationCommandBinding {
     /// assert_eq!(schema.info().usage(), "/announce <text>");
     /// let operation = binding.prepare(&schema.parse("Hello everyone")?)?;
     /// assert_eq!(operation.arguments()["content"], "Hello everyone");
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn command_schema(&self) -> Result<CommandSchema> {
         let capability = capability(&self.operation)
-            .ok_or_else(|| YappinError::validation("operation", "unknown operation"))?;
+            .ok_or_else(|| Error::validation("operation", "unknown operation"))?;
         if !matches!(
             capability.availability.library,
             LibrarySupport::ScopedApi | LibrarySupport::Offline
         ) {
-            return Err(YappinError::validation("operation","operation requires CLI/global runtime state and cannot be bound to a server command"));
+            return Err(Error::validation("operation","operation requires CLI/global runtime state and cannot be bound to a server command"));
         }
         if !self.fixed_arguments.is_object() {
-            return Err(YappinError::validation(
-                "fixed_arguments",
-                "expected an object",
-            ));
+            return Err(Error::validation("fixed_arguments", "expected an object"));
         }
         let input = schema::operation_input_schema(capability);
         schema::validate_partial(input, &self.fixed_arguments)?;
@@ -127,7 +124,7 @@ impl OperationCommandBinding {
                     .iter()
                     .any(|target| overlaps(target, &parameter.target))
             {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "parameters",
                     "argument targets must not overlap constants or other parameters",
                 ));
@@ -160,7 +157,7 @@ impl OperationCommandBinding {
                             || p.target.starts_with(&format!("{path}/")))
                 });
             if !supplied {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "parameters",
                     format!("required operation argument is unbound: {path}"),
                 ));
@@ -194,7 +191,7 @@ impl OperationCommandBinding {
     /// assert_eq!(schema.info().usage(), "/announce <text>");
     /// let operation = binding.prepare(&schema.parse("Hello everyone")?)?;
     /// assert_eq!(operation.arguments()["content"], "Hello everyone");
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn validate(&self) -> Result<()> {
         self.command_schema().map(|_| ())
@@ -215,7 +212,7 @@ impl OperationCommandBinding {
     /// assert_eq!(schema.info().usage(), "/announce <text>");
     /// let operation = binding.prepare(&schema.parse("Hello everyone")?)?;
     /// assert_eq!(operation.arguments()["content"], "Hello everyone");
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn prepare(&self, values: &CommandValues) -> Result<ValidatedOperation> {
         self.validate()?;
@@ -225,7 +222,7 @@ impl OperationCommandBinding {
         let mut args = self.fixed_arguments.clone();
         for key in values.keys() {
             if !self.parameters.iter().any(|p| &p.name == key) {
-                return Err(YappinError::validation(key, "unknown command argument"));
+                return Err(Error::validation(key, "unknown command argument"));
             }
         }
         for parameter in &self.parameters {
@@ -285,7 +282,7 @@ impl OperationCommandBinding {
     ///     // Assess and execute with a host-derived OperationContext and policy here.
     ///     ctx.reply(format!("Prepared {}", operation.name())).await?; Ok(())
     /// })?;
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn bind<F, Fut>(self, handler: F) -> Result<RegisteredCommand>
     where
@@ -300,8 +297,8 @@ impl OperationCommandBinding {
             let handler = handler.clone();
             async move {
                 let operation = binding.prepare(&values).map_err(|error| match error {
-                    YappinError::Validation { field, message } => {
-                        YappinError::Command(crate::CommandError::Invalid {
+                    Error::Validation { field, message } => {
+                        Error::Command(crate::CommandError::Invalid {
                             name: field,
                             reason: message,
                         })
@@ -318,7 +315,7 @@ fn overlaps(a: &str, b: &str) -> bool {
 }
 fn tokens(pointer: &str) -> Result<Vec<String>> {
     if !pointer.starts_with('/') || pointer == "/" {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "target",
             "use a nonempty JSON pointer to an operation argument",
         ));
@@ -329,10 +326,7 @@ fn tokens(pointer: &str) -> Result<Vec<String>> {
             let mut chars = token.chars();
             while let Some(c) = chars.next() {
                 if c == '~' && !matches!(chars.next(), Some('0' | '1')) {
-                    return Err(YappinError::validation(
-                        "target",
-                        "invalid JSON pointer escape",
-                    ));
+                    return Err(Error::validation("target", "invalid JSON pointer escape"));
                 }
             }
             Ok(token.replace("~1", "/").replace("~0", "~"))
@@ -346,7 +340,7 @@ fn at_schema<'a>(schema: &'a Value, pointer: &str) -> Result<&'a Value> {
             .get(&key)
             .or_else(|| field.get("additionalProperties").filter(|s| s.is_object()))
             .ok_or_else(|| {
-                YappinError::validation(
+                Error::validation(
                     "target",
                     "unknown operation argument path; array indexing is not a command binding",
                 )
@@ -359,7 +353,7 @@ fn set_argument(args: &mut Value, pointer: &str, value: Value) -> Result<()> {
     let mut field = args;
     for (i, key) in tokens.iter().enumerate() {
         if !field.is_object() {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "target",
                 "argument path crosses a non-object constant",
             ));

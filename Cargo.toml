@@ -1,6 +1,6 @@
 [package]
 name = "rappin-rs"
-version = "0.1.33"
+version = "2.0.0-dev.1"
 edition = "2021"
 rust-version = "1.89"
 autobins = false
@@ -43,6 +43,7 @@ required-features = ["cli"]
 
 [features]
 default = []
+derive = ["dep:rappin-rs-derive"]
 cli = ["dep:clap", "dep:toml", "dep:fs2", "tokio/io-std", "tokio/io-util"]
 gateway = ["dep:tokio-tungstenite", "dep:log", "dep:http"]
 voice = ["tokio/process", "tokio/io-util"]
@@ -52,6 +53,7 @@ metrics = ["metrics-http", "metrics-exporter-prometheus/push-gateway"]
 metrics-http = ["dep:metrics", "dep:metrics-exporter-prometheus"]
 
 [dependencies]
+rappin-rs-derive = { version = "=2.0.0-dev.1", path = "rappin-derive", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 bytes = "1"
@@ -125,9 +127,18 @@ name = "gateway_bot"
 required-features = ["gateway"]
 
 [[example]]
+name = "tutorial_bot"
+required-features = ["gateway", "derive"]
+
+[[example]]
 name = "shared_webhook_polling"
 required-features = ["webhook-middleware"]
 
 [[bench]]
 name = "sdk"
 harness = false
+
+[workspace]
+members = ["rappin-derive"]
+exclude = ["fuzz"]
+resolver = "2"

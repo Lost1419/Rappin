@@ -1,5 +1,5 @@
 //! Response coordination shared by Client clones, contexts, and the worker API proxy.
-use crate::{InteractionEvent, Result, YappinError};
+use crate::{Error, InteractionEvent, Result};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -95,9 +95,7 @@ impl Registry {
             return Ok(entry.clone());
         }
         if entries.len() >= 4096 {
-            return Err(YappinError::Config(
-                "interaction state capacity reached".into(),
-            ));
+            return Err(Error::Config("interaction state capacity reached".into()));
         }
         let entry = Arc::new(AsyncMutex::new(Tracked {
             state: InteractionState::default(),

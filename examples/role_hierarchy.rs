@@ -1,5 +1,5 @@
 //! Fresh hierarchy assessment; deletion requires an explicit operator flag.
-use rappin::{capabilities::*, Api, Client, Result, RoleHierarchyPolicy, YappinError};
+use rappin::{capabilities::*, Api, Client, Error, Result, RoleHierarchyPolicy};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -34,7 +34,7 @@ async fn apply(
 async fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if !(args.len() == 3 || args.len() == 4 && args[3] == "--execute") {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "args",
             "SERVER REQUESTER ROLE [--execute]",
         ));
@@ -42,10 +42,10 @@ async fn main() -> Result<()> {
     let parse = |index: usize| {
         args[index]
             .parse::<Uuid>()
-            .map_err(|_| YappinError::validation("args", "expected UUID"))
+            .map_err(|_| Error::validation("args", "expected UUID"))
     };
     let token = std::env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("YAPPER_BOT_TOKEN is required".into()))?;
+        .map_err(|_| Error::Config("YAPPER_BOT_TOKEN is required".into()))?;
     let report = apply(
         &Client::new(token),
         parse(0)?,

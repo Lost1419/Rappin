@@ -79,7 +79,7 @@ not reply or mutate remote state. Cache cases include Tokio `block_on` overhead;
 replacement includes cloning the channel, and dispatch includes cloning the event.
 These figures measure local SDK work, not network/API latency or end-to-end replies.
 
-An [initial local sample](https://github.com/Lost1419/Rappin/blob/main/docs/sdk-performance-20261108.md) includes JSON provenance
+An [initial local sample](https://github.com/Lost1419/Rappin/blob/dev/docs/sdk-performance-20261108.md) includes JSON provenance
 and measured confidence intervals.
 
 Criterion stores estimates and confidence intervals under `target/criterion`.

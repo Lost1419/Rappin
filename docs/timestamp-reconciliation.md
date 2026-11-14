@@ -20,8 +20,7 @@ closed until they implement the new atomic hook. Worker protocols stay 4–8;
 workers and their handlers do not participate in maintenance.
 
 ```rust,no_run
-use rappin::{Client, IngressStore, OperationId, Result,
-    TimestampReconciliationRequest, prepare_timestamp_reconciliation};
+use rappin::{Client, IngressStore, OperationId, Result, TimestampReconciliationRequest, prepare_timestamp_reconciliation};
 use std::sync::Arc;
 use uuid::Uuid;
 

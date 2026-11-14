@@ -4,10 +4,7 @@ impl Client {
     /// Unauthenticated version/changelog reads using the configured transport and failover.
     pub(crate) async fn public_json(&self, path: &str) -> Result<serde_json::Value> {
         if path != "/version" && !path.starts_with("/changelog?") {
-            return Err(YappinError::validation(
-                "path",
-                "not a public metadata endpoint",
-            ));
+            return Err(Error::validation("path", "not a public metadata endpoint"));
         }
         let response = self
             .execute_with_retry(&Method::GET, path, |url| {
@@ -24,7 +21,7 @@ impl Client {
         let data = response
             .bytes()
             .await
-            .map_err(|e| YappinError::Http(e.without_url()))?;
+            .map_err(|e| Error::Http(e.without_url()))?;
         serde_json::from_slice(&data)
             .map_err(|e| crate::security::json_error(e, &[self.inner.token.as_str()]))
     }
@@ -50,21 +47,18 @@ impl Client {
         let message =
             matches!(parts.as_slice(),["","channels",id,"messages"] if Uuid::parse_str(id).is_ok());
         if !emoji && !message {
-            return Err(YappinError::validation(
-                "path",
-                "unsupported upload endpoint",
-            ));
+            return Err(Error::validation("path", "unsupported upload endpoint"));
         }
         if emoji {
             let name = body["name"]
                 .as_str()
-                .ok_or_else(|| YappinError::validation("name", "emoji name required"))?;
+                .ok_or_else(|| Error::validation("name", "emoji name required"))?;
             validate_emoji_name(name)?;
             if files.len() != 1
                 || files[0].data.len() > 2_097_152
                 || !matches!(files[0].mime()?, "image/png" | "image/gif" | "image/webp")
             {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "files",
                     "emoji requires one PNG/GIF/WebP up to 2 MiB",
                 ));
@@ -116,7 +110,7 @@ impl Client {
         let data = response
             .bytes()
             .await
-            .map_err(|e| YappinError::Http(e.without_url()))?;
+            .map_err(|e| Error::Http(e.without_url()))?;
         let value = serde_json::from_slice(&data)
             .map_err(|e| crate::security::json_error(e, &[self.inner.token.as_str()]))?;
         Ok(self.redact_credentials(value))
@@ -163,7 +157,13 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn get_emojis(&self, server: Uuid) -> Result<EmojisResponse> {
+    pub async fn get_emojis(
+        &self,
+        server: impl Into<crate::ServerId> + Send,
+    ) -> Result<EmojisResponse> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+
         ApiExt::get_emojis(self, server).await
     }
     /// Create a server emoji from a validated base64/data-URL image. Local validation currently caps decoded images at 2 MiB; moderation may return a pending result.
@@ -181,9 +181,12 @@ impl Client {
     /// ```
     pub async fn create_emoji(
         &self,
-        server: Uuid,
+        server: impl Into<crate::ServerId> + Send,
         body: &CreateEmoji,
     ) -> Result<EmojiCreateResult> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+
         ApiExt::create_emoji(self, server, body).await
     }
     /// Upload one PNG/GIF/WebP emoji through the shared multipart transport. The current SDK cap is 2 MiB, and pending moderation is not a failed creation.
@@ -201,10 +204,13 @@ impl Client {
     /// ```
     pub async fn upload_emoji(
         &self,
-        server: Uuid,
+        server: impl Into<crate::ServerId> + Send,
         name: &str,
         file: &UploadFile,
     ) -> Result<EmojiCreateResult> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+
         ApiExt::upload_emoji(self, server, name, file).await
     }
     /// Rename a server emoji after validating its name. The platform enforces Manage Emoji and resource scope.
@@ -221,10 +227,15 @@ impl Client {
     /// ```
     pub async fn edit_emoji(
         &self,
-        server: Uuid,
-        emoji: Uuid,
+        server: impl Into<crate::ServerId> + Send,
+        emoji: impl Into<crate::EmojiId> + Send,
         name: &str,
     ) -> Result<EmojiCreateResult> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+        let emoji: crate::EmojiId = emoji.into();
+        let emoji = Uuid::from(emoji);
+
         ApiExt::edit_emoji(self, server, emoji, name).await
     }
     /// Delete the selected server emoji. An uncertain result must be reconciled rather than replayed automatically.
@@ -239,7 +250,16 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn delete_emoji(&self, server: Uuid, emoji: Uuid) -> Result<()> {
+    pub async fn delete_emoji(
+        &self,
+        server: impl Into<crate::ServerId> + Send,
+        emoji: impl Into<crate::EmojiId> + Send,
+    ) -> Result<()> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+        let emoji: crate::EmojiId = emoji.into();
+        let emoji = Uuid::from(emoji);
+
         ApiExt::delete_emoji(self, server, emoji).await
     }
     /// Read bot-owned webhooks visible in the selected channel.
@@ -254,7 +274,13 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn get_channel_webhooks(&self, channel: Uuid) -> Result<BotWebhooksResponse> {
+    pub async fn get_channel_webhooks(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+    ) -> Result<BotWebhooksResponse> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+
         ApiExt::get_channel_webhooks(self, channel).await
     }
     /// Read webhooks owned by the authenticated bot.
@@ -286,9 +312,12 @@ impl Client {
     /// ```
     pub async fn create_bot_webhook(
         &self,
-        channel: Uuid,
+        channel: impl Into<crate::ChannelId> + Send,
         body: &CreateBotWebhook,
     ) -> Result<BotWebhook> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+
         ApiExt::create_bot_webhook(self, channel, body).await
     }
     /// Delete a bot-owned webhook by ID. The API enforces ownership and channel permissions.
@@ -303,7 +332,13 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn delete_bot_webhook(&self, webhook: Uuid) -> Result<()> {
+    pub async fn delete_bot_webhook(
+        &self,
+        webhook: impl Into<crate::WebhookId> + Send,
+    ) -> Result<()> {
+        let webhook: crate::WebhookId = webhook.into();
+        let webhook = Uuid::from(webhook);
+
         ApiExt::delete_bot_webhook(self, webhook).await
     }
     /// Post through a bot-owned webhook using bot authentication, preserving confirmed message data on success.
@@ -320,9 +355,12 @@ impl Client {
     /// ```
     pub async fn post_bot_webhook(
         &self,
-        webhook: Uuid,
+        webhook: impl Into<crate::WebhookId> + Send,
         body: &crate::webhook::WebhookMessage,
     ) -> Result<Message> {
+        let webhook: crate::WebhookId = webhook.into();
+        let webhook = Uuid::from(webhook);
+
         ApiExt::post_bot_webhook(self, webhook, body).await
     }
     /// # Example
@@ -338,10 +376,13 @@ impl Client {
     /// ```
     pub async fn send_files(
         &self,
-        channel: Uuid,
+        channel: impl Into<crate::ChannelId> + Send,
         body: &CreateMessage,
         files: &[UploadFile],
     ) -> Result<Vec<Message>> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+
         ApiExt::send_files(self, channel, body, files).await
     }
 }

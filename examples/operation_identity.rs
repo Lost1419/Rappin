@@ -22,7 +22,7 @@ type Journal = Arc<Mutex<HashMap<(Uuid, Uuid, OperationId), String>>>;
 #[tokio::main]
 async fn main() -> Result<()> {
     let token = std::env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| rappin::YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+        .map_err(|_| rappin::Error::Config("set YAPPER_BOT_TOKEN".into()))?;
     let journal: Journal = Arc::default();
     Bot::builder(token)
         .command_spec(
@@ -93,6 +93,7 @@ async fn main() -> Result<()> {
             },
         )
         .build()
+        .expect("valid bot configuration")
         .run()
         .await
 }

@@ -38,23 +38,23 @@ edition = "2021"
 default-run = "my-bot"
 
 [dependencies]
-rappin = { package = "rappin-rs", version = "0.1.29", features = ["hot-reload"] }
+rappin = { package = "rappin-rs", git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "2.0.0-dev.1", features = ["hot-reload"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 `src/main.rs` owns the token and the running bot:
 
 ```rust,no_run
-use rappin::prelude::*;
+use rappin::*;
 use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let token = std::env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+        .map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
     let bot = Bot::builder(token)
-        .cursor_file("./state/events.json")
-        .build();
+        .configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new("./state/events.json")))
+        .build().expect("valid bot configuration");
 
     let fun = HotReload::load(
         bot.handle(),
@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
 `src/bin/fun.rs` contains the reloadable commands:
 
 ```rust,no_run
-use rappin::prelude::*;
+use rappin::*;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -107,8 +107,8 @@ Reserve stdout for the protocol. Use `eprintln!` or configure your logger for st
 ### Candidate diagnostics
 
 `HotReload::load`, `from_executable` and `reload` return
-`YappinError::HotReload { failure }` for candidate failures. Use
-`YappinError::hot_reload_failure()` or `RemoteError::hot_reload_failure()` to
+`Error::HotReload { failure }` for candidate failures. Use
+`Error::hot_reload_failure()` or `RemoteError::hot_reload_failure()` to
 recover the same `HotReloadFailure` after a worker boundary or in a failure
 callback. These report types are available without Cargo features; actually
 building/loading workers requires `hot-reload`.
@@ -163,7 +163,7 @@ A failed candidate remains an unexpected handler error by default. Applications
 can complete a known reload/proposal workflow using the explicit failure policy:
 
 ```rust,no_run
-use rappin::{prelude::*, ReloadPhase};
+use rappin::{prelude::*, FailureDisposition, ReloadPhase};
 let bot = Bot::builder("yb_token").on_command_failure(|ctx, failure| async move {
     if failure.handler == "reload" {
         if let Some(report) = failure.error.hot_reload_failure() {
@@ -242,7 +242,7 @@ Worker-local memory starts fresh each generation. Keep durable state in a databa
 
 Default limits are a five-minute build, ten-second startup, and 120-second handler invocation, including time queued behind another invocation in that worker. Customize the public `WorkerProject::{build_timeout, startup_timeout, handler_timeout}` fields before loading. IPC frames are limited to 1 MiB, with at most 128 API requests per invocation.
 
-Runtime crashes, protocol errors, and handler timeouts follow the bot's normal handler-error policy; they are not silently retried or automatically restarted. Reload the worker to recover an invalid connection. A timed-out write may already have reached the API, so check its outcome before retrying. Failed event batches retain the normal cursor/replay behavior. Fallible cog listeners propagate failures through the message or event failure policy; incomplete work retains its checkpoint barrier. Legacy infallible observer hooks still return `()`. See [handler failures](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md) and [message gates](https://github.com/Lost1419/Rappin/blob/main/docs/message-policy.md).
+Runtime crashes, protocol errors, and handler timeouts follow the bot's normal handler-error policy; they are not silently retried or automatically restarted. Reload the worker to recover an invalid connection. A timed-out write may already have reached the API, so check its outcome before retrying. Failed event batches retain the normal cursor/replay behavior. Fallible cog listeners propagate failures through the message or event failure policy; incomplete work retains its checkpoint barrier. All event/cog listeners return fallible results. See [handler failures](https://github.com/Lost1419/Rappin/blob/dev/docs/handler-failures.md) and [message gates](https://github.com/Lost1419/Rappin/blob/dev/docs/message-policy.md).
 
 ## Credential boundary
 
@@ -250,29 +250,33 @@ The parent keeps the bot token. Workers receive event data, including interactio
 
 Worker code, dependencies, Cargo configuration, and build scripts must be trusted. These are ordinary same-user processes with API capabilities and filesystem access, not an OS sandbox. Environment isolation does not prevent malicious source from reading same-user credential files or performing destructive API calls. Restrict source/build paths and any reload command to the operator; never load executable paths from chat input.
 
-## Typed commands and event waits (0.1.7)
+## Typed commands and event waits
 
-The 0.1.7 worker SDK adds `command_typed` / `WorkerContext::parse`, live help
+Use `command_spec` / `WorkerContext::parse` for typed commands and live help
 metadata, `prompt_for_reply`, and `wait_for_event`. The parent registers prompt
 waiters before posting and owns the authenticated transport. See the
-[Rust workflow guide](https://github.com/Lost1419/Rappin/blob/main/docs/rust-bots.md#hot-workers) for bounds, cancellation, and
+[Rust workflow guide](https://github.com/Lost1419/Rappin/blob/dev/docs/rust-bots.md#hot-workers) for bounds, cancellation, and
 protocol compatibility. The worker example includes `roll` and `question`.
 
 ### API 1.2 worker transport
 
 Protocol v4 adds public metadata reads, fixed 64 KiB upload chunks, DM listeners
 and reaction listeners. Total upload data stays bounded to 12 MiB; ordinary frames
-remain 1 MiB. The current parent accepts protocol v1–v9 workers; newer capabilities
+remain 1 MiB. The current parent accepts protocol v1–v10 workers; newer capabilities
 require corresponding parent support. Upgrade the parent before enabling them.
 DM and native cog reaction hooks return Result and leave failed processing
-uncommitted. See [API 1.2 workflows](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.2.md).
+uncommitted. See [API 1.2 workflows](https://github.com/Lost1419/Rappin/blob/dev/docs/uploads-and-webhooks.md).
 
 For fallible natural-language handlers, use `WorkerCog::on_message` and the parent
-[message-failure policy](https://github.com/Lost1419/Rappin/blob/main/docs/message-policy.md). This opt-in uses protocol v5; existing
+[message-failure policy](https://github.com/Lost1419/Rappin/blob/dev/docs/message-policy.md). This opt-in uses protocol v5; existing
 handlers retain protocol v4, and new parents continue accepting older workers.
 
 Additional opt-ins use protocol v6 for single-attempt API requests, v7 for select/modal
 interaction APIs, v8 for consumer operation identities, and v9 for fallible
 `Listener::ResourceEvent` delivery. API 1.4 JSON reads and writes use the existing
-proxy transport. Resource-listener errors propagate to the parent event checkpoint. See [API 1.3 interactions](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.3.md),
-[checked invocation](https://github.com/Lost1419/Rappin/blob/main/docs/checked-invocation.md), and the protocol table in the [Rust bot guide](https://github.com/Lost1419/Rappin/blob/main/docs/rust-bots.md).
+proxy transport. Resource-listener errors propagate to the parent event checkpoint. See [API 1.3 interactions](https://github.com/Lost1419/Rappin/blob/dev/docs/interactions.md),
+[checked invocation](https://github.com/Lost1419/Rappin/blob/dev/docs/checked-invocation.md), and the protocol table in the [Rust bot guide](https://github.com/Lost1419/Rappin/blob/dev/docs/rust-bots.md).
+
+### Shared command specs
+
+`WorkerCog::command_spec` accepts native `CommandSpec<A>` definitions, including aliases and command groups. It advertises protocol10 and supplies pure argument schemas to preparation. Preparation reports worker checks as deferred. Execution parses again and runs fresh built-in checks before the handler. Custom CommandCheck implementations provide check_worker for worker execution. Shared specs enable UI, single-attempt API requests and operation identities together. Upgrade the parent first.

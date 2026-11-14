@@ -40,8 +40,9 @@ impl Cog for Unload {
     fn name(&self) -> &str {
         "unload"
     }
-    async fn on_message(&self, ctx: &MessageContext) {
+    async fn on_message(&self, ctx: &MessageContext) -> rappin::Result<rappin::MessageDisposition> {
         ctx.bot().unwrap().remove_cog("unload").await.unwrap();
+        Ok(rappin::MessageDisposition::Continue)
     }
 }
 #[tokio::test]
@@ -51,7 +52,8 @@ async fn cog_can_remove_itself_from_callback_without_deadlock() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.add_cog(Unload).await.unwrap();
     tokio::time::timeout(
         Duration::from_secs(2),
@@ -69,10 +71,11 @@ struct StopAfter {
 }
 #[async_trait::async_trait]
 impl EventHandler for StopAfter {
-    async fn on_message(&self, ctx: &MessageContext) {
+    async fn on_message(&self, ctx: &MessageContext) -> rappin::Result<rappin::MessageDisposition> {
         if self.count.fetch_add(1, Ordering::SeqCst) + 1 == self.total {
             ctx.bot().unwrap().stop();
         }
+        Ok(rappin::MessageDisposition::Continue)
     }
 }
 #[tokio::test]
@@ -94,8 +97,8 @@ async fn bot_bounds_work_and_checkpoints_after_all_handlers_finish() {
         .base_url(base)
         .log(false)
         .sync_commands(false)
-        .cursor_file(&path)
-        .handler_concurrency(2)
+        .configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new(&path)))
+        .configure(|settings| settings.execution.concurrency = 2)
         .event_handler(StopAfter {
             count: Arc::new(AtomicUsize::new(0)),
             total: 5,
@@ -113,7 +116,8 @@ async fn bot_bounds_work_and_checkpoints_after_all_handlers_finish() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     tokio::time::timeout(Duration::from_secs(3), bot.run())
         .await
         .unwrap()
@@ -137,11 +141,12 @@ async fn failed_handler_does_not_commit_batch() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&path)
+        .configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new(&path)))
         .command("fail", "fails", |_| async {
-            Err(YappinError::Config("failed".into()))
+            Err(Error::Config("failed".into()))
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     assert!(bot.run().await.is_err());
     assert_eq!(EventCursor::new(&path).load().await.unwrap(), Some(1));
     task.await.unwrap();

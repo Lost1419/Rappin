@@ -1,54 +1,57 @@
 # Start a Rust bot project
 
-Install the CLI with its `cli` feature, then create a new project:
+Install the development CLI, then create a project.
 
 ```sh
-cargo install rappin-rs --features cli
-rappin init my-bot
-rappin init gateway-bot --template gateway --prefix '?'
-rappin init worker-bot --template worker
+cargo install --git https://github.com/Lost1419/Rappin --branch dev --features cli --locked
+rappin init my-bot --human
+rappin init polling-bot --template basic --prefix '?'
+rappin init worker-bot --template worker --human
 rappin --dry-run init preview-bot --template worker
 ```
 
-`init` is an offline, local operator command. It does not load your Rappin config,
-read a token, run Cargo, or contact Yapin. It is not an MCP tool. All commands return
-the standard JSON envelope; `data.files` contains generated relative paths and
-contents. Dry runs return the same plan without creating files.
+`init` creates files offline. It reads neither authentication nor the CLI's API
+configuration. `--human` prints next steps. Default output and explicit `--json`
+use the stable JSON envelope, with generated relative paths and contents in
+`data.files`. A dry run returns the planned files.
 
-The destination must not exist, and its parent must already exist. Existing
-directories and destination symlinks are refused, including during dry runs.
-There is no overwrite flag. File creation is exclusive; if writing fails, the
-command attempts to remove only files/directories it created. A filesystem failure
-may leave a partial new project, which should be inspected before a retry.
-Generation is not an atomic directory publication or an isolation boundary against
-another process modifying the same destination.
-
-Choose a Cargo package name with `--name` when the directory name is unsuitable.
-The generator accepts ASCII names starting with a letter, up to 64 characters,
-using letters, digits, hyphens and underscores, excluding reserved names. Prefixes
-accept 1..64 UTF-8 bytes without control characters and are escaped as Rust literals.
-Generated `prefixes_with` selects that initial prefix; replace it with your own
-server-aware resolver when needed. Explicit slash-command dispatch remains available.
-
-| Template | Required SDK features | Behavior |
+| Template | SDK features | Behavior |
 |---|---|---|
-| `basic` | None | Ping command using default polling |
-| `gateway` | `gateway` | Ping command using the default gateway and supported fallback |
-| `worker` | `hot-reload` | Parent with a separately compiled, watched `examples/worker.rs` |
+| `gateway` — default | `gateway`, `derive` | Ping, help, logging, WebSocket events and polling fallback |
+| `basic` | `derive` | Ping, help and logging with long polling |
+| `worker` | `gateway`, `hot-reload`, `derive` | Gateway parent and a watched `examples/worker.rs` |
 
-Generated projects depend on the generating CLI's Rappin version and declare Rust
-1.89. Tests compile each template against the checkout under test; when using a
-published CLI, Cargo resolves its published dependency normally. Building can
-require network access even though generation itself does not.
+Set `YAPPER_BOT_TOKEN` in the bot process environment and run `cargo run` inside
+the new directory. Send `!ping` for `pong` and `!help` for command help. Change
+static prefixes with `prefixes`, or provide a database-backed resolver through
+`prefixes_with`. The [tutorial](tutorial.md) shows how to add commands and state.
 
-Set `YAPPER_BOT_TOKEN` in the bot's environment and run `cargo run` inside the new
-directory. Do not put credentials in generated source or commit them. The parent
-uses `state/events.json` for a local restart checkpoint; production persistence,
-application state, database/cache backend, approvals and replay policy remain yours.
-No database is installed or selected by the template.
+Generated projects require the generating CLI's Rust minimum and SDK version.
+Development versions use the GitHub `dev` dependency. Published stable versions
+use crates.io. Cargo builds can access the network. Tests compile every starter
+against the exact checkout under test with its declared features.
 
-Worker builds run trusted Rust code, including build scripts and procedural macros.
-Workers are trusted executables rather than sandboxed extensions. Keep stdout
-reserved for the protocol, write diagnostics to stderr, and retain the controller
-and watch guard for the parent's lifetime. See [hot reloading](hot-reloading.md)
-for replacement failures, draining and protocol compatibility.
+The project includes an ignored `state/events.json` checkpoint. Give each cursor
+one runner. Applications select their own database, cache backend, durable state,
+approvals and replay policy. Failed replies and uncertain effects retain the
+checkpoint barrier. See [failure handling](handler-failures.md).
+
+## Destination rules
+
+The destination must be new and its parent must exist. Existing directories and
+destination symlinks are rejected. Creation reserves the directory and creates
+files exclusively. If writing fails, cleanup covers files created by that
+invocation. Inspect any remaining partial directory before retrying.
+
+Use `--name` for an explicit Cargo package name. Names use ASCII letters, digits,
+hyphens and underscores, begin with a letter, and have at most 64 characters.
+Reserved Cargo/system names are rejected. Prefixes accept 1–64 UTF-8 bytes with
+control characters excluded and are escaped as Rust literals.
+
+## Worker lifecycle
+
+Keep the reload controller and watcher guard alive for the parent's lifetime.
+Worker command specs use protocol10. Each generation initializes its own
+process-local state. Workers, build scripts and procedural macros execute trusted
+code. Reserve worker stdout for IPC and send diagnostics to stderr.
+See [hot reloading](hot-reloading.md) for candidate failures, draining and replacement.

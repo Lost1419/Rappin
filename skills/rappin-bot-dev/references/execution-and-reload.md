@@ -1,7 +1,7 @@
 # Event completion, recovery and reload
 
-Use APIs matching the selected dependency; availability and single-attempt worker
-support require Rappin 0.1.20+. These features are opt-in. Do not change transport,
+These instructions target the 2.0 development branch. Use version-matched docs
+for an existing 0.1 dependency. Availability recovery is opt-in. Do not change transport,
 retry settings or failure completion policy as an unrelated implementation choice.
 
 ## Choose features and transport
@@ -9,13 +9,13 @@ retry settings or failure completion policy as an unrelated implementation choic
 | Need | Cargo feature / API |
 | --- | --- |
 | Native commands, API, bindings, availability | Default library, no optional feature |
-| WebSocket with REST fallback | `gateway`, `.gateway(rappin::gateway::DEFAULT_GATEWAY)` |
-| WebSocket without REST fallback | `gateway`, `.gateway_only(...)` |
+| WebSocket with REST fallback | `gateway`, `.transport(TransportConfig::gateway())` |
+| WebSocket without REST fallback | `gateway`, set `settings.transport.mode = TransportMode::GatewayOnly` and `gateway_url` |
 | Source reload while parent keeps running | `hot-reload`, `WorkerProject` / `HotReload` |
 | CLI/MCP executable | `cli` |
 | Encrypted voice playback bridge | `voice`, with separately configured runtime |
 
-Polling remains the default. REST header time, whole-call/body time, gateway
+The library defaults to polling. Generated starters default to gateway with polling fallback. REST header time, whole-call/body time, gateway
 heartbeat RTT and end-to-end message latency measure different boundaries.
 
 ## Gate before commands; complete failures explicitly
@@ -27,8 +27,8 @@ validate server scope from the original event. DMs use their separate hooks.
 
 `MessageDisposition::Continue` falls through, `Handled` completes the message and
 skips remaining dispatch, and `Stop` leaves it incomplete with a cursor barrier.
-For required natural-language I/O, use `EventHandler` / `Cog::on_message_result`
-or `WorkerCog::on_message`; legacy `on_message -> ()` cannot propagate failures.
+For required natural-language I/O, use `EventHandler` / `Cog::on_message`
+or `WorkerCog::on_message`. All event and cog listeners return fallible results.
 
 `on_command_failure`, `on_button_failure` and `on_message_failure` return explicit
 `FailureDisposition` values. Typed `CommandError` input/permission/clarification
@@ -41,7 +41,7 @@ listeners run; a listener returning `MessageDisposition::Handled` claims the res
 of dispatch. A handled gate failure never falls through to commands.
 
 The cursor advances only across the ordered completed prefix. Already-started
-concurrent handlers drain; set `handler_concurrency(1)` for strict ordering.
+concurrent handlers drain; set `settings.execution.concurrency = 1` in `configure` for strict ordering.
 `BotHandle::stop()` gracefully drains accepted work; a message Stop is incomplete.
 Cancellation and failed cursor persistence do not make unfinished effects safe to
 replay. Custom `process_event` callers own deduplication and checkpoints. Retain
@@ -49,7 +49,8 @@ application-owned durable receipts for at-least-once delivery across restarts.
 
 ## Read availability
 
-Opt into `BotBuilder::availability_policy(AvailabilityPolicy::default())` when
+Set `settings.transport.availability = Some(AvailabilityPolicy::default())` in
+`BotBuilder::configure` when
 bounded startup/intake recovery is wanted. Customize attempts, elapsed deadline,
 backoff and jitter. Allow more than the normal 25-second poll duration in the
 elapsed budget. `BotHandle::stop()` cancels reads/backoff.
@@ -76,8 +77,7 @@ resets; preserve durable state in the application's storage.
 
 Worker protocol requirements are opt-in: existing handlers use v4,
 `WorkerCog::on_message` uses v5, and `single_attempt_api()` requires v6. Upgrade the
-parent before enabling newer worker APIs. Do not combine the legacy message
-listener with the new fallible message hook in the same worker. Worker stdout is
+parent before enabling newer worker APIs. Worker stdout is
 the protocol stream; use stderr for sanitized diagnostics.
 
 Keep the watcher guard alive. Inspect `WatchGuard::status()` fields `scan_error`,
@@ -94,13 +94,14 @@ The version-matched `message_policy_guide`, `handler_failures_guide`,
 `availability_and_hierarchy_guide` and `hot_reload` Rust APIs provide full contracts;
 a checkout also includes `examples/message_gate.rs` and hot-reload examples.
 
-## API 1.3 UI events (0.1.21+)
+## Interactive messages
 
-Use `UiMessageBody` / `UiApiExt` for lossless select messages and typed modal forms.
-`on_select`, `on_modal`, or `on_command_interaction` opt into extended event routing;
-worker `on_ui_interaction` requires protocol v7 and parent `interactive_events(true)`.
-Slash interaction mode is separate from existing MessageContext commands and their
-server-message gate; enforce the application's authorization inside UI handlers.
-A modal must precede acknowledgement or any other response. Match custom IDs,
-retain typed submitted values and propagate failures through the existing explicit
-completion policy. See the version-matched `api_1_3_guide` and included forms example.
+Use `CreateMessage`, `EditMessage` and `ApiExt` for messages, nullable updates,
+select menus and modal forms. Native `on_select`, `on_modal` and
+`on_command_interaction` receive the shared `InteractionContext`. Cog and worker
+listeners use `on_interaction`. A worker `command_spec` advertises protocol10
+and enables UI, single-attempt API and operation-identity support. Legacy workers
+retain their negotiated versions. The parent must enable `interactive_events(true)`.
+Slash interactions have their own authorization boundary. A modal must precede
+acknowledgement or another response. Propagate incomplete work through the
+explicit failure policy. See `interactions_guide` and the included forms example.

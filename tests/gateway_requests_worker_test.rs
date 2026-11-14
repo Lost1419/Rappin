@@ -33,14 +33,14 @@ async fn worker_single_attempt_requests_keep_partial_and_unknown_outcomes_withou
     std::fs::write(
         root.0.join("src/main.rs"),
         r#"
-use rappin::{*,hot_reload::WorkerCog};
+use rappin::{*, hot_reload::WorkerCog};
 #[tokio::main] async fn main()->Result<()> {
  WorkerCog::new("gateway-worker").single_attempt_api()
  .command("once","request",|ctx|async move {ctx.api_once("POST","/mutate",None).await?;Ok(())})
  .command("partial","partial",|ctx|async move {
     let receipt=ctx.api_once("POST","/mutate",None).await?;
     let source=ctx.api_once("POST","/mutate",None).await.unwrap_err();
-    Err(YappinError::PartialWrite{completed:vec![receipt],failed_step:2,source:Box::new(source)})
+    Err(Error::PartialWrite{completed:vec![receipt],failed_step:2,source:Box::new(source)})
  }).run().await
 }
 "#,
@@ -60,7 +60,8 @@ use rappin::{*,hot_reload::WorkerCog};
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(support::profile()).unwrap())
         .await;

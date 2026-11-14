@@ -448,14 +448,18 @@ async fn request_pump_disconnect_keeps_availability_reads_retryable() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&path)
-        .gateway_only(format!("ws://{address}"))
-        .availability_policy(policy)
+        .configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new(&path)))
+        .configure(|settings| {
+            settings.transport.gateway_url = Some(format!("ws://{address}"));
+            settings.transport.mode = rappin::TransportMode::GatewayOnly;
+        })
+        .configure(|settings| settings.transport.availability = Some(policy))
         .command("stop", "stop", |ctx| async move {
             ctx.bot().unwrap().stop();
             Ok(())
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.client()
         .configure_gateway_requests(Some(GatewayRequestConfig::default()))
         .unwrap();

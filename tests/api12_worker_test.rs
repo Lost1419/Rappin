@@ -50,7 +50,8 @@ use rappin::{hot_reload::{WorkerCog,Listener,CogEvent},ApiExt,CreateMessage,Uplo
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(support::profile()).unwrap())
         .await;

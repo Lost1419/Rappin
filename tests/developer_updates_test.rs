@@ -153,12 +153,14 @@ async fn mutations_invalidate_role_and_member_snapshots_even_on_ambiguous_error(
 struct Invites(Arc<AtomicUsize>);
 #[async_trait::async_trait]
 impl EventHandler for Invites {
-    async fn on_invite_create(&self, _: &Client, event: &InviteEvent) {
+    async fn on_invite_create(&self, _: &Client, event: &InviteEvent) -> rappin::Result<()> {
         assert_eq!(event.invite.code, "test");
         self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
-    async fn on_invite_delete(&self, _: &Client, _: &InviteEvent) {
+    async fn on_invite_delete(&self, _: &Client, _: &InviteEvent) -> rappin::Result<()> {
         self.0.fetch_add(10, Ordering::SeqCst);
+        Ok(())
     }
 }
 #[async_trait::async_trait]
@@ -166,11 +168,13 @@ impl Cog for Invites {
     fn name(&self) -> &str {
         "invites"
     }
-    async fn on_invite_create(&self, _: &Client, _: &InviteEvent) {
+    async fn on_invite_create(&self, _: &Client, _: &InviteEvent) -> rappin::Result<()> {
         self.0.fetch_add(100, Ordering::SeqCst);
+        Ok(())
     }
-    async fn on_invite_delete(&self, _: &Client, _: &InviteEvent) {
+    async fn on_invite_delete(&self, _: &Client, _: &InviteEvent) -> rappin::Result<()> {
         self.0.fetch_add(1000, Ordering::SeqCst);
+        Ok(())
     }
 }
 #[tokio::test]
@@ -180,7 +184,8 @@ async fn invites_dispatch_to_handlers_cogs_and_collectors_with_unknown_fallback(
         .log(false)
         .sync_commands(false)
         .event_handler(Invites(count.clone()))
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(profile()).unwrap())
         .await;

@@ -1,4 +1,4 @@
-use crate::{CompilerDiagnostic, CompilerSpan, HotReloadFailure, ReloadPhase, YappinError};
+use crate::{CompilerDiagnostic, CompilerSpan, Error, HotReloadFailure, ReloadPhase};
 use serde_json::Value;
 use std::path::{Component, Path};
 
@@ -219,11 +219,11 @@ impl<'a> CompilerReport<'a> {
 pub(crate) fn error(
     phase: ReloadPhase,
     message: &str,
-    cause: Option<&YappinError>,
+    cause: Option<&Error>,
     started: bool,
     publication: bool,
     client: Option<&crate::Client>,
-) -> YappinError {
+) -> Error {
     let mut failure = HotReloadFailure::new(phase, message);
     failure.candidate_started = started;
     failure.publication_attempted = publication;
@@ -334,7 +334,7 @@ pub(crate) fn error(
         }
         failure.source = Some(source);
     }
-    YappinError::HotReload {
+    Error::HotReload {
         failure: Box::new(failure),
     }
 }
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn publication_status_and_unknown_outcome_survive_bounds_and_remote_round_trip() {
-        let cause = YappinError::Api {
+        let cause = Error::Api {
             status: 503,
             retry_after: None,
             message: "x".repeat(100_000),
@@ -436,7 +436,7 @@ mod tests {
         assert_eq!(error.status_code(), Some(503));
         let remote: crate::RemoteError = serde_json::from_value(error.to_json()).unwrap();
         assert_eq!(remote.hot_reload_failure(), Some(native.clone()));
-        let partial = YappinError::PartialWrite {
+        let partial = Error::PartialWrite {
             completed: vec![json!({"receipt":"confirmed"})],
             failed_step: 2,
             source: Box::new(remote.clone().into()),
@@ -445,9 +445,9 @@ mod tests {
             partial.to_remote().hot_reload_failure(),
             Some(native.clone())
         );
-        let callback = YappinError::FailureHandling {
+        let callback = Error::FailureHandling {
             source: Box::new(remote.into()),
-            handling_error: Box::new(YappinError::RateLimited { retry_after: 0.5 }),
+            handling_error: Box::new(Error::RateLimited { retry_after: 0.5 }),
         };
         assert_eq!(callback.hot_reload_failure(), Some(native.clone()));
         assert_eq!(callback.to_remote().hot_reload_failure(), Some(native));

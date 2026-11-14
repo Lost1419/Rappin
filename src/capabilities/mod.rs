@@ -1,5 +1,5 @@
 //! Offline capabilities, validated operation bindings and host-owned authorization.
-use crate::{Result, YappinError};
+use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -321,14 +321,14 @@ impl CapabilityFilter {
     /// assert_eq!(operation.name(), "send_message");
     /// assert!(operation.preview().dry_run);
     /// assert!(operation.preview().authorization.is_none());
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn validate(&self, name: &str, args: &Value) -> Result<ValidatedOperation> {
         let descriptor = filtered_catalogue(self)
             .into_iter()
             .find(|c| c.name == name)
             .ok_or_else(|| {
-                YappinError::validation(
+                Error::validation(
                     "operation",
                     "operation is not enabled in this capability selection",
                 )
@@ -416,7 +416,7 @@ impl Capability {
     /// assert_eq!(operation.name(), "send_message");
     /// assert!(operation.preview().dry_run);
     /// assert!(operation.preview().authorization.is_none());
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn validate(&self, args: &Value) -> Result<ValidatedOperation> {
         validation::validate(self, args)

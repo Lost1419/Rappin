@@ -1,6 +1,6 @@
 //! Report inspection must not require hot-reload or CLI features.
 mod support;
-use rappin::{Bot, FailureClass, HotReloadFailure, RemoteError, YappinError};
+use rappin::{Bot, Error, FailureClass, HotReloadFailure, RemoteError};
 use serde_json::json;
 
 fn report() -> HotReloadFailure {
@@ -13,7 +13,7 @@ fn report() -> HotReloadFailure {
 
 #[test]
 fn structured_report_is_available_without_optional_features() {
-    let error = YappinError::HotReload {
+    let error = Error::HotReload {
         failure: Box::new(report()),
     };
     let remote: RemoteError =
@@ -30,7 +30,7 @@ async fn failed_native_callback_keeps_candidate_report_and_reply_cause() {
         .log(false)
         .sync_commands(false)
         .command("reload", "test", |_| async {
-            Err(YappinError::HotReload {
+            Err(Error::HotReload {
                 failure: Box::new(report()),
             })
         })
@@ -38,13 +38,14 @@ async fn failed_native_callback_keeps_candidate_report_and_reply_cause() {
             assert_eq!(failure.class, FailureClass::Unexpected);
             assert_eq!(failure.error.hot_reload_failure(), Some(report()));
             // Simulate a failed error reply; completion must not be inferred.
-            Err(YappinError::Api {
+            Err(Error::Api {
                 status: 503,
                 message: "reply failed".into(),
                 retry_after: Some(0.25),
             })
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(support::profile()).unwrap())
         .await;
@@ -52,7 +53,7 @@ async fn failed_native_callback_keeps_candidate_report_and_reply_cause() {
         .process_event(serde_json::from_value(support::event(2, "reload")).unwrap())
         .await
         .unwrap_err();
-    assert!(matches!(error, YappinError::FailureHandling { .. }));
+    assert!(matches!(error, Error::FailureHandling { .. }));
     assert_eq!(error.hot_reload_failure(), Some(report()));
     assert_eq!(error.to_remote().hot_reload_failure(), Some(report()));
     assert_eq!(error.to_json()["handling_error"]["status"], 503);

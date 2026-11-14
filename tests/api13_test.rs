@@ -13,8 +13,8 @@ fn menu() -> SelectMenu {
         false,
     )))
 }
-fn body() -> UiMessageBody {
-    UiMessageBody::new("Choose").component(menu().row())
+fn body() -> CreateMessage {
+    CreateMessage::new("Choose").component(menu().row())
 }
 fn interaction(kind: &str) -> Event {
     let mut data = json!({"id":Uuid::new_v4(),"token":"private_interaction_token","channel_id":Uuid::nil(),"server_id":Uuid::nil(),"user_id":Uuid::nil(),"custom_id":"choice","type":kind,"expires_at":chrono::Utc::now()+chrono::Duration::minutes(15)});
@@ -35,11 +35,11 @@ fn interaction(kind: &str) -> Event {
     .unwrap()
 }
 fn message() -> Value {
-    json!({"id":Uuid::nil(),"channel_id":Uuid::nil(),"author_id":Uuid::nil(),"created_at":chrono::Utc::now(),"content":"Choose","components":body().components.unwrap().unwrap(),"future_metadata":{"a":1}})
+    json!({"id":Uuid::nil(),"channel_id":Uuid::nil(),"author_id":Uuid::nil(),"created_at":chrono::Utc::now(),"content":"Choose","components":body().components.unwrap(),"future_metadata":{"a":1}})
 }
 #[test]
 fn select_bounds_rows_ids_and_structured_emojis_validate_before_io() {
-    body().validate(true).unwrap();
+    body().validate().unwrap();
     let definition = capability("send_message").unwrap();
     definition
         .validate(&json!({"channel":Uuid::nil(),"body":body()}))
@@ -51,8 +51,8 @@ fn select_bounds_rows_ids_and_structured_emojis_validate_before_io() {
     definition
         .validate(&json!({"channel":Uuid::nil(),"body":numeric}))
         .unwrap();
-    let layout = UiMessageBody::layout([UiComponent::container([menu().row()])]);
-    layout.validate(true).unwrap();
+    let layout = CreateMessage::layout([Component::container([menu().row()])]);
+    layout.validate().unwrap();
     definition
         .validate(&json!({"channel":Uuid::nil(),"body":layout}))
         .unwrap();
@@ -73,20 +73,20 @@ fn select_bounds_rows_ids_and_structured_emojis_validate_before_io() {
             "mutation {mutate}"
         );
     }
-    let duplicate = UiMessageBody::new("Choose")
+    let duplicate = CreateMessage::new("Choose")
         .component(menu().row())
-        .component(UiComponent::row([Button::primary("x", "choice")]));
-    assert!(duplicate.validate(true).is_err());
-    let mixed = UiMessageBody::new("Choose").component(UiComponent::row([
-        UiComponent::from(menu()),
-        UiComponent::from(Button::primary("x", "x")),
+        .component(Component::row([Button::primary("x", "choice")]));
+    assert!(duplicate.validate().is_err());
+    let mixed = CreateMessage::new("Choose").component(Component::row([
+        Component::from(menu()),
+        Component::from(Button::primary("x", "x")),
     ]));
-    assert!(mixed.validate(true).is_err());
+    assert!(mixed.validate().is_err());
     let mut duplicate = menu();
     duplicate.options.push(duplicate.options[0].clone());
-    assert!(UiMessageBody::new("Choose")
+    assert!(CreateMessage::new("Choose")
         .component(duplicate.row())
-        .validate(true)
+        .validate()
         .is_err());
 }
 #[test]
@@ -110,7 +110,7 @@ fn modal_text_select_limits_patch_nulls_and_wrappers_are_validated() {
         .map(|n| ModalInput::from(TextInput::short(format!("v{n}"), "x")))
         .collect();
     assert!(too_many.validate().is_err());
-    let patch: UiMessageBody =
+    let patch: EditMessage =
         serde_json::from_value(json!({"components":null,"content":null})).unwrap();
     assert_eq!(json!(patch), json!({"components":null,"content":null}));
     assert!(!format!(
@@ -134,14 +134,14 @@ async fn shared_native_api_keeps_ui_responses_and_emoji_metadata_lossless() {
         .await
         .unwrap();
     assert!(!emojis.emojis[0].in_server);
-    let response = client.send_ui_message(Uuid::nil(), &body()).await.unwrap();
+    let response = client.send_message(Uuid::nil(), &body()).await.unwrap();
     assert_eq!(response.extra["future_metadata"]["a"], 1);
     assert_eq!(
         json!(response)["components"][0]["components"][0]["options"][0]["emoji"]["name"],
         "crab"
     );
     let messages = client
-        .get_ui_messages(Uuid::nil(), Some(1), None, None)
+        .get_messages(Uuid::nil(), Some(1), None, None)
         .await
         .unwrap();
     assert_eq!(messages.messages.len(), 1);
@@ -206,18 +206,18 @@ async fn modal_is_initial_only_and_unknown_responses_cannot_be_replayed() {
         .await
         .is_err());
     assert!(client
-        .respond_ui(
+        .respond(
             &event.interaction,
             InteractionCallbackType::Update,
-            &UiMessageBody::new("no source")
+            &CreateMessage::new("no source")
         )
         .await
         .is_err());
     assert_eq!(client.request_metrics().attempts, 0);
-    let mut reply = UiMessageBody::new("reply");
+    let mut reply = CreateMessage::new("reply");
     reply.reply_to = Some(Uuid::nil());
     assert!(client
-        .respond_ui(&event.interaction, InteractionCallbackType::Reply, &reply)
+        .respond(&event.interaction, InteractionCallbackType::Reply, &reply)
         .await
         .is_err());
     assert_eq!(client.request_metrics().attempts, 0);
@@ -237,21 +237,15 @@ async fn opt_in_ui_routing_keeps_values_separate_from_legacy_buttons_and_failure
         .on_select(move |ctx| {
             let c = c.clone();
             async move {
-                assert!(matches!(
-                    ctx.data.values,
-                    Some(InteractionValues::Selected(_))
-                ));
+                assert!(matches!(ctx.values, Some(InteractionValues::Selected(_))));
                 c.fetch_add(1, Ordering::SeqCst);
-                Err(YappinError::Config("expected failure".into()))
+                Err(Error::Config("expected failure".into()))
             }
         })
         .on_modal(move |ctx| {
             let d = d.clone();
             async move {
-                assert!(matches!(
-                    ctx.data.values,
-                    Some(InteractionValues::Submitted(_))
-                ));
+                assert!(matches!(ctx.values, Some(InteractionValues::Submitted(_))));
                 d.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             }
@@ -259,7 +253,7 @@ async fn opt_in_ui_routing_keeps_values_separate_from_legacy_buttons_and_failure
         .on_command_interaction(move |ctx| {
             let e = e.clone();
             async move {
-                assert_eq!(ctx.data.command.as_deref(), Some("apply"));
+                assert_eq!(ctx.command.as_deref(), Some("apply"));
                 e.fetch_add(1, Ordering::SeqCst);
                 Ok(())
             }
@@ -268,7 +262,8 @@ async fn opt_in_ui_routing_keeps_values_separate_from_legacy_buttons_and_failure
             assert_eq!(failure.handler, "ui:select");
             Ok(FailureDisposition::Handled)
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(support::profile()).unwrap())
         .await;
@@ -288,7 +283,8 @@ async fn opt_in_ui_routing_keeps_values_separate_from_legacy_buttons_and_failure
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(support::profile()).unwrap())
         .await;
@@ -355,8 +351,10 @@ async fn ui_batches_deduplicate_and_checkpoint_only_completed_work_on_both_trans
                 .base_url(base)
                 .sync_commands(false)
                 .log(false)
-                .cursor_file(&path)
-                .handler_concurrency(1)
+                .configure(|settings| {
+                    settings.persistence.cursor = Some(rappin::EventCursor::new(&path))
+                })
+                .configure(|settings| settings.execution.concurrency = 1)
                 .on_select(move |_| {
                     let a = a.clone();
                     async move {
@@ -364,9 +362,7 @@ async fn ui_batches_deduplicate_and_checkpoint_only_completed_work_on_both_trans
                         Ok(())
                     }
                 })
-                .on_modal(|_| async {
-                    Err(YappinError::Config("unprocessed modal failure".into()))
-                })
+                .on_modal(|_| async { Err(Error::Config("unprocessed modal failure".into())) })
                 .on_command_interaction(move |ctx| {
                     let b = b.clone();
                     async move {
@@ -430,12 +426,17 @@ async fn ui_batches_deduplicate_and_checkpoint_only_completed_work_on_both_trans
                         }
                     }
                 }));
-                builder = builder.gateway_only(format!("ws://{address}"));
+                builder = builder.configure(|settings| {
+                    settings.transport.gateway_url = Some(format!("ws://{address}"));
+                    settings.transport.mode = rappin::TransportMode::GatewayOnly;
+                });
             }
-            let result =
-                tokio::time::timeout(std::time::Duration::from_secs(5), builder.build().run())
-                    .await
-                    .unwrap();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                builder.build().expect("valid bot configuration").run(),
+            )
+            .await
+            .unwrap();
             assert_eq!(result.is_ok(), handled);
             assert_eq!(select_calls.load(Ordering::SeqCst), 1);
             assert_eq!(command_calls.load(Ordering::SeqCst), usize::from(handled));
@@ -467,7 +468,8 @@ async fn command_publication_mode_is_opt_in_and_modal_deadlines_are_authoritativ
             .log(false)
             .interaction_commands(enabled)
             .command("apply", "Apply", |_| async { Ok(()) })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         bot.handle().sync_commands().await.unwrap();
         let request = requests.recv().await.unwrap();
         let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
@@ -507,7 +509,7 @@ async fn extended_context_forwards_public_reads_and_upload_transport_without_aut
             .base_url(base)
             .build(),
     );
-    let ctx = UiInteractionContext::new(
+    let ctx = InteractionContext::new(
         client,
         UiInteraction::from_event(&interaction("select")).unwrap(),
         None,
@@ -531,5 +533,33 @@ async fn extended_context_forwards_public_reads_and_upload_transport_without_aut
         .to_lowercase()
         .contains("authorization: bot private_parent_token"));
     assert!(upload.contains("note.txt"));
+    http.await.unwrap();
+}
+
+#[tokio::test]
+async fn unified_interaction_updates_preserve_explicit_nulls_and_response_ownership() {
+    let (base, mut requests, http) = support::mock(vec![
+        support::response(200, json!({})),
+        support::response(200, json!({})),
+    ])
+    .await;
+    let client = std::sync::Arc::new(Client::builder("fixture").base_url(base).build());
+    let data = UiInteraction::from_event(&interaction("select")).unwrap();
+    let ctx = InteractionContext::new(client, data, None);
+    ctx.update_with(&EditMessage::new().clear_content().clear_components())
+        .await
+        .unwrap();
+    let request = requests.recv().await.unwrap();
+    assert!(request.contains("\"content\":null"));
+    assert!(request.contains("\"components\":null"));
+    assert_eq!(ctx.response_state().await.unwrap().responses, 1);
+    let other = ctx.clone();
+    other
+        .update_with(&EditMessage::new().content("follow-up"))
+        .await
+        .unwrap();
+    assert!(requests.recv().await.unwrap().contains("follow-up"));
+    assert_eq!(ctx.response_state().await.unwrap().responses, 2);
+    assert!(requests.try_recv().is_err());
     http.await.unwrap();
 }

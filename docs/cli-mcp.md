@@ -45,7 +45,7 @@ Inline arguments are limited to 128 KiB.
 | Message state | `add_reaction`, `remove_reaction`, `pin_message`, `unpin_message` |
 | Event delivery | `poll_events`, `ack_events` |
 | Diagnostics | `doctor`, `get_capabilities`, `get_schema`, `get_api_version`, `get_api_changelog` |
-| API 1.2 | File uploads, emoji management and bot-owned webhooks; see [API 1.2 workflows](api-1.2.md) |
+| API 1.2 | File uploads, emoji management and bot-owned webhooks; see [API 1.2 workflows](uploads-and-webhooks.md) |
 | Server management | Role/permission writes, invites, counts and scheduled events; see [server management](server-management.md) for the full catalog and test-server restrictions |
 
 Writes support `dry_run`. Destructive annotations identify edits, deletion,

@@ -1,8 +1,8 @@
 # Legacy evidence policy example
 
-For API 1.4, use `ResourceApiExt::get_member_permissions` and
+For API 1.4, use `ApiExt::get_member_permissions` and
 `ComputedPermissionsPolicy` for fresh actor-specific channel access. The
-[API 1.4 guide](api-1.4.md) documents response scope, missing evidence, native/worker
+[API 1.4 guide](resources.md) documents response scope, missing evidence, native/worker
 composition and rollout. Category-specific authority and hierarchy questions may
 still need application policy.
 
@@ -157,7 +157,7 @@ errors from the policy, so assessment records unknown with structured causes.
 Other checks, such as `OverrideAuthority` on privacy edits, also stay unknown.
 
 On execution, `ValidatedOperation::execute_with_policy` raises
-`YappinError::OperationAuthorization` if any required check is denied or unknown.
+`Error::OperationAuthorization` if any required check is denied or unknown.
 `error.to_json()` retains:
 
 - `decision` and `authorization.checks`, with separate principals;

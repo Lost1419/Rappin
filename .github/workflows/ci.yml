@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main, master, dev ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        feature: [minimal, cli, gateway, voice, hot-reload, webhook-middleware, metrics, metrics-http, all]
+        feature: [minimal, derive, cli, gateway, voice, hot-reload, webhook-middleware, metrics, metrics-http, all]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.89.0
@@ -58,7 +58,7 @@ jobs:
           rust-version = "1.89"
           [workspace]
           [dependencies]
-          rappin-rs = { path = "../..", features = ["cli", "gateway", "voice", "hot-reload", "webhook-middleware", "metrics", "metrics-http"] }
+          rappin-rs = { path = "../..", features = ["derive", "cli", "gateway", "voice", "hot-reload", "webhook-middleware", "metrics", "metrics-http"] }
           EOF
           echo 'fn main() { let _ = rappin::Client::new("unused-msrv-fixture"); }' > target/msrv-consumer/src/main.rs
           cargo check --manifest-path target/msrv-consumer/Cargo.toml --target-dir target --config 'resolver.incompatible-rust-versions="fallback"'
@@ -97,11 +97,17 @@ jobs:
           if-no-files-found: ignore
 
   compatibility:
-    name: Public API compatibility
+    name: Public API checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Check development consumers
+        if: github.ref == 'refs/heads/dev' || github.base_ref == 'dev' || github.head_ref == 'dev'
+        run: cargo test --locked --all-features --test beginner_test --test derive_test
       - uses: obi1kenobi/cargo-semver-checks-action@v2
+        if: github.ref != 'refs/heads/dev' && github.base_ref != 'dev' && github.head_ref != 'dev'
         with:
           feature-group: all-features
 
@@ -124,13 +130,13 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Check format
-        run: cargo fmt --check
+        run: cargo fmt --all --check
 
       - name: Clippy check
-        run: cargo clippy --all-features --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-features --all-targets -- -D warnings
 
       - name: Run tests
-        run: cargo test --all-features --all-targets
+        run: cargo test --workspace --all-features --all-targets
 
       - name: Check examples
         run: cargo check --examples
@@ -154,9 +160,10 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          cargo package --locked --offline --all-features
+          cargo package --workspace --locked --offline --all-features
           rappin_package_version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
-          cargo check --locked --offline --all-features --all-targets --manifest-path "target/package/rappin-rs-$rappin_package_version/Cargo.toml" --target-dir target
+          # The development derive crate is packaged together and is not published yet.
+          cargo check --offline --all-features --all-targets --manifest-path "target/package/rappin-rs-$rappin_package_version/Cargo.toml" --target-dir target --config "patch.crates-io.rappin-rs-derive.path=\"$PWD/target/package/rappin-rs-derive-$rappin_package_version\""
 
       - name: Check minimal library
         run: cargo check --no-default-features

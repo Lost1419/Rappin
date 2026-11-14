@@ -1,5 +1,5 @@
 //! Channel, thread and category lifecycle events with lossless platform data.
-use crate::{Event, Result, YappinError};
+use crate::{Error, Event, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -117,7 +117,7 @@ impl ResourceEvent {
             .as_str()
             .and_then(|s| s.parse::<Uuid>().ok());
         let (Some(id), Some(server_id)) = (id, server) else {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "event",
                 "resource event requires UUID resource and server identities",
             ));
@@ -131,7 +131,7 @@ impl ResourceEvent {
                 }
             })
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "event",
                 "resource event has inconsistent object or channel identity",
             ));

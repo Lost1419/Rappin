@@ -1,10 +1,10 @@
 //! Local validation shared by typed requests and agent tooling.
-use crate::{Result, YappinError};
+use crate::{Error, Result};
 use serde_json::Value;
 use std::collections::HashSet;
 
-fn invalid(field: &str, message: &str) -> YappinError {
-    YappinError::validation(field, message)
+fn invalid(field: &str, message: &str) -> Error {
+    Error::validation(field, message)
 }
 fn text(value: &Value, path: &str, max: usize) -> Result<usize> {
     let n = value.as_str().map_or(0, |s| s.chars().count());
@@ -187,7 +187,7 @@ fn component(
 /// use rappin::validation::validate_message;
 /// validate_message(&serde_json::json!({"content":"Hello"}), true)?;
 /// assert!(validate_message(&serde_json::json!({"content":"x".repeat(2001)}), true).is_err());
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub fn validate_message(value: &Value, creating: bool) -> Result<()> {
     if !value["sticker_id"].is_null() {
@@ -270,7 +270,7 @@ impl crate::CreateMessage {
     /// ```rust
     /// let body = rappin::CreateMessage::new("Hello");
     /// body.validate()?;
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn validate(&self) -> Result<()> {
         validate_message(&serde_json::to_value(self)?, true)
@@ -284,7 +284,7 @@ impl crate::EditMessage {
     /// ```rust
     /// let body = rappin::EditMessage::new().content("Updated");
     /// body.validate()?;
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn validate(&self) -> Result<()> {
         validate_message(&serde_json::to_value(self)?, false)
@@ -298,7 +298,7 @@ impl crate::InteractionCallback {
     /// ```rust
     /// let body = rappin::InteractionCallback::ephemeral("Received");
     /// body.validate()?;
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn validate(&self) -> Result<()> {
         use crate::InteractionCallbackType::*;
@@ -350,7 +350,7 @@ pub fn split_message(content: &str) -> Vec<String> {
 ///
 /// ```rust
 /// rappin::validation::validate_webhook(&serde_json::json!({"content":"Build complete"}))?;
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub fn validate_webhook(value: &Value) -> Result<()> {
     text(&value["content"], "content", 2000)?;
@@ -395,7 +395,7 @@ pub fn validate_webhook(value: &Value) -> Result<()> {
 /// Validate command metadata before changing a running registry.
 pub(crate) fn validate_commands(commands: &[crate::Command]) -> Result<()> {
     if commands.len() > 100 {
-        return Err(YappinError::validation("commands", "maximum 100 commands"));
+        return Err(Error::validation("commands", "maximum 100 commands"));
     }
     let mut names = std::collections::HashSet::new();
     for command in commands {
@@ -407,13 +407,13 @@ pub(crate) fn validate_commands(commands: &[crate::Command]) -> Result<()> {
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_-".contains(&b))
             || !names.insert(&command.name)
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "commands.name",
                 "requires a unique lowercase name of 1 to 32 letters, digits, _ or -",
             ));
         }
         if command.description.chars().count() > 100 {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "commands.description",
                 "maximum 100 characters",
             ));
@@ -527,7 +527,7 @@ fn select(value: &Value, path: &str, ids: &mut HashSet<String>) -> Result<()> {
 /// ```rust
 /// let modal = rappin::Modal::new("feedback", "Feedback").input(rappin::TextInput::paragraph("comment", "Comment"));
 /// rappin::validation::validate_modal(&serde_json::to_value(modal)?)?;
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub fn validate_modal(value: &Value) -> Result<()> {
     required_text(&value["custom_id"], "modal.custom_id", 100)?;

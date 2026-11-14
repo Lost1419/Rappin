@@ -1,5 +1,5 @@
 //! Offline discovery plus reusable integration helpers; no model or storage SDK.
-use rappin::{capabilities::*, Api, BotHandle, CogBuilder, Result, YappinError};
+use rappin::{capabilities::*, Api, BotHandle, CogBuilder, Error, Result};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -37,7 +37,7 @@ pub async fn install_permanent_roles_command(handle: &BotHandle, server: Uuid) -
     let command = binding.bind(|ctx, call| async move {
         let server = ctx
             .server_id()
-            .ok_or_else(|| YappinError::validation("server", "server command required"))?;
+            .ok_or_else(|| Error::validation("server", "server command required"))?;
         let result = call
             .execute(&ctx, &OperationContext::server(server, ctx.author_id()))
             .await?;

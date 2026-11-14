@@ -25,7 +25,7 @@ use serde_json::Value;
 /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
 ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
 /// });
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub enum ArgumentType {
     /// A catalogue argument schema. Strings remain strings; other values use a
@@ -97,7 +97,7 @@ pub enum ArgumentType {
 /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
 ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
 /// });
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct ArgumentSchema {
     /// Unique argument key used in parsed values and help.
@@ -139,7 +139,7 @@ fn required() -> bool {
 /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
 ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
 /// });
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct CommandSchema {
     /// Canonical local command path.
@@ -178,7 +178,7 @@ impl CommandSchema {
     /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
     ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
     /// });
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn info(&self) -> CommandInfo {
         CommandInfo {
@@ -216,11 +216,11 @@ impl CommandSchema {
     /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
     ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
     /// });
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn validate(&self) -> Result<()> {
         self.info().validate()?;
-        let definition = |reason: &str| YappinError::from(CommandError::Definition(reason.into()));
+        let definition = |reason: &str| Error::from(CommandError::Definition(reason.into()));
         let mut optional = false;
         for (i, arg) in self.arguments.iter().enumerate() {
             if optional && arg.required {
@@ -295,7 +295,7 @@ impl CommandSchema {
     /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
     ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
     /// });
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn parse(&self, input: &str) -> Result<CommandValues> {
         self.validate()?;
@@ -320,7 +320,7 @@ impl CommandSchema {
             };
             cursor = if arg.rest { tokens.len() } else { cursor + 1 };
             let invalid = || {
-                YappinError::from(CommandError::Invalid {
+                Error::from(CommandError::Invalid {
                     name: arg.name.clone(),
                     reason: format!("expected {:?}", arg.kind),
                 })
@@ -443,7 +443,7 @@ impl CommandSchema {
 /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
 ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
 /// });
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct DynamicCommandSpec {
     schema: CommandSchema,
@@ -470,7 +470,7 @@ impl DynamicCommandSpec {
     /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
     ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
     /// });
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn new(schema: CommandSchema) -> Self {
         Self {
@@ -498,7 +498,7 @@ impl DynamicCommandSpec {
     /// let command = DynamicCommandSpec::new(schema).check(rappin::commands::Check::server_only()).bind(|ctx, values| async move {
     ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
     /// });
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn check(mut self, check: impl CommandCheck) -> Self {
         self.checks.push(Arc::new(check));
@@ -524,7 +524,7 @@ impl DynamicCommandSpec {
     /// let command = DynamicCommandSpec::new(schema).bind(|ctx, values| async move {
     ///     ctx.reply(format!("d{}", values["sides"])).await?; Ok(())
     /// });
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn bind<F, Fut>(self, handler: F) -> Result<RegisteredCommand>
     where
@@ -539,6 +539,7 @@ impl DynamicCommandSpec {
         Ok(RegisteredCommand {
             info,
             preparation: Some(CommandPreparation {
+                worker_checks: false,
                 schema: Some(schema.clone()),
                 checks: checks.clone(),
             }),

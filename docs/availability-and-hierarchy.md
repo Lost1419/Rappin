@@ -15,8 +15,8 @@ async fn main() -> Result<()> {
         .backoff(Duration::from_millis(500), Duration::from_secs(10))?
         .jitter_percent(20)?;
     let bot = Bot::builder(std::env::var("YAPPER_BOT_TOKEN").expect("token"))
-        .availability_policy(policy)
-        .build();
+        .configure(|settings| settings.transport.availability = Some(policy))
+        .build().expect("valid bot configuration");
     let handle = bot.handle();
     let mut changes = handle.subscribe_availability();
     tokio::spawn(async move {
@@ -36,7 +36,7 @@ The policy applies only to startup `GET /me`, the initial `GET /events` cursor
 probe when there is no saved cursor, and subsequent polling/gateway reads. It
 does not retry cog loading, command synchronization, handlers, cursor writes or
 mutations. Successfully read batches still use the ordered completion/checkpoint
-policy described in [handler failures](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md).
+policy described in [handler failures](https://github.com/Lost1419/Rappin/blob/dev/docs/handler-failures.md).
 
 One episode covers a read and its recovery attempts. The first attempt counts;
 a successful read ends the episode and the next read gets a new budget. The
@@ -74,7 +74,7 @@ Elapsed/backoff snapshots update at transitions, rather than ticking continuousl
 These observations are separate from command and HTTP request metrics.
 
 Exhaustion/cancellation returns a structured `availability` remote error.
-`YappinError::availability_failure()` and `RemoteError::availability_failure()`
+`Error::availability_failure()` and `RemoteError::availability_failure()`
 recover `AvailabilityFailure`, including phase, termination reason, limits and
 last observed cause/status/retry hint. Startup cancellation returns that error;
 stopping intake gracefully drains accepted handlers and checkpoints only completed
@@ -179,5 +179,5 @@ deletion or the enclosing command; reconcile the resulting role state first.
 
 No optional feature is required for native policies; `gateway` enables WebSocket
 intake and `hot-reload` enables worker composition. See the existing
-[capability bindings](https://github.com/Lost1419/Rappin/blob/main/docs/capability-bindings.md) and [hot reload](https://github.com/Lost1419/Rappin/blob/main/docs/hot-reloading.md)
+[capability bindings](https://github.com/Lost1419/Rappin/blob/dev/docs/capability-bindings.md) and [hot reload](https://github.com/Lost1419/Rappin/blob/dev/docs/hot-reloading.md)
 guides for registration and failure dispositions.

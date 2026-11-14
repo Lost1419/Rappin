@@ -47,7 +47,7 @@ pub(crate) struct Journal(Arc<Inner>);
 impl Journal {
     pub(crate) fn open(path: PathBuf) -> Result<Self> {
         if !path.is_file() {
-            return Err(YappinError::Config(
+            return Err(Error::Config(
                 "an existing consumer-owned journal is required".into(),
             ));
         }
@@ -77,9 +77,9 @@ impl Journal {
             let _guard = journal
                 .gate
                 .lock()
-                .map_err(|_| YappinError::Config("journal lock poisoned".into()))?;
+                .map_err(|_| Error::Config("journal lock poisoned".into()))?;
             if fs::metadata(&journal.path)?.len() > MAX_JOURNAL_BYTES {
-                return Err(YappinError::Config(
+                return Err(Error::Config(
                     "journal size bound exceeded; archive audit with a transaction".into(),
                 ));
             }
@@ -93,15 +93,13 @@ impl Journal {
             Ok(result)
         })
         .await
-        .map_err(|_| {
-            YappinError::Config("journal task interrupted; inspect durable state".into())
-        })?
+        .map_err(|_| Error::Config("journal task interrupted; inspect durable state".into()))?
     }
 }
 fn persist(path: &Path, data: &Data) -> Result<()> {
     let bytes = serde_json::to_vec(data)?;
     if bytes.len() as u64 > MAX_JOURNAL_BYTES {
-        return Err(YappinError::Config("journal size bound exceeded".into()));
+        return Err(Error::Config("journal size bound exceeded".into()));
     }
     let parent = path
         .parent()
@@ -130,7 +128,7 @@ impl IngressStore for Journal {
             if data.ingress.records.iter().any(|r| r.bot_id != bot)
                 || data.ingress.conflicts.iter().any(|r| r.bot_id != bot)
             {
-                return Err(YappinError::Config("journal bot scope mismatch".into()));
+                return Err(Error::Config("journal bot scope mismatch".into()));
             }
             Ok(data.ingress.clone())
         })
@@ -325,10 +323,10 @@ mod tests {
         let event: Event = serde_json::from_value(json!({"id":100,"type":"message","data":{
             "id":Uuid::from_u128(1),"server_id":Uuid::from_u128(2),"channel_id":Uuid::from_u128(3),"author_id":Uuid::from_u128(4),"content":"fixture"
         }})).unwrap();
-        let error = YappinError::PartialWrite {
+        let error = Error::PartialWrite {
             completed: vec![json!({"receipt_id":"confirmed-step"})],
             failed_step: 2,
-            source: Box::new(YappinError::Remote(RemoteError {
+            source: Box::new(Error::Remote(RemoteError {
                 kind: "gateway_request".into(),
                 message: "response unknown".into(),
                 status: Some(502),
@@ -430,7 +428,7 @@ mod tests {
         assert!(store
             .transaction(true, |data| {
                 data.ingress.polling_checkpoint = Some(99);
-                Err::<(), _>(YappinError::Config("rollback fixture".into()))
+                Err::<(), _>(Error::Config("rollback fixture".into()))
             })
             .await
             .is_err());

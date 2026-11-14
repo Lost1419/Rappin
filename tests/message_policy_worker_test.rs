@@ -2,8 +2,7 @@
 mod support;
 use rappin::{
     hot_reload::{HotReload, WorkerProject},
-    prelude::*,
-    EventCursor,
+    EventCursor, *,
 };
 use serde_json::{json, Value};
 use std::{
@@ -49,7 +48,7 @@ serde_json="1"
     )
     .unwrap();
     std::fs::write(project.0.join("src/main.rs"),r#"
-use rappin::{hot_reload::WorkerCog,MessageDisposition as D,CommandError,Result,YappinError};
+use rappin::{hot_reload::WorkerCog, MessageDisposition as D, CommandError, Result, Error};
 #[tokio::main] async fn main()->Result<()> {
     WorkerCog::new("messages")
     .command("wping","test",|ctx|async move {ctx.say("worker command").await?;Ok(())})
@@ -61,7 +60,7 @@ use rappin::{hot_reload::WorkerCog,MessageDisposition as D,CommandError,Result,Y
                 let receipt=ctx.say("confirmed first").await?;
                 match ctx.say("uncertain second").await {
                     Ok(_)=>panic!("fixture must fail"),
-                    Err(source)=>Err(YappinError::PartialWrite {completed:vec![serde_json::json!({"message":receipt})],failed_step:2,source:Box::new(source)})
+                    Err(source)=>Err(Error::PartialWrite {completed:vec![serde_json::json!({"message":receipt})],failed_step:2,source:Box::new(source)})
                 }
             },
             "stop"=>Ok(D::Stop),
@@ -97,8 +96,8 @@ use rappin::{hot_reload::WorkerCog,MessageDisposition as D,CommandError,Result,Y
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor)
-        .handler_concurrency(1)
+        .configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor)))
+        .configure(|settings| settings.execution.concurrency = 1)
         .message_gate(|ctx| async move {
             Ok(if ctx.content().contains("denied") {
                 MessageDisposition::Handled
@@ -123,7 +122,8 @@ use rappin::{hot_reload::WorkerCog,MessageDisposition as D,CommandError,Result,Y
         .command("later", "must not execute", |_| async {
             panic!("cursor barrier crossed")
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(support::profile()).unwrap())
         .await;
@@ -169,7 +169,7 @@ use rappin::{hot_reload::WorkerCog,MessageDisposition as D,CommandError,Result,Y
         .unwrap()
         .unwrap_err();
     let report = match failure {
-        YappinError::EventProcessing { report } => report,
+        Error::EventProcessing { report } => report,
         other => panic!("{other:?}"),
     };
     assert_eq!(EventCursor::new(&cursor).load().await.unwrap(), Some(10));
@@ -211,7 +211,7 @@ async fn missing_worker_message_outcome_is_uncertain_and_cannot_be_reused() {
     )
     .unwrap();
     std::fs::write(project.0.join("src/main.rs"),r#"
-use std::io::{BufRead,Write};
+use std::io::{BufRead, Write};
 fn main(){
     println!("{}",r#READY#); std::io::stdout().flush().unwrap();
     for line in std::io::stdin().lock().lines() {
@@ -223,7 +223,8 @@ fn main(){
     let bot = Bot::builder("fixture")
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(support::profile()).unwrap())
         .await;

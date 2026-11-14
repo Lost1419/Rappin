@@ -14,8 +14,8 @@ impl Project {
         tokio::fs::write(root.join("src/main.rs"),r#"
 use rappin::*;
 use serde_json::json;
-fn reject()->YappinError {CommandError::Missing("target (use an ID to clarify)".into()).into()}
-fn uncertain()->YappinError {YappinError::PartialWrite{completed:vec![json!({"receipt":"confirmed-first-step"})],failed_step:2,source:Box::new(YappinError::Api{status:502,message:"uncertain mutation".into(),retry_after:None})}}
+fn reject()->Error {CommandError::Missing("target (use an ID to clarify)".into()).into()}
+fn uncertain()->Error {Error::PartialWrite{completed:vec![json!({"receipt":"confirmed-first-step"})],failed_step:2,source:Box::new(Error::Api{status:502,message:"uncertain mutation".into(),retry_after:None})}}
 #[tokio::main]
 async fn main()->Result<()> {
     WorkerCog::new("failure_worker")
@@ -23,7 +23,7 @@ async fn main()->Result<()> {
         .command_typed::<(),_,_>("typed","Typed parse",|_,_|async{panic!("invalid typed invocation ran")})
         .dynamic_command(serde_json::from_value(json!({"name":"dynamic","description":"Dynamic parse","arguments":[{"name":"count","kind":{"type":"integer","min":1,"max":10},"required":true}]}))?,|_,_|async{panic!("invalid dynamic invocation ran")})?
         .command("uncertain","Partial failure",|_|async{Err(uncertain())})
-        .command("advised","Retain advice",|_|async{Err(YappinError::Api{status:503,message:"advised".into(),retry_after:Some(0.125)})})
+        .command("advised","Retain advice",|_|async{Err(Error::Api{status:503,message:"advised".into(),retry_after:Some(0.125)})})
         .command("after","Still alive",|ctx|async move{ctx.reply("same worker continued").await})
         .command("slow","Interrupted",|ctx|async move{ctx.reply("confirmed before interruption").await?;tokio::time::sleep(std::time::Duration::from_secs(5)).await;Ok(())})
         .button("reject:",|_|async{Err(reject())}).button("uncertain:",|_|async{Err(uncertain())})
@@ -69,7 +69,7 @@ async fn real_worker_failures_preserve_class_causes_and_keep_the_worker_alive_wh
                 bad["data"]["args"] = json!("extra");
             }
             let expected_error = if expected && !is_button {
-                YappinError::from(CommandError::Extra).to_json()
+                Error::from(CommandError::Extra).to_json()
             } else if expected {
                 rejected().to_json()
             } else {
@@ -114,8 +114,10 @@ async fn real_worker_failures_preserve_class_causes_and_keep_the_worker_alive_wh
                 .base_url(base)
                 .sync_commands(false)
                 .log(false)
-                .cursor_file(&cursor.0)
-                .handler_concurrency(1)
+                .configure(|settings| {
+                    settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+                })
+                .configure(|settings| settings.execution.concurrency = 1)
                 .command("stop", "Stop", |ctx| async move {
                     ctx.bot().unwrap().stop();
                     Ok(())
@@ -150,20 +152,22 @@ async fn real_worker_failures_preserve_class_causes_and_keep_the_worker_alive_wh
                 let c = legacy.clone();
                 let b = legacy.clone();
                 builder = builder
-                    .on_command_error(move |_, error| {
+                    .on_command_failure(move |_, error| {
                         let c = c.clone();
                         async move {
-                            c.lock().unwrap().push(error.to_json());
+                            c.lock().unwrap().push(error.error.to_json());
+                            Ok(FailureDisposition::Default)
                         }
                     })
-                    .on_button_error(move |_, error| {
+                    .on_button_failure(move |_, error| {
                         let b = b.clone();
                         async move {
-                            b.lock().unwrap().push(error.to_json());
+                            b.lock().unwrap().push(error.error.to_json());
+                            Ok(FailureDisposition::Default)
                         }
                     });
             }
-            let bot = builder.build();
+            let bot = builder.build().expect("valid bot configuration");
             let handle = bot.handle();
             let reload = HotReload::load(handle.clone(), project.spec())
                 .await
@@ -227,8 +231,10 @@ async fn real_worker_failures_preserve_class_causes_and_keep_the_worker_alive_wh
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .handler_concurrency(1)
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| settings.execution.concurrency = 1)
         .command("stop", "Stop", |ctx| async move {
             ctx.bot().unwrap().stop();
             Ok(())
@@ -238,7 +244,8 @@ async fn real_worker_failures_preserve_class_causes_and_keep_the_worker_alive_wh
             assert_eq!(failure.error.to_json()["command_kind"], "invalid");
             Ok(FailureDisposition::Handled)
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let reload = HotReload::load(handle.clone(), project.spec())
         .await
@@ -268,12 +275,15 @@ async fn real_worker_failures_preserve_class_causes_and_keep_the_worker_alive_wh
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
         .on_command_failure(|ctx, _| async move {
             ctx.reply("rejected").await?;
             Ok(FailureDisposition::Handled)
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let reload = HotReload::load(handle.clone(), project.spec())
         .await
@@ -302,8 +312,11 @@ async fn real_worker_failures_preserve_class_causes_and_keep_the_worker_alive_wh
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .build();
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let reload = HotReload::load(handle.clone(), project.spec())
         .await
@@ -339,9 +352,12 @@ async fn real_worker_failures_preserve_class_causes_and_keep_the_worker_alive_wh
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .handler_concurrency(1)
-        .build();
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| settings.execution.concurrency = 1)
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let mut spec = project.spec();
     spec.handler_timeout = Duration::from_secs(1);

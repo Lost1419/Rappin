@@ -108,8 +108,10 @@ async fn startup_probe_and_intake_recover_without_restarting_startup_or_handlers
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .availability_policy(policy(5))
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| settings.transport.availability = Some(policy(5)))
         .command("finish", "finish", move |ctx| {
             let c = c.clone();
             async move {
@@ -118,7 +120,8 @@ async fn startup_probe_and_intake_recover_without_restarting_startup_or_handlers
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.handle().add_cog(Loads(loads.clone())).await.unwrap();
     let handle = bot.handle();
     run(bot).await.unwrap();
@@ -153,9 +156,12 @@ async fn startup_attempt_budget_owns_all_retries_and_preserves_original_cause() 
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .availability_policy(policy(3))
-        .build();
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| settings.transport.availability = Some(policy(3)))
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let error = run(bot).await.unwrap_err();
     let failure = error.availability_failure().unwrap();
@@ -196,9 +202,12 @@ async fn exhausted_probe_does_not_create_a_checkpoint_or_rerun_load_hooks() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .availability_policy(policy(2))
-        .build();
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| settings.transport.availability = Some(policy(2)))
+        .build()
+        .expect("valid bot configuration");
     bot.handle().add_cog(Loads(loads.clone())).await.unwrap();
     let error = run(bot).await.unwrap_err();
     assert_eq!(
@@ -236,8 +245,10 @@ async fn intake_exhaustion_retains_saved_cursor_and_dispatches_nothing() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .availability_policy(policy(3))
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| settings.transport.availability = Some(policy(3)))
         .command("never", "never", move |_| {
             let c = c.clone();
             async move {
@@ -245,14 +256,15 @@ async fn intake_exhaustion_retains_saved_cursor_and_dispatches_nothing() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let error = run(bot).await.unwrap_err();
     let availability = error.availability_failure().unwrap();
     assert_eq!(availability.phase, AvailabilityPhase::Intake);
     assert_eq!(availability.attempts, 3);
     assert_eq!(error.status_code(), Some(522));
     match error {
-        YappinError::EventProcessing { report } => {
+        Error::EventProcessing { report } => {
             assert_eq!(report.committed_cursor, 7);
             assert!(report.failed_events.is_empty());
             assert!(report.intake_error.is_some());
@@ -286,9 +298,12 @@ async fn authentication_decode_and_configuration_failures_are_terminal() {
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
-            .availability_policy(policy(5))
-            .build();
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
+            .configure(|settings| settings.transport.availability = Some(policy(5)))
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         let error = run(bot).await.unwrap_err();
         assert!(error.availability_failure().is_none());
@@ -305,18 +320,14 @@ async fn authentication_decode_and_configuration_failures_are_terminal() {
         assert!(requests.try_recv().is_err());
         http.await.unwrap();
     }
-    let bot = Bot::builder("fixture")
+    let error = Bot::builder("fixture")
         .base_url("file:///invalid")
         .log(false)
-        .availability_policy(policy(5))
-        .build();
-    let handle = bot.handle();
-    assert!(run(bot).await.is_err());
-    assert_eq!(handle.client().request_metrics().attempts, 0);
-    assert_eq!(
-        handle.availability_status().state,
-        AvailabilityState::Terminal
-    );
+        .configure(|settings| settings.transport.availability = Some(policy(5)))
+        .build()
+        .err()
+        .unwrap();
+    assert!(matches!(error, Error::Validation { .. }));
 }
 
 #[tokio::test]
@@ -335,9 +346,12 @@ async fn stop_cancels_startup_backoff_without_new_reads_or_cursor_changes() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .availability_policy(policy)
-        .build();
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| settings.transport.availability = Some(policy))
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let mut status = handle.subscribe_availability();
     let task = tokio::spawn(bot.run());
@@ -403,8 +417,9 @@ async fn in_flight_read_is_cancellable_and_has_a_hard_elapsed_deadline() {
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .availability_policy(p)
-            .build();
+            .configure(|settings| settings.transport.availability = Some(p))
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         let task = tokio::spawn(bot.run());
         if cancel {
@@ -458,8 +473,10 @@ async fn intake_stop_drains_completed_work_and_cancels_backoff_cleanly() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .availability_policy(p)
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| settings.transport.availability = Some(p))
         .command("once", "once", move |_| {
             let c = c.clone();
             async move {
@@ -467,7 +484,8 @@ async fn intake_stop_drains_completed_work_and_cancels_backoff_cleanly() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let mut status = handle.subscribe_availability();
     let mut transport = handle.subscribe_transport();
@@ -516,15 +534,16 @@ async fn client_shared_wait_budget_exhaustion_is_not_rearmed_by_availability() {
         .sync_commands(false)
         .log(false)
         .max_retry_wait(Duration::ZERO)
-        .availability_policy(policy(5))
-        .build();
+        .configure(|settings| settings.transport.availability = Some(policy(5)))
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     assert!(matches!(
         handle.client().get_me().await,
-        Err(YappinError::RetryWaitExceeded { .. })
+        Err(Error::RetryWaitExceeded { .. })
     ));
     let error = run(bot).await.unwrap_err();
-    assert!(matches!(error, YappinError::RetryWaitExceeded { .. }));
+    assert!(matches!(error, Error::RetryWaitExceeded { .. }));
     assert_eq!(
         handle.availability_status().state,
         AvailabilityState::Terminal
@@ -547,10 +566,13 @@ async fn server_advised_wait_cannot_exceed_availability_deadline() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
         .max_retry_wait(Duration::from_secs(120))
-        .availability_policy(policy(4))
-        .build();
+        .configure(|settings| settings.transport.availability = Some(policy(4)))
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let error = run(bot).await.unwrap_err();
     let failure = error.availability_failure().unwrap();
@@ -645,9 +667,14 @@ async fn gateway_recovery_resumes_saved_cursor_and_authentication_remains_termin
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
-            .availability_policy(policy(3))
-            .gateway_only(format!("ws://{address}"))
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
+            .configure(|settings| settings.transport.availability = Some(policy(3)))
+            .configure(|settings| {
+                settings.transport.gateway_url = Some(format!("ws://{address}"));
+                settings.transport.mode = rappin::TransportMode::GatewayOnly;
+            })
             .command("finish", "finish", move |ctx| {
                 let c = c.clone();
                 async move {
@@ -656,7 +683,8 @@ async fn gateway_recovery_resumes_saved_cursor_and_authentication_remains_termin
                     Ok(())
                 }
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         let result = run(bot).await;
         if deny {
@@ -703,10 +731,16 @@ async fn gateway_handshake_preserves_status_hints_and_does_not_retry_authenticat
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
-            .availability_policy(policy(2))
-            .gateway_only(format!("ws://{address}"))
-            .build();
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
+            .configure(|settings| settings.transport.availability = Some(policy(2)))
+            .configure(|settings| {
+                settings.transport.gateway_url = Some(format!("ws://{address}"));
+                settings.transport.mode = rappin::TransportMode::GatewayOnly;
+            })
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         let error = run(bot).await.unwrap_err();
         assert_eq!(error.status_code(), Some(status));
@@ -745,11 +779,12 @@ async fn advised_wait_budget_spans_availability_attempts_without_rearming() {
             .sync_commands(false)
             .log(false)
             .max_retry_wait(budget)
-            .availability_policy(policy(5))
-            .build();
+            .configure(|settings| settings.transport.availability = Some(policy(5)))
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         let error = run(bot).await.unwrap_err();
-        assert!(matches!(error, YappinError::RetryWaitExceeded { .. }));
+        assert!(matches!(error, Error::RetryWaitExceeded { .. }));
         assert_eq!(error.status_code(), Some(503));
         assert_eq!(error.retry_after(), Some(Duration::from_millis(2)));
         assert_eq!(handle.availability_status().total_attempts, expected as u64);

@@ -1,5 +1,5 @@
 //! Local command parsing and policy. Yapin's advertised Command remains only a name and description.
-use crate::{cache::Freshness, MessageContext, Result, YappinError};
+use crate::{cache::Freshness, Error, MessageContext, Result};
 use std::{future::Future, marker::PhantomData, pin::Pin, str::FromStr, sync::Arc, time::Duration};
 use uuid::Uuid;
 mod dynamic;
@@ -170,6 +170,16 @@ pub struct Arguments {
     tokens: std::vec::IntoIter<Token>,
 }
 impl Arguments {
+    /// Number of decoded tokens left to consume.
+    ///
+    /// ```rust
+    /// let args = rappin::Arguments::new("one two")?;
+    /// assert_eq!(args.remaining(), 2);
+    /// # Ok::<(), rappin::CommandError>(())
+    /// ```
+    pub fn remaining(&self) -> usize {
+        self.tokens.len()
+    }
     /// Tokenize input into a quote-aware cursor without shell execution.
     ///
     /// # Example
@@ -300,7 +310,7 @@ impl Arguments {
 /// info.validate()?;
 /// assert_eq!(info.usage(), "/status");
 /// assert!(info.help().contains("Show status"));
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct ArgumentInfo {
     /// Unique local argument name without whitespace.
@@ -325,7 +335,7 @@ impl ArgumentInfo {
     /// info.validate()?;
     /// assert_eq!(info.usage(), "/status");
     /// assert!(info.help().contains("Show status"));
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn required(name: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
@@ -348,7 +358,7 @@ impl ArgumentInfo {
     /// info.validate()?;
     /// assert_eq!(info.usage(), "/status");
     /// assert!(info.help().contains("Show status"));
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn optional(name: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
@@ -358,7 +368,22 @@ impl ArgumentInfo {
         }
     }
 }
-/// Parse a command's Rust argument type; `describe` supplies manually maintained help metadata.
+/// Parse a command's Rust argument type. Enable `derive` to generate parsing,
+/// validation and help from one concrete struct. Custom parsers can implement
+/// this trait directly.
+///
+/// ```rust
+/// # #[cfg(feature = "derive")] {
+/// #[derive(rappin::FromArgs)]
+/// struct Roll {
+///     /// Number of sides.
+///     #[arg(default = 6, min = 2, max = 100)]
+///     sides: u32,
+/// }
+/// let command = rappin::CommandSpec::<Roll>::new("roll", "Roll a die");
+/// assert!(command.info().help().contains("Number of sides"));
+/// # }
+/// ```
 /// # Example
 ///
 /// ```rust
@@ -376,6 +401,17 @@ impl ArgumentInfo {
 /// # Ok::<(), CommandError>(())
 /// ```
 pub trait FromArgs: Send + 'static {
+    /// Pure argument schema available to read-only invocation preparation.
+    /// Custom parsers return `None` when their behavior cannot be described by
+    /// the built-in schema. Preparation then reports parsing as deferred.
+    ///
+    /// ```rust
+    /// use rappin::FromArgs;
+    /// assert_eq!(<()>::schema(), Some(vec![]));
+    /// ```
+    fn schema() -> Option<Vec<ArgumentSchema>> {
+        None
+    }
     /// Parse the declared Rust type from the cursor; dispatch rejects remaining tokens afterward.
     ///
     /// # Example
@@ -420,6 +456,9 @@ pub trait FromArgs: Send + 'static {
     }
 }
 impl FromArgs for () {
+    fn schema() -> Option<Vec<ArgumentSchema>> {
+        Some(vec![])
+    }
     fn parse(_: &mut Arguments) -> std::result::Result<Self, CommandError> {
         Ok(())
     }
@@ -691,6 +730,25 @@ pub type CheckFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>
 /// }
 /// ```
 pub trait CommandCheck: Send + Sync + 'static {
+    /// Evaluate the check inside a worker using its parent-authenticated API.
+    /// Built-in checks support both contexts. A custom check must implement this
+    /// method before being installed on a worker command.
+    ///
+    /// ```rust
+    /// use rappin::{Check, CommandCheck, WorkerContext};
+    /// async fn assess(ctx: &WorkerContext) -> rappin::Result<()> {
+    ///     Check::server_only().check_worker(ctx).await
+    /// }
+    /// ```
+    #[cfg(feature = "hot-reload")]
+    fn check_worker<'a>(&'a self, _ctx: &'a crate::WorkerContext) -> CheckFuture<'a> {
+        Box::pin(async {
+            Err(
+                CommandError::Definition("custom check requires a worker implementation".into())
+                    .into(),
+            )
+        })
+    }
     /// Evaluate current authority before handler execution; execution runs it even after successful preparation.
     ///
     /// # Example
@@ -887,12 +945,63 @@ impl Check {
     }
 }
 impl CommandCheck for Check {
+    #[cfg(feature = "hot-reload")]
+    fn check_worker<'a>(&'a self, ctx: &'a crate::WorkerContext) -> CheckFuture<'a> {
+        Box::pin(async move {
+            let deny = |message: &str| Error::from(CommandError::Denied(message.into()));
+            let actor = ctx
+                .author_id()
+                .ok_or_else(|| deny("command has no authenticated requester"))?;
+            let server = ctx.event.message().and_then(|message| message.server_id);
+            match self {
+                Self::ServerOnly => {
+                    if server.is_none() {
+                        return Err(deny("this command requires a server"));
+                    }
+                }
+                Self::Owner => {
+                    let me: crate::BotProfile =
+                        serde_json::from_value(ctx.api("GET", "/me", None).await?)?;
+                    if me.bot.as_ref().map(|bot| bot.owner_id) != Some(actor) {
+                        return Err(deny("only the bot owner may run this command"));
+                    }
+                }
+                Self::Roles { ids, .. } => {
+                    let server = server.ok_or_else(|| deny("this command requires a server"))?;
+                    let value = ctx
+                        .api("GET", &format!("/servers/{server}/members/{actor}"), None)
+                        .await?;
+                    let member: crate::MemberDetail =
+                        serde_json::from_value(value["member"].clone())?;
+                    if member.member.user.id != actor {
+                        return Err(Error::validation(
+                            "member",
+                            "response does not match the requester",
+                        ));
+                    }
+                    if !ids.iter().any(|id| member.member.roles.contains(id)) {
+                        return Err(deny("a required role is missing"));
+                    }
+                }
+                Self::Permissions {
+                    permissions,
+                    freshness,
+                } => {
+                    let server = server.ok_or_else(|| deny("this command requires a server"))?;
+                    crate::ApiExt::evaluate_permissions(ctx, server, actor, *freshness)
+                        .await?
+                        .require(permissions)?;
+                }
+            }
+            Ok(())
+        })
+    }
     fn prepare<'a>(&'a self, ctx: &'a MessageContext) -> Option<CheckFuture<'a>> {
         Some(self.check(ctx))
     }
     fn check<'a>(&'a self, ctx: &'a MessageContext) -> CheckFuture<'a> {
         Box::pin(async move {
-            let deny = |message: &str| YappinError::from(CommandError::Denied(message.into()));
+            let deny = |message: &str| Error::from(CommandError::Denied(message.into()));
             match self {
                 Self::Owner => {
                     let me = match ctx.cache().get_me().await {
@@ -957,7 +1066,7 @@ impl CommandCheck for Check {
 /// info.validate()?;
 /// assert_eq!(info.usage(), "/status");
 /// assert!(info.help().contains("Show status"));
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct CommandInfo {
     /// Canonical lowercase command path; spaces denote local groups.
@@ -983,7 +1092,7 @@ impl CommandInfo {
     /// info.validate()?;
     /// assert_eq!(info.usage(), "/status");
     /// assert!(info.help().contains("Show status"));
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn validate(&self) -> Result<()> {
         let mut names = std::collections::HashSet::new();
@@ -1029,7 +1138,7 @@ impl CommandInfo {
     /// info.validate()?;
     /// assert_eq!(info.usage(), "/status");
     /// assert!(info.help().contains("Show status"));
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn usage(&self) -> String {
         let args = self
@@ -1065,7 +1174,7 @@ impl CommandInfo {
     /// info.validate()?;
     /// assert_eq!(info.usage(), "/status");
     /// assert!(info.help().contains("Show status"));
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn help(&self) -> String {
         let mut text = format!("{} — {}", self.usage(), self.description);
@@ -1092,7 +1201,7 @@ impl CommandInfo {
 /// ```
 pub struct CommandSpec<A: FromArgs> {
     pub(crate) info: CommandInfo,
-    checks: Vec<Arc<dyn CommandCheck>>,
+    pub(crate) checks: Vec<Arc<dyn CommandCheck>>,
     marker: PhantomData<fn() -> A>,
 }
 impl<A: FromArgs> CommandSpec<A> {
@@ -1190,10 +1299,17 @@ impl<A: FromArgs> CommandSpec<A> {
     {
         let checks = Arc::new(self.checks);
         let handler = Arc::new(handler);
+        let schema = A::schema().map(|arguments| CommandSchema {
+            name: self.info.name.clone(),
+            description: self.info.description.clone(),
+            aliases: self.info.aliases.clone(),
+            arguments,
+        });
         RegisteredCommand {
             info: self.info,
             preparation: Some(CommandPreparation {
-                schema: None,
+                worker_checks: false,
+                schema: schema.map(Arc::new),
                 checks: checks.clone(),
             }),
             handler: Arc::new(move |ctx| {
@@ -1233,6 +1349,7 @@ pub struct RegisteredCommand {
 }
 #[derive(Clone)]
 pub(crate) struct CommandPreparation {
+    pub worker_checks: bool,
     pub schema: Option<Arc<CommandSchema>>,
     pub checks: Arc<Vec<Arc<dyn CommandCheck>>>,
 }

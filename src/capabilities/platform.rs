@@ -45,7 +45,7 @@ pub(super) fn is_platform_operation(name: &str) -> bool {
 /// let request = operation.api_request()?;
 /// assert_eq!(request.path, "/version");
 /// assert!(request.public);
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct OperationRequest {
     /// HTTP method for this validated request.
@@ -80,17 +80,17 @@ pub(super) fn files(value: &Value) -> Result<Vec<UploadFile>> {
     let mut files = Vec::new();
     for file in value
         .as_array()
-        .ok_or_else(|| YappinError::validation("files", "requires a file array"))?
+        .ok_or_else(|| Error::validation("files", "requires a file array"))?
     {
         let name = file["name"]
             .as_str()
-            .ok_or_else(|| YappinError::validation("files.name", "filename required"))?;
+            .ok_or_else(|| Error::validation("files.name", "filename required"))?;
         let encoded = file["data"]
             .as_str()
-            .ok_or_else(|| YappinError::validation("files.data", "base64 required"))?;
+            .ok_or_else(|| Error::validation("files.data", "base64 required"))?;
         let data = base64::engine::general_purpose::STANDARD
             .decode(encoded)
-            .map_err(|_| YappinError::validation("files.data", "invalid base64"))?;
+            .map_err(|_| Error::validation("files.data", "invalid base64"))?;
         files.push(UploadFile::new(name, data));
     }
     crate::validate_uploads(&files)?;
@@ -107,7 +107,7 @@ impl ValidatedOperation {
     /// let request = operation.api_request()?;
     /// assert_eq!(request.path, "/version");
     /// assert!(request.public);
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn api_request(&self) -> Result<OperationRequest> {
         let id = |key: &str| self.args[key].as_str().unwrap_or_default();
@@ -217,7 +217,7 @@ impl ValidatedOperation {
                 false,
             ),
             _ => {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "operation",
                     "no single platform request for this operation",
                 ))

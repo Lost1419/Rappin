@@ -296,6 +296,67 @@ pub enum Component {
     Row(#[doc = "Action-row payload containing its controls."] ActionRow),
     /// A Components V2 layout element.
     V2(#[doc = "Components V2 layout payload."] LayoutComponent),
+    /// Lossless response tree, including selects and future component fields.
+    Raw(#[doc = "Original component JSON; outbound validation still applies."] serde_json::Value),
+}
+
+impl Component {
+    /// Collect buttons or a select menu into a validated outbound action row.
+    ///
+    /// ```rust
+    /// let row = rappin::Component::row([rappin::Button::primary("Next", "next")]);
+    /// assert_eq!(row.as_json()["type"], "row");
+    /// ```
+    pub fn row(children: impl IntoIterator<Item = impl Into<Self>>) -> Self {
+        Self::Raw(
+            serde_json::json!({"type":"row","components":children.into_iter().map(Into::into).collect::<Vec<Self>>()}),
+        )
+    }
+
+    /// Collect components into a Components V2 container.
+    ///
+    /// ```rust
+    /// let panel = rappin::Component::container([rappin::TextDisplay::new("Hello")]);
+    /// assert_eq!(panel.as_json()["type"], 17);
+    /// ```
+    pub fn container(children: impl IntoIterator<Item = impl Into<Self>>) -> Self {
+        Self::Raw(
+            serde_json::json!({"type":17,"components":children.into_iter().map(Into::into).collect::<Vec<Self>>()}),
+        )
+    }
+
+    /// Create a button with a Unicode or custom emoji reference.
+    ///
+    /// ```rust
+    /// let button = rappin::Component::button(rappin::Button::primary("Go", "go"), "🦀");
+    /// assert_eq!(button.as_json()["emoji"], "🦀");
+    /// ```
+    pub fn button(button: Button, emoji: impl Into<crate::EmojiRef>) -> Self {
+        let mut value = serde_json::json!(button);
+        value["emoji"] = serde_json::json!(emoji.into());
+        Self::Raw(value)
+    }
+
+    /// Return the complete component JSON, including unknown response fields.
+    ///
+    /// ```rust
+    /// let row = rappin::Component::row([rappin::Button::primary("Go", "go")]);
+    /// assert_eq!(row.as_json()["components"][0]["custom_id"], "go");
+    /// ```
+    pub fn as_json(&self) -> serde_json::Value {
+        serde_json::json!(self)
+    }
+}
+
+impl From<Button> for Component {
+    fn from(button: Button) -> Self {
+        Self::Raw(serde_json::json!(button))
+    }
+}
+impl From<crate::SelectMenu> for Component {
+    fn from(select: crate::SelectMenu) -> Self {
+        Self::Raw(serde_json::json!(select))
+    }
 }
 
 impl From<ActionRow> for Component {
@@ -939,15 +1000,15 @@ impl<'de> Deserialize<'de> for ButtonStyle {
 impl<'de> Deserialize<'de> for Component {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let v = serde_json::Value::deserialize(d)?;
-        if v["type"] == "row" || v["type"] == 1 {
-            serde_json::from_value(v)
-                .map(Self::Row)
-                .map_err(serde::de::Error::custom)
+        let known = if v["type"] == "row" || v["type"] == 1 {
+            serde_json::from_value(v.clone()).map(Self::Row)
         } else {
-            serde_json::from_value(v)
-                .map(Self::V2)
-                .map_err(serde::de::Error::custom)
-        }
+            serde_json::from_value(v.clone()).map(Self::V2)
+        };
+        Ok(match known {
+            Ok(component) if serde_json::json!(&component) == v => component,
+            _ => Self::Raw(v),
+        })
     }
 }
 impl<'de> Deserialize<'de> for LayoutComponent {

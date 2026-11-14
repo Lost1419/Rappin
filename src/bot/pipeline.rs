@@ -1,7 +1,7 @@
 use super::Bot;
 use crate::{
     diagnostics::{EventTransport, TransportMode},
-    BotProfile, Result, YappinError,
+    BotProfile, Error, Result,
 };
 use futures_util::{
     future::BoxFuture,
@@ -28,14 +28,12 @@ struct PreparedBatch {
     events: Vec<(crate::Event, Option<Box<crate::InteractionEvent>>)>,
 }
 struct IntakeFailure {
-    error: YappinError,
+    error: Error,
     unprocessed: Vec<u64>,
 }
-pub(super) fn retryable_read(error: &YappinError) -> bool {
-    matches!(
-        error,
-        YappinError::Http(_) | YappinError::RateLimited { .. }
-    ) || matches!(error.status_code(), Some(408 | 429 | 500 | 502 | 503 | 504))
+pub(super) fn retryable_read(error: &Error) -> bool {
+    matches!(error, Error::Http(_) | Error::RateLimited { .. })
+        || matches!(error.status_code(), Some(408 | 429 | 500 | 502 | 503 | 504))
 }
 struct CompletedBatch {
     watermark: u64,
@@ -323,7 +321,7 @@ impl Bot {
                         }
                         None=>{
                             if !self.handle.inner.running.load(Ordering::SeqCst) { stopping=true; continue; }
-                            let error=YappinError::Config("event intake exited unexpectedly".into());
+                            let error=Error::Config("event intake exited unexpectedly".into());
                             report.intake_error=Some(self.failure_cause(&error));
                             gate.halt();stopping=true;
                         }
@@ -374,7 +372,7 @@ impl Bot {
         {
             Ok(())
         } else {
-            Err(YappinError::EventProcessing {
+            Err(Error::EventProcessing {
                 report: Box::new(report),
             })
         }
@@ -410,7 +408,7 @@ impl Bot {
                             ledger.start(id);
                             super::failure::catch(self.dispatch_event(event, me, prepared)).await
                         }
-                        Err(_) => Err(YappinError::Config("handler executor closed".into())),
+                        Err(_) => Err(Error::Config("handler executor closed".into())),
                     };
                     ledger.finish(id, &result, self);
                     if result.is_err() {

@@ -2,7 +2,7 @@
 use crate::diagnostics::{
     EventTransport, FallbackReason, Telemetry, TransportMode, TransportStatus,
 };
-use crate::{Client, EventsResponse, Result, YappinError};
+use crate::{Client, Error, EventsResponse, Result};
 use futures_util::{SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -196,7 +196,7 @@ impl Gateway {
         crate::security::endpoint(&self.url, true)?;
         // These dependency log targets include raw frame payloads, including authentication.
         if wire_trace_enabled() {
-            return Err(YappinError::Config(
+            return Err(Error::Config(
                 "gateway wire tracing is enabled; refusing to send credentials".into(),
             ));
         }
@@ -242,7 +242,7 @@ impl Gateway {
             auth["max_age"] = age.into();
         }
         if wire_trace_enabled() {
-            return Err(YappinError::Config(
+            return Err(Error::Config(
                 "gateway wire tracing is enabled; refusing to send credentials".into(),
             ));
         }
@@ -365,7 +365,7 @@ impl Gateway {
                     });
                     if e.is_unauthorized()
                         || (crate::client::single_attempt_active()
-                            && matches!(e, YappinError::Config(_) | YappinError::Json(_)))
+                            && matches!(e, Error::Config(_) | Error::Json(_)))
                     {
                         return Err(e);
                     }
@@ -403,9 +403,9 @@ impl Gateway {
         Ok(batch)
     }
 }
-fn transport() -> YappinError {
+fn transport() -> Error {
     if crate::client::single_attempt_active() {
-        return YappinError::Remote(crate::RemoteError {
+        return Error::Remote(crate::RemoteError {
             kind: "gateway_transport".into(),
             message: "gateway disconnected during an availability read".into(),
             status: None,
@@ -414,13 +414,13 @@ fn transport() -> YappinError {
         });
     }
 
-    YappinError::Config("gateway disconnected; resume with the last handled event ID".into())
+    Error::Config("gateway disconnected; resume with the last handled event ID".into())
 }
-fn close(code: Option<u16>) -> YappinError {
+fn close(code: Option<u16>) -> Error {
     if code == Some(4004) {
-        YappinError::Unauthorized
+        Error::Unauthorized
     } else {
-        YappinError::Api {
+        Error::Api {
             status: code.unwrap_or(1006),
             message: "gateway closed".into(),
             retry_after: None,
@@ -428,21 +428,21 @@ fn close(code: Option<u16>) -> YappinError {
     }
 }
 
-fn protocol_failure() -> YappinError {
+fn protocol_failure() -> Error {
     if crate::client::single_attempt_active() {
-        YappinError::Config("gateway returned an invalid protocol frame".into())
+        Error::Config("gateway returned an invalid protocol frame".into())
     } else {
         transport()
     }
 }
 
-fn transport_cause(error: tokio_tungstenite::tungstenite::Error) -> YappinError {
+fn transport_cause(error: tokio_tungstenite::tungstenite::Error) -> Error {
     use tokio_tungstenite::tungstenite::Error;
     if !crate::client::single_attempt_active() {
         return transport();
     }
     match error {
-        Error::Http(response) => YappinError::Api {
+        Error::Http(response) => crate::Error::Api {
             status: response.status().as_u16(),
             message: "gateway HTTP handshake failed".into(),
             retry_after: response

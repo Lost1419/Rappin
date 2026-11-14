@@ -1,18 +1,18 @@
 # Rappin for agents
 
 For computed member permissions, resource resolution, role ordering and explicit
-overrides, see [API 1.4 resources](api-1.4.md). The catalogue includes the named
+overrides, see [resource and permission workflows](resources.md). The catalogue includes the named
 operations and preserves their test-server rollout requirements.
 
-For API 1.3 select menus, modal forms, optional slash interaction delivery and
-message emoji lookup, see [API 1.3 workflows](api-1.3.md). The shared catalogue
+For select menus, modal forms, optional slash interaction delivery and
+message emoji lookup, see [interactive message workflows](interactions.md). The shared catalogue
 exposes `get_message_emojis`; rich send/edit/history preserve the new component data.
 
 ## Agent skills
 
-Use [rappin](https://github.com/Lost1419/Rappin/blob/main/skills/rappin/SKILL.md) for CLI/MCP operations,
-[rappin-bot-dev](https://github.com/Lost1419/Rappin/blob/main/skills/rappin-bot-dev/SKILL.md) for Rust bot implementation,
-and [rappin-diagnostics](https://github.com/Lost1419/Rappin/blob/main/skills/rappin-diagnostics/SKILL.md) for incidents.
+Use [rappin](https://github.com/Lost1419/Rappin/blob/dev/skills/rappin/SKILL.md) for CLI/MCP operations,
+[rappin-bot-dev](https://github.com/Lost1419/Rappin/blob/dev/skills/rappin-bot-dev/SKILL.md) for Rust bot implementation,
+and [rappin-diagnostics](https://github.com/Lost1419/Rappin/blob/dev/skills/rappin-diagnostics/SKILL.md) for incidents.
 Each entrypoint links to task-specific references; load only the relevant ones.
 Install or refresh the complete skill folder in the agent's configured skill
 directory, including `references` and any `assets`. Updating this repository
@@ -21,7 +21,7 @@ to the application's selected dependency; CLI discovery describes its installed
 binary. Skill updates do not require changing an application's SDK dependency.
 
 For platform compatibility checks, use the public
-[yapin-api-audit](https://github.com/Lost1419/Rappin/blob/main/skills/yapin-api-audit/SKILL.md) skill. It compares official
+[yapin-api-audit](https://github.com/Lost1419/Rappin/blob/dev/skills/yapin-api-audit/SKILL.md) skill. It compares official
 contracts with a selected published crate and generates version-specific support
 reports. See [API support by release](api-support.md) for the initial reviewed
 matrix and its coverage limits. The skill requires Python 3.11+ and no bot token.
@@ -36,8 +36,8 @@ cargo install --path . --features cli
 rappin --json doctor --offline
 ```
 
-Use `rappin init my-bot --template basic` for an offline starter, or choose
-`gateway` / `worker`. The operator-only command never reads credentials and refuses
+Use `rappin --human init my-bot` for an offline gateway starter with polling
+fallback, or choose `--template basic` / `--template worker`. The operator-only command never reads credentials and refuses
 existing directories. See [project templates](project-templates.md).
 
 The library has no default optional features. `cli` adds the command and MCP server.
@@ -51,18 +51,18 @@ worker cogs while the parent bot stays running. Start with
 `cargo run --features hot-reload --example hot_reload_bot` and edit
 `examples/hot_cog_worker.rs`. See the [Rust hot-reloading guide](hot-reloading.md)
 for the two-binary setup, reply helpers, state boundaries, and credential handling.
-Available since `0.1.5`; native `reload_cog` replaces linked instances and does not
-compile source edits.
+Native `reload_cog` replaces linked instances. Source recompilation uses a worker project.
 
-## Building Rust bots (0.1.7)
+## Building Rust bots
 
-The [Rust workflow guide](rust-bots.md) covers the typed CommandSpec /
-FromArgs APIs, aliases/subcommands, reusable checks, generated help, bounded typed
-collectors, transport diagnostics, interaction ownership, shared rate waits, and
-explicit cache freshness added in 0.1.7. Start with `cargo run --example typed_bot`. Existing
-closure commands and CLI/MCP wire formats remain supported. New library workflow
-APIs do not add new CLI commands or MCP tools. Register collectors before sending
-prompts and handle timeout, overflow, and shutdown explicitly.
+Start with the [tutorial](tutorial.md) for setup, commands, typed arguments,
+buttons, state, checks, cogs and persistence. The [Rust workflow guide](rust-bots.md)
+covers custom parsing, aliases/subcommands, collectors, diagnostics and worker
+protocols. Enable `derive` to generate `FromArgs` parsing, help and preparation
+schemas. Advanced transport, execution, persistence and cache settings live in
+`BotBuilder::configure`. Application-owned storage and dynamic prefixes remain
+supported. Register collectors before sending prompts and handle timeout,
+overflow and shutdown explicitly.
 
 ## Authentication and output
 
@@ -76,14 +76,15 @@ base_url = "https://bots.yapper.website/api/bot/v1"
 ```
 
 Base URL precedence: `--base-url`, `YAPPER_API_BASE`, config, default.
-The default is `https://bots.yapper.website/api/bot/v1` as of 0.1.8. Only that
+The default is `https://bots.yapper.website/api/bot/v1`. Only that
 origin can temporarily fall back to the documented website API; custom origins
 never redirect or fail over. See [transport and caching](transport-and-cache.md).
 `rappin doctor` checks auth/reachability; `--offline` only checks local configuration.
 Doctor is a diagnostic report: inspect its `authenticated`, `reachable`, and `setup`
 fields, even when the command exits successfully.
 
-All commands emit JSON by default; `--json` documents that intent. Help/version are
+Commands emit JSON by default. `--json` documents that intent. Use `--human`
+with `init` or `doctor` for readable setup output. Help/version are
 text. Output is one success envelope `{"ok":true,"data":...}` or one error envelope
 `{"ok":false,"error":{"kind":"validation","message":"...","field":"content","status":null,"retry_after":null}}`.
 Data is the API response unless a collection/workflow wrapper is described below.
@@ -297,6 +298,6 @@ prove absence of every vulnerability or protect against malicious trusted code.
 
 Use `rappin platform get_api_version` for public metadata without credentials.
 The shared catalogue includes file uploads, custom emojis and bot-owned webhooks;
-see [API 1.2 workflows](api-1.2.md) for arguments, partial-write receipts, DM routing,
+see [API 1.2 workflows](uploads-and-webhooks.md) for arguments, partial-write receipts, DM routing,
 worker v4, image proxy metadata and the 128 KiB inline-data boundary. Larger files
 use the Rust SDK or explicit operator CLI upload commands, never MCP file paths.

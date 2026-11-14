@@ -285,7 +285,7 @@ impl EditChannelRequest {
     /// ```
     pub fn validate(&self) -> crate::Result<()> {
         if self.slowmode.is_some_and(|seconds| seconds > 21600) {
-            return Err(crate::YappinError::validation(
+            return Err(crate::Error::validation(
                 "slowmode",
                 "must be between 0 and 21600 seconds",
             ));

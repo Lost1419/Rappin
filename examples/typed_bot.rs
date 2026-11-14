@@ -1,5 +1,5 @@
 //! Run with YAPPER_BOT_TOKEN set: cargo run --example typed_bot
-use rappin::prelude::*;
+use rappin::*;
 use std::time::Duration;
 
 struct Roll {
@@ -24,12 +24,12 @@ impl FromArgs for Roll {
 #[tokio::main]
 async fn main() -> Result<()> {
     let token = std::env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+        .map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
     let bot = Bot::builder(token)
         .prefix("!")
         .mention_prefix(true)
-        .handler_concurrency(8)
-        .pending_batches(4)
+        .configure(|settings| settings.execution.concurrency = 8)
+        .configure(|settings| settings.execution.pending_batches = 4)
         // Authorization checks still refresh by default; lookup caching is an explicit choice.
         .lookup_cache(CachePolicy::new(256, Duration::from_secs(30)))
         .command_spec(
@@ -72,7 +72,8 @@ async fn main() -> Result<()> {
             Ok(())
         })
         .help_command("help")
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let monitor = tokio::spawn(async move {
         let mut status = handle.subscribe_transport();

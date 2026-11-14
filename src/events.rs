@@ -1,5 +1,5 @@
 //! Durable at-least-once polling. A single consumer owns each cursor file.
-use crate::{Client, Event, EventsResponse, Result, YappinError};
+use crate::{Client, Error, Event, EventsResponse, Result};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -58,7 +58,7 @@ impl EventCursor {
     pub async fn load(&self) -> Result<Option<u64>> {
         match tokio::fs::read(&self.path).await {
             Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|_| {
-                YappinError::Config("invalid event cursor: expected an unsigned event ID".into())
+                Error::Config("invalid event cursor: expected an unsigned event ID".into())
             }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
@@ -248,11 +248,11 @@ impl EventConsumer {
         let batch = self
             .pending
             .as_ref()
-            .ok_or_else(|| YappinError::Config("no delivered batch to acknowledge".into()))?;
+            .ok_or_else(|| Error::Config("no delivered batch to acknowledge".into()))?;
         if id < self.last.unwrap_or(0)
             || (id != batch.last && !batch.events.iter().any(|e| e.id == id))
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "cursor",
                 "ID was not delivered by this consumer",
             ));
@@ -291,10 +291,7 @@ impl Client {
         max_pages: usize,
     ) -> Result<crate::MessagesResponse> {
         if !(1..=100).contains(&max_pages) {
-            return Err(YappinError::validation(
-                "max_pages",
-                "must be between 1 and 100",
-            ));
+            return Err(Error::validation("max_pages", "must be between 1 and 100"));
         }
         let mut cursor = before;
         let mut out = crate::MessagesResponse {
@@ -344,10 +341,7 @@ impl Client {
         max_pages: usize,
     ) -> Result<Vec<crate::Member>> {
         if !(1..=100).contains(&max_pages) {
-            return Err(YappinError::validation(
-                "max_pages",
-                "must be between 1 and 100",
-            ));
+            return Err(Error::validation("max_pages", "must be between 1 and 100"));
         }
         let mut cursor = after;
         let mut out = vec![];

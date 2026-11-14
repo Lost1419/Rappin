@@ -1,6 +1,6 @@
 //! Synthetic, in-process evidence for the offline demo and tests. Never a live ACL oracle.
 use async_trait::async_trait;
-use rappin::{Api, Freshness, PermissionSnapshot, Result, YappinError};
+use rappin::{Api, Error, Freshness, PermissionSnapshot, Result};
 use reqwest::Method;
 use serde_json::{json, Value};
 use std::sync::{
@@ -57,8 +57,8 @@ impl Default for Fixture {
         }
     }
 }
-fn failure(status: u16) -> YappinError {
-    YappinError::Api {
+fn failure(status: u16) -> Error {
+    Error::Api {
         status,
         message: "fixture evidence read failed".into(),
         retry_after: None,

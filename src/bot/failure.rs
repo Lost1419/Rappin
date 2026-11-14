@@ -1,5 +1,5 @@
 //! Explicit completion decisions for failed command and button invocations.
-use crate::{RemoteError, Result, YappinError};
+use crate::{Error, RemoteError, Result};
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -21,7 +21,7 @@ use std::future::Future;
 ///             // Preserve unexpected/partial/uncertain failures for reconciliation.
 ///             Ok(FailureDisposition::Stop)
 ///         }
-///     }).build();
+///     }).build().expect("valid bot configuration");
 /// ```
 pub enum FailureClass {
     /// Typed user-input/check rejection; no incomplete handler work is implied.
@@ -46,7 +46,7 @@ pub enum FailureClass {
 ///             // Preserve unexpected/partial/uncertain failures for reconciliation.
 ///             Ok(FailureDisposition::Stop)
 ///         }
-///     }).build();
+///     }).build().expect("valid bot configuration");
 /// ```
 pub enum FailureDisposition {
     /// Reply to a typed rejection and complete it; propagate unexpected failures.
@@ -73,7 +73,7 @@ pub enum FailureDisposition {
 ///             // Preserve unexpected/partial/uncertain failures for reconciliation.
 ///             Ok(FailureDisposition::Stop)
 ///         }
-///     }).build();
+///     }).build().expect("valid bot configuration");
 /// ```
 pub enum HandlerKind {
     /// A native or worker command invocation.
@@ -97,7 +97,7 @@ pub enum HandlerKind {
 ///             // Preserve unexpected/partial/uncertain failures for reconciliation.
 ///             Ok(FailureDisposition::Stop)
 ///         }
-///     }).build();
+///     }).build().expect("valid bot configuration");
 /// ```
 pub struct HandlerFailure {
     /// Original intake event ID.
@@ -117,9 +117,9 @@ pub struct HandlerFailure {
 /// # Example
 ///
 /// ```rust
-/// use rappin::{EventProcessingFailure, YappinError};
-/// fn inspect(error: &YappinError) {
-///     if let YappinError::EventProcessing { report } = error {
+/// use rappin::{EventProcessingFailure, Error};
+/// fn inspect(error: &Error) {
+///     if let Error::EventProcessing { report } = error {
 ///         println!("Committed through {}; failed: {}", report.committed_cursor, report.failed_events.len());
 ///         for failure in &report.failed_events {
 ///             println!("Event {}: {}", failure.event_id, failure.error);
@@ -140,9 +140,9 @@ pub struct EventFailure {
 /// # Example
 ///
 /// ```rust
-/// use rappin::{EventProcessingFailure, YappinError};
-/// fn inspect(error: &YappinError) {
-///     if let YappinError::EventProcessing { report } = error {
+/// use rappin::{EventProcessingFailure, Error};
+/// fn inspect(error: &Error) {
+///     if let Error::EventProcessing { report } = error {
 ///         println!("Committed through {}; failed: {}", report.committed_cursor, report.failed_events.len());
 ///         for failure in &report.failed_events {
 ///             println!("Event {}: {}", failure.event_id, failure.error);
@@ -180,7 +180,7 @@ pub(crate) async fn catch<T>(future: impl Future<Output = Result<T>>) -> Result<
         .catch_unwind()
         .await
         .unwrap_or_else(|_| {
-            Err(YappinError::HandlerInterrupted {
+            Err(Error::HandlerInterrupted {
                 reason: "handler or failure callback panicked".into(),
                 source: None,
             })
@@ -188,7 +188,7 @@ pub(crate) async fn catch<T>(future: impl Future<Output = Result<T>>) -> Result<
 }
 
 impl super::Bot {
-    pub(super) fn failure_cause(&self, error: &YappinError) -> RemoteError {
+    pub(super) fn failure_cause(&self, error: &Error) -> RemoteError {
         serde_json::from_value(self.client().redact_credentials(error.to_json()))
             .expect("sanitized error structure")
     }
@@ -197,7 +197,7 @@ impl super::Bot {
         event_id: u64,
         kind: HandlerKind,
         handler: &str,
-        error: &YappinError,
+        error: &Error,
     ) -> HandlerFailure {
         let class = if error.is_command_rejection() {
             FailureClass::Rejected
@@ -235,7 +235,7 @@ impl super::Bot {
                             .redact_credentials(serde_json::json!({"message":message})),
                     ),
                     Err(error) if split => {
-                        return Err(YappinError::PartialWrite {
+                        return Err(Error::PartialWrite {
                             completed,
                             failed_step: index + 1,
                             source: Box::new(error),
@@ -254,7 +254,7 @@ impl super::Bot {
         event_id: u64,
         name: &str,
         usage: Option<String>,
-        error: YappinError,
+        error: Error,
     ) -> Result<()> {
         let info = self.failure_info(event_id, HandlerKind::Command, name, &error);
         if let Some(callback) = &self.handle.inner.command_failure_handler {
@@ -263,7 +263,7 @@ impl super::Bot {
                 Ok(FailureDisposition::Stop) => return Err(error),
                 Ok(FailureDisposition::Default) => (),
                 Err(handling_error) => {
-                    return Err(YappinError::FailureHandling {
+                    return Err(Error::FailureHandling {
                         source: Box::new(error),
                         handling_error: Box::new(handling_error),
                     })
@@ -274,26 +274,12 @@ impl super::Bot {
             let result = self
                 .reply_rejection(&ctx, &info.error, usage.as_deref())
                 .await;
-            return result.map_err(|handling_error| YappinError::FailureHandling {
+            return result.map_err(|handling_error| Error::FailureHandling {
                 source: Box::new(error),
                 handling_error: Box::new(handling_error),
             });
         }
-        if let Some(callback) = &self.handle.inner.command_error_handler {
-            let returned = info.error;
-            if let Err(handling_error) = catch(async {
-                callback(ctx, error).await;
-                Ok(())
-            })
-            .await
-            {
-                return Err(YappinError::FailureHandling {
-                    source: Box::new(returned.into()),
-                    handling_error: Box::new(handling_error),
-                });
-            }
-            return Err(returned.into());
-        }
+
         tracing::error!("Command /{name} failed: {}", info.error);
         Err(error)
     }
@@ -302,7 +288,7 @@ impl super::Bot {
         ctx: super::InteractionContext,
         event_id: u64,
         prefix: &str,
-        error: YappinError,
+        error: Error,
     ) -> Result<()> {
         let info = self.failure_info(event_id, HandlerKind::Button, prefix, &error);
         if let Some(callback) = &self.handle.inner.button_failure_handler {
@@ -311,7 +297,7 @@ impl super::Bot {
                 Ok(FailureDisposition::Stop) => return Err(error),
                 Ok(FailureDisposition::Default) => (),
                 Err(handling_error) => {
-                    return Err(YappinError::FailureHandling {
+                    return Err(Error::FailureHandling {
                         source: Box::new(error),
                         handling_error: Box::new(handling_error),
                     })
@@ -321,26 +307,12 @@ impl super::Bot {
         if info.class == FailureClass::Rejected {
             return catch(ctx.ephemeral(info.error.to_string()))
                 .await
-                .map_err(|handling_error| YappinError::FailureHandling {
+                .map_err(|handling_error| Error::FailureHandling {
                     source: Box::new(error),
                     handling_error: Box::new(handling_error),
                 });
         }
-        if let Some(callback) = &self.handle.inner.button_error_handler {
-            let returned = info.error;
-            if let Err(handling_error) = catch(async {
-                callback(ctx, error).await;
-                Ok(())
-            })
-            .await
-            {
-                return Err(YappinError::FailureHandling {
-                    source: Box::new(returned.into()),
-                    handling_error: Box::new(handling_error),
-                });
-            }
-            return Err(returned.into());
-        }
+
         tracing::error!("Button {prefix} failed: {}", info.error);
         Err(error)
     }

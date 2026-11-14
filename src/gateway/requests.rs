@@ -158,8 +158,8 @@ impl Drop for Cancel {
         }
     }
 }
-fn failure(submitted: bool, reason: &str) -> YappinError {
-    YappinError::Remote(crate::RemoteError {
+fn failure(submitted: bool, reason: &str) -> Error {
+    Error::Remote(crate::RemoteError {
         kind: "gateway_request".into(),
         message: reason.into(),
         status: None,
@@ -185,7 +185,7 @@ fn failure(submitted: bool, reason: &str) -> YappinError {
         ]),
     })
 }
-fn interrupted(submitted: bool, reason: &str, cause: Option<&crate::RemoteError>) -> YappinError {
+fn interrupted(submitted: bool, reason: &str, cause: Option<&crate::RemoteError>) -> Error {
     let mut error = failure(
         submitted,
         "gateway request did not receive a confirmed response",
@@ -199,7 +199,7 @@ fn interrupted(submitted: bool, reason: &str, cause: Option<&crate::RemoteError>
     }
     error.into()
 }
-fn termination(reason: &str, source: Option<&YappinError>) -> crate::RemoteError {
+fn termination(reason: &str, source: Option<&Error>) -> crate::RemoteError {
     let mut error = disconnected().to_remote();
     error.details.insert("reason".into(), reason.into());
     if let Some(source) = source {
@@ -211,8 +211,8 @@ fn termination(reason: &str, source: Option<&YappinError>) -> crate::RemoteError
 }
 // Pump tasks do not inherit the caller's availability task-local context.
 // Keep transient I/O distinguishable from terminal protocol/configuration errors.
-fn disconnected() -> YappinError {
-    YappinError::Remote(crate::RemoteError {
+fn disconnected() -> Error {
+    Error::Remote(crate::RemoteError {
         kind: "gateway_transport".into(),
         message: "gateway connection was interrupted".into(),
         status: None,
@@ -220,7 +220,7 @@ fn disconnected() -> YappinError {
         details: Default::default(),
     })
 }
-fn socket_error(error: tokio_tungstenite::tungstenite::Error) -> YappinError {
+fn socket_error(error: tokio_tungstenite::tungstenite::Error) -> Error {
     use tokio_tungstenite::tungstenite::Error;
     match error {
         Error::Io(error) => {
@@ -237,7 +237,7 @@ fn socket_error(error: tokio_tungstenite::tungstenite::Error) -> YappinError {
         Error::Protocol(
             tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
         ) => termination("connection_reset", None).into(),
-        _ => YappinError::Config("gateway returned an invalid protocol frame".into()),
+        _ => crate::Error::Config("gateway returned an invalid protocol frame".into()),
     }
 }
 impl RequestRouter {
@@ -246,7 +246,7 @@ impl RequestRouter {
             .as_ref()
             .is_some_and(|c| c.timeout.is_zero() || c.timeout > Duration::from_secs(120))
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "gateway_requests.timeout",
                 "must be greater than zero and at most 120 seconds",
             ));
@@ -483,7 +483,7 @@ pub(super) struct Pump {
     owner: Arc<PumpOwner>,
     delivery: Arc<EventDelivery>,
 }
-pub(super) fn event_backpressure() -> YappinError {
+pub(super) fn event_backpressure() -> Error {
     termination("event_backpressure", None).into()
 }
 impl Pump {
@@ -732,7 +732,7 @@ async fn send_frame(
 ) -> Result<()> {
     timeout(Duration::from_secs(1), socket.send(frame))
         .await
-        .map_err(|_| YappinError::from(termination("send_timeout", None)))?
+        .map_err(|_| Error::from(termination("send_timeout", None)))?
         .map_err(socket_error)
 }
 fn response(value: &Value) -> Result<reqwest::Response> {

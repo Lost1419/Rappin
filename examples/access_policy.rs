@@ -3,7 +3,7 @@
 mod fixture;
 #[path = "access_policy/policy.rs"]
 mod policy;
-use rappin::{capabilities::*, Api, Client, Result, YappinError};
+use rappin::{capabilities::*, Api, Client, Error, Result};
 use reqwest::Method;
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -43,9 +43,8 @@ async fn demo() -> Result<Value> {
     )
 }
 fn client() -> Result<Client> {
-    let token = std::env::var("YAPPER_BOT_TOKEN").map_err(|_| {
-        YappinError::Config("set YAPPER_BOT_TOKEN for read-only live inspection".into())
-    })?;
+    let token = std::env::var("YAPPER_BOT_TOKEN")
+        .map_err(|_| Error::Config("set YAPPER_BOT_TOKEN for read-only live inspection".into()))?;
     Ok(Client::new(token))
 }
 fn keys(value: &Value) -> Vec<String> {
@@ -59,13 +58,13 @@ async fn inspect(api: &impl Api) -> Result<Value> {
     let servers = api.request(Method::GET, "/servers", None).await?;
     let server = servers["servers"][0]["id"]
         .as_str()
-        .ok_or_else(|| YappinError::Config("no server visible to this credential".into()))?;
+        .ok_or_else(|| Error::Config("no server visible to this credential".into()))?;
     let inventory = api
         .request(Method::GET, &format!("/servers/{server}/channels"), None)
         .await?;
     let channel = inventory["channels"][0]["id"]
         .as_str()
-        .ok_or_else(|| YappinError::Config("no channel visible to this credential".into()))?;
+        .ok_or_else(|| Error::Config("no channel visible to this credential".into()))?;
     let row = api
         .request(Method::GET, &format!("/channels/{channel}"), None)
         .await?;
@@ -125,7 +124,7 @@ async fn main() -> Result<()> {
         [flag, server, requester, operation, file] if flag == "--assess" => {
             let parse = |s: &str| {
                 s.parse::<Uuid>()
-                    .map_err(|_| YappinError::validation("identity", "expected UUID"))
+                    .map_err(|_| Error::validation("identity", "expected UUID"))
             };
             let context = OperationContext::server(parse(server)?, parse(requester)?);
             let call = call(operation, &serde_json::from_slice(&std::fs::read(file)?)?)?;
@@ -136,7 +135,7 @@ async fn main() -> Result<()> {
                     .await?,
             )?
         }
-        _ => return Err(YappinError::Config(
+        _ => return Err(Error::Config(
             "usage: access_policy [--inspect | --assess SERVER REQUESTER OPERATION ARGUMENTS.json]"
                 .into(),
         )),

@@ -2,7 +2,7 @@
 
 Use the public APIs provided by the application's selected dependency. The
 catalogue/bindings require no optional Cargo features; the hierarchy and
-single-attempt helpers below require Rappin 0.1.20+. Keep model selection,
+single-attempt helpers below are available in the 2.0 development version. Keep model selection,
 prompts, inference, conversation state and persistence in the application.
 
 ## Discover and validate once
@@ -38,17 +38,17 @@ preflight does not guarantee a later registration or remote synchronization will
 succeed. Preserve existing routes and saved definitions when publication fails.
 Use `CommandSchema` / `dynamic_command` for runtime schemas that are not operation
 aliases. Existing typed commands should retain their parser and behavior.
-Workers can combine `command_schema`, `WorkerCog::dynamic_command` and `prepare`;
-do not assume native alias routing is identical to worker routing.
+Use `WorkerCog::command_spec` for the shared typed metadata, aliases, groups and
+checks. Runtime `dynamic_command` retains its documented single-name routing.
 
 ## API 1.4 resources
 
-For Rappin 0.1.32+, use `ResourceApiExt` on native/worker contexts and Client for
+Use `ApiExt` on native/worker contexts and Client for
 computed member permissions, resource resolution, explicit override routes and
 role lookup/reordering. `ComputedPermissionsPolicy` supplies fresh channel access
 for each requested actor and preserves absent flags as Unknown. Compose other
 checks with application policy. Check endpoint rollout and keep platform 403
-causes. See [API 1.4 resources](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.4.md).
+causes. See [API 1.4 resources](https://github.com/Lost1419/Rappin/blob/dev/docs/resources.md).
 
 Resource lifecycle listeners use `on_resource_event` natively or
 `Listener::ResourceEvent` in workers. That worker opt-in needs a protocol v9 parent.
@@ -84,7 +84,7 @@ Workers need `WorkerCog::single_attempt_api()` and a compatible parent. No DELET
 is automatically replayed, even with Retry-After. There is no atomic API operation
 combining requester assessment and deletion: account for revocation between them.
 
-Keep `YappinError::OperationAuthorization` reports, HTTP status/retry hints,
+Keep `Error::OperationAuthorization` reports, HTTP status/retry hints,
 partial-write receipts and uncertain outcomes in application-owned receipts.
 `ValidatedOperation` adds no whole-workflow retry or durable deduplication.
 

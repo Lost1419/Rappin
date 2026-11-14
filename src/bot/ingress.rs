@@ -3,7 +3,7 @@ mod conflicts;
 mod reconciliation;
 mod retirement;
 use super::{BotHandle, EventProcessingFailure};
-use crate::{Event, RemoteError, Result, YappinError};
+use crate::{Error, Event, RemoteError, Result};
 use conflicts::{hex, Evidence};
 pub use conflicts::{
     ConflictDisposition, IngressConflict, IngressConflictPolicy, IngressSource, PayloadDifference,
@@ -37,7 +37,7 @@ use uuid::Uuid;
 /// use rappin::{Bot, IngressConfig, IngressAdmissionPolicy};
 /// let mut config = IngressConfig::default();
 /// config.admission_policy = IngressAdmissionPolicy::PollingOnly;
-/// let bot = Bot::builder("unused-documentation-token").shared_ingress(config).build();
+/// let bot = Bot::builder("unused-documentation-token").configure(|settings| settings.persistence.ingress = Some(config)).build().expect("valid bot configuration");
 /// assert!(bot.handle().ingress().is_some());
 /// ```
 pub enum IngressAdmissionPolicy {
@@ -58,7 +58,7 @@ pub enum IngressAdmissionPolicy {
 /// use rappin::{Bot, IngressConfig, IngressAdmissionPolicy};
 /// let mut config = IngressConfig::default();
 /// config.admission_policy = IngressAdmissionPolicy::PollingOnly;
-/// let bot = Bot::builder("unused-documentation-token").shared_ingress(config).build();
+/// let bot = Bot::builder("unused-documentation-token").configure(|settings| settings.persistence.ingress = Some(config)).build().expect("valid bot configuration");
 /// assert!(bot.handle().ingress().is_some());
 /// ```
 pub struct IngressConfig {
@@ -292,7 +292,7 @@ pub struct Admission {
     /// Independent per-event processing receipt, when available.
     pub receipt: Option<EventReceipt>,
     /// Original structured admission failure, if present.
-    pub error: Option<YappinError>,
+    pub error: Option<Error>,
 }
 impl Admission {
     fn simple(status: AdmissionStatus) -> Self {
@@ -423,7 +423,7 @@ pub trait IngressStore: Send + Sync + 'static {
         &self,
         _decision: TimestampReconciliation,
     ) -> Result<()> {
-        Err(YappinError::Config(
+        Err(Error::Config(
             "atomic timestamp reconciliation storage is unsupported".into(),
         ))
     }
@@ -438,7 +438,7 @@ pub trait IngressStore: Send + Sync + 'static {
     /// }
     /// ```
     async fn commit_event_retirement(&self, _decision: EventRetirement) -> Result<()> {
-        Err(YappinError::Config(
+        Err(Error::Config(
             "atomic event retirement storage is unsupported".into(),
         ))
     }
@@ -590,7 +590,7 @@ impl EventIngress {
             || c.conflict_recovery_timeout > Duration::from_secs(300)
             || !(1..=1024).contains(&c.max_conflict_reports)
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "ingress.config",
                 "invalid claim, event-size or persistence-timeout bound",
             ));
@@ -643,7 +643,7 @@ impl EventIngress {
             {
                 let s = self.0.state.lock().unwrap();
                 if s.stopped {
-                    return Err(YappinError::Config("event ingress stopped".into()));
+                    return Err(Error::Config("event ingress stopped".into()));
                 }
                 if s.sender.is_some() {
                     return Ok(());
@@ -677,7 +677,7 @@ impl EventIngress {
                 return Admission {
                     status: AdmissionStatus::Error,
                     receipt: None,
-                    error: Some(YappinError::validation(
+                    error: Some(Error::validation(
                         "ingress.bot_id",
                         "event belongs to another authenticated bot",
                     )),
@@ -736,7 +736,7 @@ impl EventIngress {
         )
         .await
         .unwrap_or_else(|_| {
-            Err(YappinError::HandlerInterrupted {
+            Err(Error::HandlerInterrupted {
                 reason: "event admission timed out; inspect its receipt before resubmitting".into(),
                 source: None,
             })
@@ -814,7 +814,7 @@ impl EventIngress {
         drop(state);
         self.0.changed.notify_waiters();
     }
-    pub(super) async fn failure(&self) -> YappinError {
+    pub(super) async fn failure(&self) -> Error {
         loop {
             let changed = self.0.changed.notified();
             let deadline = {
@@ -829,7 +829,7 @@ impl EventIngress {
                                 <= tokio::time::Instant::now()
                         })
                 }) {
-                    return YappinError::Remote(RemoteError {
+                    return Error::Remote(RemoteError {
                         kind: "event_retirement".into(),
                         message:
                             "approved retirement did not receive matching polling confirmation"
@@ -867,7 +867,7 @@ impl EventIngress {
                         };
                         if let Some(report)=expired {
                             let mut guard=ConflictGuard{ingress:self.clone(),armed:true,conflict:Some(report.clone())};
-                            if let Err(error)=self.persist_conflict(&report).await {let error=YappinError::FailureHandling{source:Box::new(report.to_error()),handling_error:Box::new(error)};self.fatal(error.to_remote());guard.armed=false;return error;}
+                            if let Err(error)=self.persist_conflict(&report).await {let error=Error::FailureHandling{source:Box::new(report.to_error()),handling_error:Box::new(error)};self.fatal(error.to_remote());guard.armed=false;return error;}
                             guard.armed=false;return report.to_error();
                         }
                     }
@@ -898,8 +898,8 @@ impl EventIngress {
             .cloned()
             .collect()
     }
-    pub(super) fn recoverable_conflict(&self, error: &YappinError) -> bool {
-        if let YappinError::Remote(error) = error {
+    pub(super) fn recoverable_conflict(&self, error: &Error) -> bool {
+        if let Error::Remote(error) = error {
             if error.kind == "event_retirement"
                 && error.details.get("reason").and_then(|v| v.as_str())
                     == Some("awaiting_normal_polling_confirmation")
@@ -907,7 +907,7 @@ impl EventIngress {
                 return true;
             }
         }
-        matches!(error, YappinError::IngressConflict{conflict} if matches!(conflict.disposition,ConflictDisposition::AwaitingPolling|ConflictDisposition::PollingConfirmed|ConflictDisposition::AwaitingReconciliationPolling|ConflictDisposition::Reconciled|ConflictDisposition::AwaitingRetirementPolling|ConflictDisposition::Retired))
+        matches!(error, Error::IngressConflict{conflict} if matches!(conflict.disposition,ConflictDisposition::AwaitingPolling|ConflictDisposition::PollingConfirmed|ConflictDisposition::AwaitingReconciliationPolling|ConflictDisposition::Reconciled|ConflictDisposition::AwaitingRetirementPolling|ConflictDisposition::Retired))
     }
     async fn persist_conflict(&self, report: &IngressConflict) -> Result<()> {
         if let Some(store) = &self.0.store {
@@ -918,7 +918,7 @@ impl EventIngress {
                 && self.0.config.conflict_policy == IngressConflictPolicy::RetainCompletedAndPoll
                 && durability != AdmissionDurability::Durable
             {
-                return Err(YappinError::Config("durable conflict recovery requires IngressStore::record_conflict and load support".into()));
+                return Err(Error::Config("durable conflict recovery requires IngressStore::record_conflict and load support".into()));
             }
         }
         Ok(())
@@ -947,7 +947,7 @@ impl EventIngress {
                 state.status.conflict_reports_dropped =
                     state.status.conflict_reports_dropped.saturating_add(1);
             } else {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "ingress.conflicts",
                     "unresolved conflict diagnostic capacity exhausted",
                 ));
@@ -998,7 +998,7 @@ impl EventIngress {
             };
             state.status.conflicts = state.status.conflicts.saturating_add(1);
             if let Err(error) = self.remember(&mut state, report.clone()) {
-                let error = YappinError::FailureHandling {
+                let error = Error::FailureHandling {
                     source: Box::new(report.to_error()),
                     handling_error: Box::new(error),
                 };
@@ -1015,7 +1015,7 @@ impl EventIngress {
             conflict: Some(report.clone()),
         };
         if let Err(error) = self.persist_conflict(&report).await {
-            let error = YappinError::FailureHandling {
+            let error = Error::FailureHandling {
                 source: Box::new(report.to_error()),
                 handling_error: Box::new(error),
             };
@@ -1076,7 +1076,7 @@ impl EventIngress {
             let pending = report.clone();
             report.disposition = ConflictDisposition::PollingConfirmed;
             if let Err(error) = self.persist_conflict(&report).await {
-                let error = YappinError::FailureHandling {
+                let error = Error::FailureHandling {
                     source: Box::new(pending.to_error()),
                     handling_error: Box::new(error),
                 };
@@ -1155,7 +1155,7 @@ impl EventIngress {
                         conflict: Some(report.clone()),
                     };
                     if let Err(error) = self.persist_conflict(&report).await {
-                        let error = YappinError::FailureHandling {
+                        let error = Error::FailureHandling {
                             source: Box::new(report.to_error()),
                             handling_error: Box::new(error),
                         };
@@ -1284,7 +1284,7 @@ impl EventIngress {
         hash: [u8; 32],
     ) -> Result<Option<ClaimedEvent>> {
         if self.polling_only() && source != IngressSource::Polling {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "ingress.source",
                 "this source cannot admit work under the polling-only policy",
             ));
@@ -1387,9 +1387,7 @@ impl EventIngress {
             }
         }
         if state.stopped {
-            return Err(YappinError::Config(
-                "ingress stopped before event effects".into(),
-            ));
+            return Err(Error::Config("ingress stopped before event effects".into()));
         }
         Ok(())
     }
@@ -1400,9 +1398,9 @@ impl EventIngress {
     ) -> Result<T> {
         let result = tokio::time::timeout(self.0.config.persistence_timeout, future)
             .await
-            .unwrap_or_else(|_| Err(YappinError::Config("ingress persistence timed out".into())));
+            .unwrap_or_else(|_| Err(Error::Config("ingress persistence timed out".into())));
         result.map_err(|cause| {
-            YappinError::Remote(RemoteError {
+            Error::Remote(RemoteError {
                 kind: "ingress_storage".into(),
                 message: "durable ingress receipt operation failed".into(),
                 status: cause.status_code(),
@@ -1427,13 +1425,13 @@ impl EventIngress {
             let status = s
                 .claims
                 .get(&event.id)
-                .ok_or_else(|| YappinError::Config("ingress claim missing".into()))?
+                .ok_or_else(|| Error::Config("ingress claim missing".into()))?
                 .status
                 .borrow()
                 .clone();
             (
                 s.bot_id
-                    .ok_or_else(|| YappinError::Config("ingress identity unavailable".into()))?,
+                    .ok_or_else(|| Error::Config("ingress identity unavailable".into()))?,
                 status,
                 s.claims.get(&event.id).and_then(|claim| {
                     if claim.source == IngressSource::Recovery {
@@ -1488,7 +1486,7 @@ impl EventIngress {
             };
             status.error = error.or_else(|| {
                 (status.stage == ReceiptStage::Failed).then(|| {
-                    YappinError::HandlerInterrupted {
+                    Error::HandlerInterrupted {
                         reason:
                             "event effects may have started before queue publication or completion"
                                 .into(),
@@ -1506,7 +1504,7 @@ impl EventIngress {
         initial_checkpoint: Option<u64>,
     ) -> Result<Option<u64>> {
         if bot.is_nil() {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "ingress.bot_id",
                 "invalid authenticated bot identity",
             ));
@@ -1518,7 +1516,7 @@ impl EventIngress {
         let mut recovery = self.persist("load", store.load(bot)).await?;
         if recovery.polling_checkpoint.is_none() {
             if !recovery.records.is_empty() {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "ingress.recovery",
                     "stored receipts require their authoritative polling checkpoint",
                 ));
@@ -1529,19 +1527,19 @@ impl EventIngress {
             recovery.polling_checkpoint = Some(baseline);
         }
         if recovery.conflicts.len() > self.0.config.max_conflict_reports {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "ingress.recovery",
                 "stored conflict reports exceed configured bound",
             ));
         }
         if recovery.records.len() > self.0.config.max_claims {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "ingress.recovery",
                 "stored claims exceed configured bound",
             ));
         }
         if recovery.timestamp_reconciliations.len() > self.0.config.max_conflict_reports {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "ingress.recovery",
                 "stored reconciliation capacity exceeded",
             ));
@@ -1549,7 +1547,7 @@ impl EventIngress {
         let mut decisions = BTreeMap::new();
         for decision in &recovery.timestamp_reconciliations {
             if decision.bot_id != bot {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "ingress.recovery",
                     "reconciliation bot mismatch",
                 ));
@@ -1559,14 +1557,14 @@ impl EventIngress {
                 .insert(decision.event_id, decision.clone())
                 .is_some()
             {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "ingress.recovery",
                     "duplicate timestamp reconciliation",
                 ));
             }
         }
         if recovery.event_retirements.len() > self.0.config.max_conflict_reports {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "ingress.recovery",
                 "retirement capacity exceeded",
             ));
@@ -1574,7 +1572,7 @@ impl EventIngress {
         let mut retirements = BTreeMap::new();
         for decision in &recovery.event_retirements {
             if decision.bot_id != bot {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "ingress.recovery",
                     "retirement bot mismatch",
                 ));
@@ -1584,7 +1582,7 @@ impl EventIngress {
                 .insert(decision.event_id, decision.clone())
                 .is_some()
             {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "ingress.recovery",
                     "duplicate retirement decision",
                 ));
@@ -1594,7 +1592,7 @@ impl EventIngress {
         let mut uncertain = vec![];
         for record in recovery.records {
             if record.bot_id != bot || record.status.event_id != record.event.id {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "ingress.recovery",
                     "stored identity mismatch",
                 ));
@@ -1606,7 +1604,7 @@ impl EventIngress {
                 .is_some_and(|cursor| id <= cursor)
             {
                 if record.status.stage != ReceiptStage::Completed {
-                    return Err(YappinError::validation(
+                    return Err(Error::validation(
                         "ingress.recovery",
                         "unresolved claim below durable checkpoint",
                     ));
@@ -1624,7 +1622,7 @@ impl EventIngress {
                 uncertain.push(id);
             }
             if owner && self.polling_only() && record.source != Some(IngressSource::Polling) {
-                return Err(YappinError::validation("ingress.recovery","unconfirmed early-source claims require assessment before enabling polling-only admission"));
+                return Err(Error::validation("ingress.recovery","unconfirmed early-source claims require assessment before enabling polling-only admission"));
             }
             if owner {
                 status.stage = ReceiptStage::Queued;
@@ -1643,7 +1641,7 @@ impl EventIngress {
                     self.conflict(&record.event, IngressSource::Recovery, hash)
                         .await?;
                 }
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "ingress.recovery",
                     "duplicate stored claim",
                 ));
@@ -1674,7 +1672,7 @@ impl EventIngress {
                 )
                 .is_some()
             {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "ingress.recovery",
                     "duplicate stored claim",
                 ));
@@ -1691,7 +1689,7 @@ impl EventIngress {
         let mut state = self.0.state.lock().unwrap();
         for mut conflict in recovery.conflicts {
             if !conflict.validate() || conflict.bot_id != bot {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "ingress.recovery",
                     "invalid stored conflict diagnostics",
                 ));
@@ -1701,10 +1699,7 @@ impl EventIngress {
                 continue;
             }
             let claim = state.claims.get_mut(&conflict.event_id).ok_or_else(|| {
-                YappinError::validation(
-                    "ingress.recovery",
-                    "conflict requires its retained receipt",
-                )
+                Error::validation("ingress.recovery", "conflict requires its retained receipt")
             })?;
             if let Some(retirement) = &claim.retirement {
                 // The complete conflict multiset was validated before restoration.
@@ -1720,7 +1715,7 @@ impl EventIngress {
             if hex(&claim.fingerprint) != conflict.existing_fingerprint
                 || claim.status.borrow().stage != ReceiptStage::Completed
             {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "ingress.recovery",
                     "conflict does not match a completed retained receipt",
                 ));
@@ -1758,7 +1753,7 @@ impl EventIngress {
             state.status.committed_cursor = cursor;
         }
         if !uncertain.is_empty() {
-            return Err(YappinError::Remote(RemoteError{kind:"ingress_recovery".into(),message:"stored events have uncertain or failed effects; reconcile receipts before restarting intake".into(),status:None,retry_after:None,details:BTreeMap::from([("event_ids".into(),serde_json::json!(uncertain)),("retry_safety".into(),"do_not_replay_workflow".into()),("outcome".into(),"unknown".into())])}));
+            return Err(Error::Remote(RemoteError{kind:"ingress_recovery".into(),message:"stored events have uncertain or failed effects; reconcile receipts before restarting intake".into(),status:None,retry_after:None,details:BTreeMap::from([("event_ids".into(),serde_json::json!(uncertain)),("retry_safety".into(),"do_not_replay_workflow".into()),("outcome".into(),"unknown".into())])}));
         }
         Ok(recovery.polling_checkpoint)
     }
@@ -1771,9 +1766,7 @@ impl EventIngress {
     ) -> Result<Vec<ClaimedEvent>> {
         let mut s = self.0.state.lock().unwrap();
         if s.stopped {
-            return Err(YappinError::Config(
-                "event ingress stopped during startup".into(),
-            ));
+            return Err(Error::Config("event ingress stopped during startup".into()));
         }
         s.sender = Some(sender);
         s.runtime = Some((client, auto_ack));
@@ -1818,7 +1811,7 @@ impl EventIngress {
             .unwrap()
             .runtime
             .clone()
-            .ok_or_else(|| YappinError::Config("ingress runtime unavailable".into()))?;
+            .ok_or_else(|| Error::Config("ingress runtime unavailable".into()))?;
         let mut prepared = None;
         if event.kind == "interaction" {
             if let Ok(crate::EventData::Interaction(mut interaction)) = event.parse_data() {
@@ -1939,7 +1932,7 @@ impl EventIngress {
                 ReceiptStage::Started => {
                     status.stage = ReceiptStage::Failed;
                     status.error = Some(
-                        YappinError::HandlerInterrupted {
+                        Error::HandlerInterrupted {
                             reason: "event runner cancelled after effects may have started".into(),
                             source: None,
                         }
@@ -1953,7 +1946,7 @@ impl EventIngress {
     }
     pub(super) fn raw_pending(&self, events: &[Event]) -> Result<()> {
         if events.len() > self.0.config.max_claims {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "ingress.batch",
                 "raw polling batch exceeds configured claim capacity",
             ));
@@ -2018,7 +2011,7 @@ impl BotHandle {
     /// use rappin::{Bot, IngressConfig, IngressAdmissionPolicy};
     /// let mut config = IngressConfig::default();
     /// config.admission_policy = IngressAdmissionPolicy::PollingOnly;
-    /// let bot = Bot::builder("unused-documentation-token").shared_ingress(config).build();
+    /// let bot = Bot::builder("unused-documentation-token").configure(|settings| settings.persistence.ingress = Some(config)).build().expect("valid bot configuration");
     /// assert!(bot.handle().ingress().is_some());
     /// ```
     pub fn ingress(&self) -> Option<EventIngress> {
@@ -2035,7 +2028,7 @@ impl Drop for ConflictGuard {
     fn drop(&mut self) {
         if self.armed {
             self.ingress.fatal(
-                YappinError::HandlerInterrupted {
+                Error::HandlerInterrupted {
                     reason: "conflict evidence persistence was interrupted; retained receipts require reconciliation".into(),
                     source: self.conflict.as_ref().map(|report| Box::new(report.to_error())),
                 }
@@ -2054,23 +2047,20 @@ impl Drop for ConflictGuard {
 /// let digest = rappin::canonical_event_fingerprint(&event)?;
 /// assert_eq!(digest.len(), 64);
 /// // A content address is not authentication, idempotency or proof of remote success.
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub fn canonical_event_fingerprint(event: &Event) -> Result<String> {
     Ok(hex(&event_fingerprint(event, 16 * 1024 * 1024)?))
 }
 fn event_fingerprint(event: &Event, limit: usize) -> Result<[u8; 32]> {
     if event.id == 0 {
-        return Err(YappinError::validation(
-            "ingress.event_id",
-            "must be nonzero",
-        ));
+        return Err(Error::validation("ingress.event_id", "must be nonzero"));
     }
     let mut canonical = serde_json::to_value(event)?;
     conflicts::canonicalize(&mut canonical);
     let bytes = serde_json::to_vec(&canonical)?;
     if bytes.len() > limit {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "ingress.event",
             "event exceeds configured size bound",
         ));
@@ -2114,7 +2104,7 @@ mod recovery_state_tests {
                 } else {
                     incoming.created_at = Some("2026-01-01T00:00:00Z".parse().unwrap());
                 }
-                let cause = YappinError::Remote(RemoteError {
+                let cause = Error::Remote(RemoteError {
                     kind: "gateway_request".into(),
                     message: "unknown submitted write".into(),
                     status: Some(502),

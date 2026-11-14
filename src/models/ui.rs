@@ -3,14 +3,14 @@
 //! ```rust
 //! use rappin::{SelectMenu, SelectOption};
 //! let menu = SelectMenu::new("fruit").option(SelectOption::new("Apple", "apple"));
-//! let body = rappin::UiMessageBody::new("Choose fruit").component(menu.row());
-//! body.validate(true).unwrap();
+//! let body = rappin::CreateMessage::new("Choose fruit").component(menu.row());
+//! body.validate().unwrap();
 //! ```
 //! Additive API 1.3 payloads; legacy Component/Button/InteractionCallback remain unchanged.
 use super::*;
-use crate::{Result, YappinError};
+use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
@@ -214,234 +214,10 @@ impl SelectMenu {
     /// let row = menu.row();
     /// assert_eq!(row.as_json()["components"][0]["custom_id"], "fruit");
     /// ```
-    pub fn row(self) -> UiComponent {
-        UiComponent::row([UiComponent(json!(self))])
+    pub fn row(self) -> Component {
+        Component::row([Component::Raw(json!(self))])
     }
 }
-/// A lossless component tree supporting classic and V2 buttons/select rows.
-/// Deserialization preserves unknown fields; outbound requests validate the tree.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
-/// # Example
-///
-/// ```rust
-/// use rappin::{UiComponent, Button};
-/// let row = UiComponent::row([Button::primary("Next", "next")]);
-/// assert_eq!(row.as_json()["type"], "row");
-/// ```
-pub struct UiComponent(Value);
-impl UiComponent {
-    /// Collect buttons or one select into an action row; outbound validation checks row rules.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use rappin::{UiComponent, Button};
-    /// let row = UiComponent::row([Button::primary("Next", "next")]);
-    /// assert_eq!(row.as_json()["type"], "row");
-    /// ```
-    pub fn row(children: impl IntoIterator<Item = impl Into<Self>>) -> Self {
-        Self(
-            json!({"type":"row","components":children.into_iter().map(Into::into).collect::<Vec<Self>>()}),
-        )
-    }
-    /// Collect child components into a Components V2 container; send it in a layout body.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let panel = rappin::UiComponent::container([rappin::UiComponent::row([rappin::Button::primary("Next", "next")])]);
-    /// assert_eq!(panel.as_json()["type"], 17);
-    /// ```
-    pub fn container(children: impl IntoIterator<Item = impl Into<Self>>) -> Self {
-        Self(
-            json!({"type":17,"components":children.into_iter().map(Into::into).collect::<Vec<Self>>()}),
-        )
-    }
-    /// Create a lossless button component using a typed emoji reference.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let button = rappin::UiComponent::button(rappin::Button::primary("Approve", "approve"), "✅");
-    /// assert_eq!(button.as_json()["emoji"], "✅");
-    /// ```
-    pub fn button(button: Button, emoji: impl Into<EmojiRef>) -> Self {
-        let mut value = json!(button);
-        value["emoji"] = json!(emoji.into());
-        Self(value)
-    }
-    /// Borrow the lossless component JSON without discarding unknown response fields.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use rappin::{UiComponent, Button};
-    /// let row = UiComponent::row([Button::primary("Next", "next")]);
-    /// assert_eq!(row.as_json()["type"], "row");
-    /// ```
-    pub fn as_json(&self) -> &Value {
-        &self.0
-    }
-}
-impl From<Component> for UiComponent {
-    fn from(value: Component) -> Self {
-        Self(json!(value))
-    }
-}
-impl From<Button> for UiComponent {
-    fn from(value: Button) -> Self {
-        Self(json!(value))
-    }
-}
-impl From<SelectMenu> for UiComponent {
-    fn from(value: SelectMenu) -> Self {
-        Self(json!(value))
-    }
-}
-
-/// Create/edit body for new UI trees, with explicit patch nulls. Old payload types
-/// keep their existing fields and exhaustive enums.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-/// # Example
-///
-/// ```rust
-/// use rappin::{SelectMenu, SelectOption};
-/// let menu = SelectMenu::new("fruit").option(SelectOption::new("Apple", "apple"));
-/// let body = rappin::UiMessageBody::new("Choose fruit").component(menu.row());
-/// body.validate(true).unwrap();
-/// ```
-pub struct UiMessageBody {
-    /// Standalone server sticker for creation. Text, embeds, components and files must be empty.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sticker_id: Option<Uuid>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::utils::deserialize_patch"
-    )]
-    /// Text patch: omission retains text; `Some(None)` explicitly clears it.
-    pub content: Option<Option<String>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::utils::deserialize_patch"
-    )]
-    /// Embed patch: omission retains cards; `Some(None)` clears them.
-    pub embeds: Option<Option<Vec<Embed>>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "crate::utils::deserialize_patch"
-    )]
-    /// Lossless component patch: omission retains controls; `Some(None)` clears them.
-    pub components: Option<Option<Vec<UiComponent>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// Optional message flags; 32768 selects Components V2 layout rendering.
-    pub flags: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// Reply target for creation only; validation rejects changing it in an edit.
-    pub reply_to: Option<Uuid>,
-}
-impl UiMessageBody {
-    /// Create a text body with all patch fields otherwise omitted.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let body = rappin::UiMessageBody::new("Choose an option");
-    /// assert_eq!(body.content, Some(Some("Choose an option".into())));
-    /// ```
-    pub fn new(content: impl Into<String>) -> Self {
-        Self {
-            content: Some(Some(content.into())),
-            ..Self::default()
-        }
-    }
-    /// Create a Components V2 layout body and set flag 32768.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let body = rappin::UiMessageBody::layout([rappin::UiComponent::container([rappin::UiComponent::row([rappin::Button::primary("Next", "next")])])]);
-    /// assert_eq!(body.flags, Some(rappin::IS_COMPONENTS_V2));
-    /// ```
-    pub fn layout(components: impl IntoIterator<Item = impl Into<UiComponent>>) -> Self {
-        Self {
-            components: Some(Some(components.into_iter().map(Into::into).collect())),
-            flags: Some(crate::utils::IS_COMPONENTS_V2),
-            ..Self::default()
-        }
-    }
-    /// Append an extended UI component, preserving existing components.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use rappin::{SelectMenu, SelectOption};
-    /// let menu = SelectMenu::new("fruit").option(SelectOption::new("Apple", "apple"));
-    /// let body = rappin::UiMessageBody::new("Choose fruit").component(menu.row());
-    /// body.validate(true).unwrap();
-    /// ```
-    pub fn component(mut self, component: impl Into<UiComponent>) -> Self {
-        self.components
-            .get_or_insert_with(|| Some(vec![]))
-            .get_or_insert_with(Vec::new)
-            .push(component.into());
-        self
-    }
-    /// Validate a create or edit body. Pass false for edits; changing a reply target on an edit is rejected.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// let mut patch = rappin::UiMessageBody::new("Updated");
-    /// patch.reply_to = Some(uuid::Uuid::nil());
-    /// assert!(patch.validate(false).is_err());
-    /// patch.reply_to = None;
-    /// patch.validate(false).unwrap();
-    /// ```
-    pub fn validate(&self, creating: bool) -> Result<()> {
-        if !creating && self.reply_to.is_some() {
-            return Err(YappinError::validation(
-                "reply_to",
-                "reply target cannot be changed by an edit",
-            ));
-        }
-        crate::validation::validate_message(&json!(self), creating)
-    }
-}
-/// Lossless response view for messages containing components not representable by
-/// the legacy Component enum. Extra message fields remain available in `extra`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-/// # Example
-///
-/// ```rust
-/// let message: rappin::UiMessage = serde_json::from_value(serde_json::json!({"id":uuid::Uuid::nil(),"channel_id":uuid::Uuid::nil(),"author_id":uuid::Uuid::nil(),"created_at":"2026-11-08T00:00:00Z","future_field":true})).unwrap();
-/// assert_eq!(message.extra["future_field"], true);
-/// ```
-pub struct UiMessage {
-    /// Unique message identifier.
-    pub id: Uuid,
-    /// Channel containing the message.
-    pub channel_id: Uuid,
-    /// User who sent the message.
-    pub author_id: Uuid,
-    /// UTC time the message was created.
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    #[serde(default)]
-    /// Message text; defaults to an empty string when omitted.
-    pub content: String,
-    #[serde(default)]
-    /// Lossless component trees, including unknown response fields.
-    pub components: Option<Vec<UiComponent>>,
-    #[serde(flatten)]
-    /// Message fields not modeled explicitly, preserved for forward-compatible reads.
-    pub extra: BTreeMap<String, Value>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
@@ -731,6 +507,16 @@ pub struct UiInteraction {
     /// Raw command arguments when included in the interaction event.
     pub args: Option<String>,
 }
+impl From<InteractionEvent> for UiInteraction {
+    fn from(interaction: InteractionEvent) -> Self {
+        Self {
+            interaction,
+            values: None,
+            command: None,
+            args: None,
+        }
+    }
+}
 impl UiInteraction {
     /// Decode a select, modal or command interaction from a raw event. Rejects mismatched select/modal values and preserves the base credential and deadline metadata.
     ///
@@ -743,7 +529,7 @@ impl UiInteraction {
     /// ```
     pub fn from_event(event: &crate::Event) -> Result<Self> {
         if !matches!(event.kind.as_str(), "interaction" | "command") {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "event",
                 "requires interaction or command",
             ));
@@ -755,12 +541,12 @@ impl UiInteraction {
         value.interaction.created_at = value.interaction.created_at.or(event.created_at);
         match value.interaction.kind.as_deref() {
             Some("select") if !matches!(value.values, Some(InteractionValues::Selected(_))) => Err(
-                YappinError::validation("values", "select requires selected values"),
+                Error::validation("values", "select requires selected values"),
             ),
             Some("modal_submit")
                 if !matches!(value.values, Some(InteractionValues::Submitted(_))) =>
             {
-                Err(YappinError::validation(
+                Err(Error::validation(
                     "values",
                     "modal_submit requires submitted fields",
                 ))
@@ -812,24 +598,6 @@ impl crate::collectors::Collectible for UiInteraction {
     fn from_event(event: &crate::Event) -> Option<Self> {
         Self::from_event(event).ok()
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-/// A page of messages retaining extended UI component data.
-///
-/// # Example
-///
-/// ```rust
-/// let page: rappin::UiMessagesResponse = serde_json::from_str(r#"{"messages":[]}"#).unwrap();
-/// assert!(page.authors.is_empty());
-/// ```
-pub struct UiMessagesResponse {
-    /// Messages with lossless component data, in API page order.
-    pub messages: Vec<UiMessage>,
-    #[serde(default)]
-    /// Expanded author profiles when included in the response.
-    pub authors: Vec<User>,
 }
 
 impl Button {

@@ -1,6 +1,6 @@
 //! Offline, operator-only project generation. Never exposed as an MCP operation.
 use clap::{Args, ValueEnum};
-use rappin::{Result, YappinError};
+use rappin::{Error, Result};
 use serde_json::{json, Value};
 use std::{collections::BTreeMap, fs, io::Write, path::PathBuf};
 
@@ -14,7 +14,7 @@ pub(super) enum Template {
 pub(super) struct Options {
     /// New directory; its parent must exist. Existing directories are refused.
     pub destination: PathBuf,
-    #[arg(long, value_enum, default_value = "basic")]
+    #[arg(long, value_enum, default_value = "gateway")]
     pub template: Template,
     /// Cargo package name; defaults to the destination's final component.
     #[arg(long)]
@@ -23,8 +23,8 @@ pub(super) struct Options {
     #[arg(long, default_value = "!")]
     pub prefix: String,
 }
-fn invalid(message: &str) -> YappinError {
-    YappinError::Config(message.into())
+fn invalid(message: &str) -> Error {
+    Error::Config(message.into())
 }
 fn files(options: &Options) -> Result<BTreeMap<&'static str, String>> {
     let name = options
@@ -70,9 +70,14 @@ fn files(options: &Options) -> Result<BTreeMap<&'static str, String>> {
         ));
     }
     let features = match options.template {
-        Template::Basic => "",
-        Template::Gateway => ", features = [\"gateway\"]",
-        Template::Worker => ", features = [\"hot-reload\"]",
+        Template::Basic => r#", features = ["derive"]"#,
+        Template::Gateway => r#", features = ["gateway", "derive"]"#,
+        Template::Worker => r#", features = ["gateway", "hot-reload", "derive"]"#,
+    };
+    let source = if env!("CARGO_PKG_VERSION").contains("-dev.") {
+        ", git = \"https://github.com/Lost1419/Rappin\", branch = \"dev\""
+    } else {
+        ""
     };
     let manifest = format!(
         r#"[package]
@@ -83,33 +88,49 @@ rust-version = "{rust_version}"
 default-run = "{name}"
 
 [dependencies]
-rappin = {{ package = "rappin-rs", version = "{}"{features} }}
+rappin = {{ package = "rappin-rs", version = "{version}"{source}{features} }}
 tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
+tracing-subscriber = "0.3"
 "#,
-        env!("CARGO_PKG_VERSION"),
-        rust_version = env!("CARGO_PKG_RUST_VERSION")
+        version = env!("CARGO_PKG_VERSION"),
+        rust_version = env!("CARGO_PKG_RUST_VERSION"),
     );
-    let mut main = String::from("use rappin::prelude::*;\n\n#[tokio::main]\nasync fn main() -> Result<()> {\n    let token = std::env::var(\"YAPPER_BOT_TOKEN\")\n        .map_err(|_| YappinError::Config(\"set YAPPER_BOT_TOKEN\".into()))?;\n    let bot = Bot::builder(token)\n");
-    // Debug formatting produces a Rust string literal, including Rust Unicode escapes.
-    main.push_str(&format!("        .prefixes_with(|_| async {{ Ok(vec![{:?}.to_owned()]) }})\n        .cursor_file(\"./state/events.json\")\n", options.prefix));
-    if matches!(options.template, Template::Gateway) {
-        main.push_str("        .gateway(rappin::gateway::DEFAULT_GATEWAY)\n");
+    let mut main = String::from("use rappin::prelude::*;\nuse rappin::bot::{PersistenceConfig, TransportConfig};\n\n#[tokio::main]\nasync fn main() -> Result<()> {\n    tracing_subscriber::fmt::init();\n    let bot = Bot::from_env()?\n");
+    main.push_str(&format!("        .prefixes([{:?}])\n", options.prefix));
+    main.push_str("        .configure(|settings| settings.persistence = PersistenceConfig::file(\"./state/events.json\"))\n");
+    if !matches!(options.template, Template::Basic) {
+        main.push_str("        .transport(TransportConfig::gateway())\n");
+    } else {
+        main.push_str("        .transport(TransportConfig::polling())\n");
     }
+    main.push_str("        .help_command(\"help\")\n");
     if !matches!(options.template, Template::Worker) {
         main.push_str("        .command(\"ping\", \"Check connectivity\", |ctx| async move {\n            ctx.reply(\"pong\").await?;\n            Ok(())\n        })\n");
     }
-    main.push_str("        .build();\n");
+    main.push_str("        .build()?;\n");
     if matches!(options.template, Template::Worker) {
-        main.push_str("    let cog = rappin::hot_reload::HotReload::load(\n        bot.handle(),\n        rappin::hot_reload::WorkerProject::example(\"Cargo.toml\", \"worker\"),\n    ).await?;\n    let _watch = cog.watch(std::time::Duration::from_millis(500)).await?;\n");
+        main.push_str("    let reload = rappin::hot_reload::HotReload::load(\n        bot.handle(),\n        rappin::hot_reload::WorkerProject::example(\"Cargo.toml\", \"worker\"),\n    ).await?;\n    let _watch = reload.watch(std::time::Duration::from_millis(500)).await?;\n");
     }
     main.push_str("    bot.run().await\n}\n");
+    let readme = format!(
+        "# {name}\n\nSet `YAPPER_BOT_TOKEN` in this bot process environment, then run `cargo run`.\nSend `{}ping` to receive `pong`, or `{}help` for registered command help.\n\nEdit `src/main.rs` to add commands. This project enables the optional argument\nderive so typed commands can generate their parsing and help together.\n\n## Configuration\n\n- Startup logs report connection and command synchronization.\n- `state/events.json` stores restart checkpoints and is ignored by Git.\n- Set static prefixes with `prefixes`, or supply your own async/database-backed resolver with `prefixes_with`.\n- Register application-owned state with `state(Arc<T>)`.\n- Your application selects databases, cache backends and durable receipts.\n\nExpected input or permission rejections finish after a successful reply.\nUnexpected errors, failed replies and uncertain effects retain the checkpoint\nbarrier. Reconcile unfinished work before replaying it.\n\n{}\nDo not commit tokens. Generation is offline. Building can contact the registry,\nand running this bot contacts Yapin.\n",
+        options.prefix, options.prefix,
+        if matches!(options.template, Template::Basic) {
+            "This starter uses long polling."
+        } else if matches!(options.template, Template::Worker) {
+            "This starter prefers WebSocket events with polling fallback. Edit `examples/worker.rs` to rebuild and replace the worker. Workers and their build scripts/procedural macros execute trusted code. Worker stdout is reserved for IPC. Each worker generation initializes its own process-local state."
+        } else {
+            "This starter prefers WebSocket events with polling fallback. HTTP API requests use their normal transport policy."
+        }
+    );
     let mut result = BTreeMap::from([
-        ("Cargo.toml", manifest), ("src/main.rs", main),
+        ("Cargo.toml", manifest),
+        ("src/main.rs", main),
         (".gitignore", "/target/\n/state/\n/.env\n".into()),
-        ("README.md", format!("# {name}\n\nSet `YAPPER_BOT_TOKEN` in your process environment, then run `cargo run`.\nThe generator never reads credentials or contacts Yapin. Cargo builds may access\nthe registry; normal bot execution contacts Yapin. Do not commit tokens.\n\nThe initial prefix is configured in `src/main.rs`; use `prefixes_with` for\napplication-owned dynamic prefixes. No database or cache backend is prescribed.\nThe local `state/events.json` is a restart checkpoint; production persistence,\napprovals and mutation reconciliation remain application decisions.\n\n{}", if matches!(options.template, Template::Worker) { "Edit `examples/worker.rs` while the parent runs to replace the worker.\nCompilation runs trusted build scripts/procedural macros; workers are trusted\nexecutables, not sandboxed code. Keep worker stdout reserved for the protocol.\nHold the reload controller and watch guard for the bot's lifetime.\n" } else if matches!(options.template, Template::Gateway) { "The gateway transport uses the SDK's default endpoint and retains its supported\npolling fallback. Configure transport policy explicitly for deployment needs.\n" } else { "This template uses the default polling transport.\n" })),
+        ("README.md", readme),
     ]);
     if matches!(options.template, Template::Worker) {
-        result.insert("examples/worker.rs", "use rappin::{hot_reload::WorkerCog, prelude::*};\n\n#[tokio::main]\nasync fn main() -> Result<()> {\n    WorkerCog::new(\"commands\")\n        .command(\"ping\", \"Check the worker\", |ctx| async move {\n            ctx.reply(\"pong from Rust worker\").await\n        })\n        .run().await\n}\n".into());
+        result.insert("examples/worker.rs", "use rappin::{hot_reload::WorkerCog, prelude::*};\n\n#[tokio::main]\nasync fn main() -> Result<()> {\n    WorkerCog::new(\"commands\")\n        .command_spec(CommandSpec::<()>::new(\"ping\", \"Check connectivity\"), |ctx, ()| async move {\n            ctx.reply(\"pong\").await\n        })\n        .run().await\n}\n".into());
     }
     Ok(result)
 }

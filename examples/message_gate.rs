@@ -1,12 +1,12 @@
 //! Run with YAPPER_BOT_TOKEN and BOT_ALLOWED_USER (a user UUID).
 //! This demonstrates an application-owned allowlist, not platform ACL inference.
-use rappin::prelude::*;
+use rappin::*;
 use uuid::Uuid;
 
 struct NaturalLanguage;
 #[async_trait::async_trait]
 impl EventHandler for NaturalLanguage {
-    async fn on_message_result(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
+    async fn on_message(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
         if ctx.command.is_none() && ctx.content().eq_ignore_ascii_case("hello") {
             ctx.reply("Hello! Your message passed the application gate.")
                 .await?;
@@ -19,11 +19,11 @@ impl EventHandler for NaturalLanguage {
 #[tokio::main]
 async fn main() -> Result<()> {
     let token = std::env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+        .map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
     let allowed: Uuid = std::env::var("BOT_ALLOWED_USER")
         .ok()
         .and_then(|s| s.parse().ok())
-        .ok_or_else(|| YappinError::Config("set BOT_ALLOWED_USER to a user UUID".into()))?;
+        .ok_or_else(|| Error::Config("set BOT_ALLOWED_USER to a user UUID".into()))?;
     Bot::builder(token)
         .message_gate(move |ctx| async move {
             if ctx.author_id() != allowed {
@@ -51,6 +51,7 @@ async fn main() -> Result<()> {
             Ok(())
         })
         .build()
+        .expect("valid bot configuration")
         .run()
         .await
 }

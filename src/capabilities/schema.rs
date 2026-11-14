@@ -193,7 +193,7 @@ pub(super) fn body_schema(name: &str) -> Option<Value> {
 /// let schema = serde_json::json!({"type":"integer", "minimum":1, "maximum":100});
 /// validate_schema(&schema, &serde_json::json!(20))?;
 /// assert!(validate_schema(&schema, &serde_json::json!(101)).is_err());
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub fn validate_schema(schema: &Value, value: &Value) -> Result<()> {
     validate_at(schema, schema, value, "arguments", false, 0)
@@ -209,7 +209,7 @@ fn validate_at(
     partial: bool,
     depth: usize,
 ) -> Result<()> {
-    let invalid = |why: &str| YappinError::validation(path, why);
+    let invalid = |why: &str| Error::validation(path, why);
     if depth > 64 {
         return Err(invalid("schema nesting exceeds 64"));
     }
@@ -293,7 +293,7 @@ fn validate_at(
             if let Some(required) = schema["required"].as_array() {
                 for key in required.iter().filter_map(Value::as_str) {
                     if !object.contains_key(key) {
-                        return Err(YappinError::validation(
+                        return Err(Error::validation(
                             format!("{path}.{key}"),
                             "required argument",
                         ));
@@ -379,18 +379,18 @@ fn validate_at(
 /// use rappin::capabilities::{bundled_schema, endpoint_schema};
 /// let operation = endpoint_schema(bundled_schema(), "/me", "get")?;
 /// assert!(operation.is_object());
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub fn endpoint_schema(spec: &Value, path: &str, method: &str) -> Result<Value> {
     let method = method.to_ascii_lowercase();
     let item = spec["paths"]
         .get(path)
-        .ok_or_else(|| YappinError::validation("path", "unknown API path template"))?;
+        .ok_or_else(|| Error::validation("path", "unknown API path template"))?;
     let mut operation = item
         .get(&method)
         .filter(|v| v.is_object())
         .cloned()
-        .ok_or_else(|| YappinError::validation("method", "unknown HTTP operation"))?;
+        .ok_or_else(|| Error::validation("method", "unknown HTTP operation"))?;
     if let Some(parameters) = item.get("parameters") {
         operation["path_parameters"] = parameters.clone();
     }
@@ -422,11 +422,11 @@ pub fn endpoint_schema(spec: &Value, path: &str, method: &str) -> Result<Value> 
         }
         let parts: Vec<_> = reference.split('/').collect();
         if parts.len() != 4 || parts[0] != "#" || parts[1] != "components" {
-            return Err(YappinError::Config("unsupported schema reference".into()));
+            return Err(Error::Config("unsupported schema reference".into()));
         }
         let value = spec
             .pointer(reference.trim_start_matches('#'))
-            .ok_or_else(|| YappinError::Config("missing schema reference".into()))?;
+            .ok_or_else(|| Error::Config("missing schema reference".into()))?;
         refs(value, &mut queue);
         components[parts[2]][parts[3]] = value.clone();
     }

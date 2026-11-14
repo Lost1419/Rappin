@@ -37,7 +37,7 @@ serde_json="1"
     )
     .unwrap();
     std::fs::write(project.0.join("src/main.rs"),r#"
-use rappin::{hot_reload::{WorkerCog,Listener,CogEvent},ResourceApiExt,ResourceEventKind,PermissionTarget,PermissionOverride,Result,YappinError};
+use rappin::{hot_reload::{WorkerCog,Listener,CogEvent},ApiExt,ResourceEventKind,PermissionTarget,PermissionOverride,Result,Error};
 #[tokio::main]
 async fn main()->Result<()> {
     assert!(std::env::var_os("YAPPER_BOT_TOKEN").is_none());
@@ -47,12 +47,12 @@ async fn main()->Result<()> {
             assert_eq!(event.data["type"],"voice");
             if event.kind==ResourceEventKind::ChannelDelete { return Ok(()); }
             if event.kind==ResourceEventKind::ChannelUpdate {
-                return Err(YappinError::PartialWrite {
+                return Err(Error::PartialWrite {
                     completed:vec![serde_json::json!({"resource":event.id})],failed_step:2,
-                    source:Box::new(YappinError::Api{status:504,message:"uncertain fixture write".into(),retry_after:Some(0.5)})
+                    source:Box::new(Error::Api{status:504,message:"uncertain fixture write".into(),retry_after:Some(0.5)})
                 });
             }
-            let actor="00000000-0000-0000-0000-000000000004".parse().unwrap();
+            let actor:rappin::UserId="00000000-0000-0000-0000-000000000004".parse().unwrap();
             let access=ctx.get_member_permissions(event.server_id,actor,Some(event.id)).await?;
             assert_eq!(access.permission("view_channel"),Some(true));
             let object=ctx.resolve_id(event.id).await?;
@@ -74,7 +74,8 @@ async fn main()->Result<()> {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(support::profile()).unwrap())
         .await;

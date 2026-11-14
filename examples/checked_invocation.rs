@@ -4,7 +4,7 @@ use rappin::{Bot, Check, CommandSpec, Result};
 #[tokio::main]
 async fn main() -> Result<()> {
     let token = std::env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| rappin::YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+        .map_err(|_| rappin::Error::Config("set YAPPER_BOT_TOKEN".into()))?;
     Bot::builder(token)
         .command_spec(
             CommandSpec::<()>::new("greet", "Send a greeting").check(Check::server_only()),
@@ -22,6 +22,7 @@ async fn main() -> Result<()> {
             bot.invoke_prepared(prepared).await.into_result()
         })
         .build()
+        .expect("valid bot configuration")
         .run()
         .await
 }

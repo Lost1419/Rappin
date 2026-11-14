@@ -248,9 +248,9 @@ fn test_webhook_client_construct() {
 
 #[test]
 fn test_error_helper_methods() {
-    use rappin::error::YappinError;
+    use rappin::error::Error;
 
-    let err_404 = YappinError::Api {
+    let err_404 = Error::Api {
         status: 404,
         message: "Channel not found".to_string(),
         retry_after: None,
@@ -260,12 +260,12 @@ fn test_error_helper_methods() {
     assert!(!err_404.is_rate_limit());
     assert!(!err_404.is_server_error());
 
-    let err_429 = YappinError::RateLimited { retry_after: 5.5 };
+    let err_429 = Error::RateLimited { retry_after: 5.5 };
     assert_eq!(err_429.status_code(), Some(429));
     assert!(err_429.is_rate_limit());
     assert_eq!(err_429.retry_after(), Some(Duration::from_secs_f64(5.5)));
 
-    let err_503 = YappinError::Api {
+    let err_503 = Error::Api {
         status: 503,
         message: "Server busy".to_string(),
         retry_after: Some(2.0),
@@ -274,11 +274,11 @@ fn test_error_helper_methods() {
     assert!(err_503.is_server_error());
     assert_eq!(err_503.retry_after(), Some(Duration::from_secs(2)));
 
-    let err_unauth = YappinError::Unauthorized;
+    let err_unauth = Error::Unauthorized;
     assert_eq!(err_unauth.status_code(), Some(401));
     assert!(err_unauth.is_unauthorized());
 
-    let err_403 = YappinError::Api {
+    let err_403 = Error::Api {
         status: 403,
         message: "Forbidden".to_string(),
         retry_after: None,

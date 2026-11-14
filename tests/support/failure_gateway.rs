@@ -33,9 +33,14 @@ async fn server_message_gate_completes_rejections_and_retains_uncertain_gateway_
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
-            .handler_concurrency(1)
-            .gateway_only(url)
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
+            .configure(|settings| settings.execution.concurrency = 1)
+            .configure(|settings| {
+                settings.transport.gateway_url = Some(url);
+                settings.transport.mode = rappin::TransportMode::GatewayOnly;
+            })
             .message_gate(|ctx| async move {
                 match ctx.event.command.as_deref() {
                     Some("reject") => Err(rejected()),
@@ -54,7 +59,8 @@ async fn server_message_gate_completes_rejections_and_retains_uncertain_gateway_
                     Ok(())
                 }
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let result = run(bot).await;
         assert_eq!(cursor.last().await, if fail { 2 } else { 3 });
         assert_eq!(calls.load(Ordering::SeqCst), usize::from(!fail));
@@ -163,9 +169,14 @@ async fn handled_command_and_button_failures_continue_and_checkpoint_over_gatewa
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
-            .handler_concurrency(1)
-            .gateway_only(url)
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
+            .configure(|settings| settings.execution.concurrency = 1)
+            .configure(|settings| {
+                settings.transport.gateway_url = Some(url);
+                settings.transport.mode = rappin::TransportMode::GatewayOnly;
+            })
             .command("bad", "Reject", move |_| {
                 let a = a.clone();
                 async move {
@@ -190,7 +201,8 @@ async fn handled_command_and_button_failures_continue_and_checkpoint_over_gatewa
                     Ok(())
                 }
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         run(bot).await.unwrap();
         assert_eq!(cursor.last().await, 3);
         assert_eq!(continued.load(Ordering::SeqCst), 1);
@@ -225,9 +237,14 @@ async fn unprocessed_gateway_failure_retains_prefix_and_never_runs_later_command
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
-            .handler_concurrency(1)
-            .gateway_only(url)
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
+            .configure(|settings| settings.execution.concurrency = 1)
+            .configure(|settings| {
+                settings.transport.gateway_url = Some(url);
+                settings.transport.mode = rappin::TransportMode::GatewayOnly;
+            })
             .command("reject", "Reject", |_| async { Err(rejected()) })
             .command("bad", "Uncertain", |_| async { Err(uncertain()) })
             .command("later", "Never start", move |_| {
@@ -237,7 +254,8 @@ async fn unprocessed_gateway_failure_retains_prefix_and_never_runs_later_command
                     Ok(())
                 }
             })
-            .build())
+            .build()
+            .expect("valid bot configuration"))
         .await
         .unwrap_err(),
     );
@@ -266,8 +284,13 @@ async fn gateway_authentication_failure_is_not_a_recoverable_command_failure() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .gateway_only(url)
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| {
+            settings.transport.gateway_url = Some(url);
+            settings.transport.mode = rappin::TransportMode::GatewayOnly;
+        })
         .on_command_failure(move |_, _| {
             let c = c.clone();
             async move {
@@ -275,7 +298,8 @@ async fn gateway_authentication_failure_is_not_a_recoverable_command_failure() {
                 Ok(FailureDisposition::Handled)
             }
         })
-        .build())
+        .build()
+        .expect("valid bot configuration"))
     .await
     .unwrap_err();
     assert!(error.is_unauthorized());

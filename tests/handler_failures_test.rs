@@ -35,23 +35,23 @@ fn button(id: u64, prefix: &str) -> Value {
 fn message() -> Value {
     json!({"message":{"id":uuid::Uuid::nil(),"channel_id":uuid::Uuid::nil(),"author_id":uuid::Uuid::nil(),"created_at":"2026-11-01T00:00:00Z"}})
 }
-fn rejected() -> YappinError {
+fn rejected() -> Error {
     CommandError::Missing("target (use an ID to clarify)".into()).into()
 }
-fn uncertain() -> YappinError {
-    YappinError::PartialWrite {
+fn uncertain() -> Error {
+    Error::PartialWrite {
         completed: vec![json!({"receipt":"confirmed-first-step"})],
         failed_step: 2,
-        source: Box::new(YappinError::Api {
+        source: Box::new(Error::Api {
             status: 502,
             message: "uncertain mutation".into(),
             retry_after: None,
         }),
     }
 }
-fn report(error: YappinError) -> EventProcessingFailure {
+fn report(error: Error) -> EventProcessingFailure {
     match error {
-        YappinError::EventProcessing { report } => *report,
+        Error::EventProcessing { report } => *report,
         other => panic!("expected event processing report: {other:?}"),
     }
 }
@@ -105,8 +105,10 @@ async fn native_handled_command_and_button_failures_commit_then_run_next_on_same
                 .base_url(base)
                 .sync_commands(false)
                 .log(false)
-                .cursor_file(&cursor.0)
-                .handler_concurrency(1)
+                .configure(|settings| {
+                    settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+                })
+                .configure(|settings| settings.execution.concurrency = 1)
                 .command("bad", "Fail", move |_| {
                     let a = a.clone();
                     async move {
@@ -154,7 +156,9 @@ async fn native_handled_command_and_button_failures_commit_then_run_next_on_same
                         }
                     });
             }
-            run(builder.build()).await.unwrap();
+            run(builder.build().expect("valid bot configuration"))
+                .await
+                .unwrap();
             assert_eq!(attempts.load(Ordering::SeqCst), 1);
             assert_eq!(next.load(Ordering::SeqCst), 1);
             assert_eq!(cursor.last().await, 3);
@@ -207,8 +211,10 @@ async fn unexpected_and_legacy_observed_errors_stop_without_starting_the_next_co
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
-            .handler_concurrency(1)
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
+            .configure(|settings| settings.execution.concurrency = 1)
             .command("bad", "Unexpected", |_| async { Err(uncertain()) })
             .command("next", "Must not start", move |_| {
                 let l = l.clone();
@@ -218,15 +224,20 @@ async fn unexpected_and_legacy_observed_errors_stop_without_starting_the_next_co
                 }
             });
         if legacy {
-            builder = builder.on_command_error(move |_, error| {
+            builder = builder.on_command_failure(move |_, error| {
                 let o = o.clone();
                 async move {
-                    assert_eq!(error.to_json(), uncertain().to_json());
+                    assert_eq!(error.error.to_json(), uncertain().to_json());
                     o.fetch_add(1, Ordering::SeqCst);
+                    Ok(FailureDisposition::Default)
                 }
             });
         }
-        let failure = report(run(builder.build()).await.unwrap_err());
+        let failure = report(
+            run(builder.build().expect("valid bot configuration"))
+                .await
+                .unwrap_err(),
+        );
         assert_eq!(
             failure.failed_events[0].error.to_json(),
             uncertain().to_json()
@@ -261,14 +272,17 @@ async fn handled_prefix_commits_before_uncertain_failure_and_restarts_after_that
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
-            .handler_concurrency(1)
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
+            .configure(|settings| settings.execution.concurrency = 1)
             .command("reject", "Reject", |_| async { Err(rejected()) })
             .command("fail", "Uncertain", |_| async { Err(uncertain()) })
             .command("later", "Must not run", |_| async {
                 panic!("unstarted handler executed")
             })
-            .build())
+            .build()
+            .expect("valid bot configuration"))
         .await
         .unwrap_err(),
     );
@@ -331,7 +345,9 @@ async fn failed_default_and_custom_error_replies_preserve_both_causes_and_do_not
                 .base_url(base)
                 .sync_commands(false)
                 .log(false)
-                .cursor_file(&cursor.0)
+                .configure(|settings| {
+                    settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+                })
                 .command("bad", "Reject", |_| async { Err(rejected()) })
                 .button("bad:", |_| async { Err(rejected()) });
             if custom {
@@ -345,7 +361,11 @@ async fn failed_default_and_custom_error_replies_preserve_both_causes_and_do_not
                         Ok(FailureDisposition::Handled)
                     });
             }
-            let failure = report(run(builder.build()).await.unwrap_err());
+            let failure = report(
+                run(builder.build().expect("valid bot configuration"))
+                    .await
+                    .unwrap_err(),
+            );
             let error = failure.failed_events[0].error.to_json();
             assert_eq!(error["kind"], "failure_handling");
             assert_eq!(error["source"], rejected().to_json());
@@ -375,7 +395,8 @@ async fn handled_button_failure_still_finishes_other_matching_handlers() {
             }
         })
         .on_button_failure(|_, _| async { Ok(FailureDisposition::Handled) })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(profile()).unwrap())
         .await;
@@ -398,14 +419,14 @@ fn rejection_classification_survives_structured_roundtrips_and_is_conservative_f
         .into(),
     ] {
         assert!(error.is_command_rejection());
-        assert!(YappinError::Remote(error.to_remote()).is_command_rejection());
+        assert!(Error::Remote(error.to_remote()).is_command_rejection());
     }
     assert!(
-        !YappinError::from(CommandError::Definition("invalid registration".into()))
+        !Error::from(CommandError::Definition("invalid registration".into()))
             .is_command_rejection()
     );
     let legacy:RemoteError=serde_json::from_value(json!({"kind":"command","message":"unclassified legacy command error","status":null,"retry_after":null})).unwrap();
-    assert!(!YappinError::Remote(legacy).is_command_rejection());
+    assert!(!Error::Remote(legacy).is_command_rejection());
 }
 
 async fn until(mut ready: impl FnMut() -> bool) {
@@ -442,8 +463,10 @@ async fn concurrent_success_after_failure_is_drained_but_cannot_cross_the_cursor
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .handler_concurrency(3)
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| settings.execution.concurrency = 3)
         .command("first", "Slow earlier success", move |_| {
             let a = a.clone();
             let r = r.clone();
@@ -469,7 +492,8 @@ async fn concurrent_success_after_failure_is_drained_but_cannot_cross_the_cursor
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let failure = report(run(bot).await.unwrap_err());
     assert_eq!(cursor.last().await, 2);
     assert_eq!(failure.committed_cursor, 2);
@@ -501,9 +525,11 @@ async fn errors_from_concurrent_batches_keep_all_causes_and_never_commit_past_ea
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
-            .handler_concurrency(2)
-            .pending_batches(2)
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
+            .configure(|settings| settings.execution.concurrency = 2)
+            .configure(|settings| settings.execution.pending_batches = 2)
             .command("early", "Earlier failure", move |_| {
                 let a = a.clone();
                 async move {
@@ -515,14 +541,15 @@ async fn errors_from_concurrent_batches_keep_all_causes_and_never_commit_past_ea
                 let b = b.clone();
                 async move {
                     b.wait().await;
-                    Err(YappinError::Api {
+                    Err(Error::Api {
                         status: 429,
                         message: "advised".into(),
                         retry_after: Some(0.125),
                     })
                 }
             })
-            .build())
+            .build()
+            .expect("valid bot configuration"))
         .await
         .unwrap_err(),
     );
@@ -567,8 +594,10 @@ async fn graceful_stop_drains_accepted_work_then_commits() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .handler_concurrency(2)
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| settings.execution.concurrency = 2)
         .command("hold", "Drain", move |_| {
             let s = s.clone();
             let d = d.clone();
@@ -580,7 +609,8 @@ async fn graceful_stop_drains_accepted_work_then_commits() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let running = tokio::spawn(bot.run());
     until(|| started.load(Ordering::SeqCst) == 2).await;
@@ -614,7 +644,9 @@ async fn cancellation_never_commits_an_unfinished_handler_or_automatically_runs_
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
         .command("hold", "Uncertain external side effect", move |_| {
             let w = w.clone();
             async move {
@@ -622,7 +654,8 @@ async fn cancellation_never_commits_an_unfinished_handler_or_automatically_runs_
                 std::future::pending::<Result<()>>().await
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let running = tokio::spawn(bot.run());
     until(|| writes.load(Ordering::SeqCst) == 1).await;
@@ -660,7 +693,9 @@ async fn cursor_persistence_failure_reports_completed_but_uncommitted_work() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
         .command("done", "Complete but fail storage", move |_| {
             let path = path.clone();
             let backup = backup.clone();
@@ -672,7 +707,8 @@ async fn cursor_persistence_failure_reports_completed_but_uncommitted_work() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let failure = report(run(bot).await.unwrap_err());
     assert!(failure.cursor_error.is_some());
@@ -703,7 +739,9 @@ async fn intake_auth_permanent_errors_and_corrupt_cursor_do_not_enter_handler_fa
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
             .on_command_failure(move |_, _| {
                 let f = f.clone();
                 async move {
@@ -711,7 +749,8 @@ async fn intake_auth_permanent_errors_and_corrupt_cursor_do_not_enter_handler_fa
                     Ok(FailureDisposition::Handled)
                 }
             })
-            .build())
+            .build()
+            .expect("valid bot configuration"))
         .await
         .unwrap_err();
         assert_eq!(error.status_code(), Some(status));
@@ -730,11 +769,14 @@ async fn intake_auth_permanent_errors_and_corrupt_cursor_do_not_enter_handler_fa
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
-            .build())
+            .configure(
+                |settings| settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            )
+            .build()
+            .expect("valid bot configuration"))
         .await
         .unwrap_err(),
-        YappinError::Config(_)
+        Error::Config(_)
     ));
     http.await.unwrap();
 }
@@ -765,11 +807,14 @@ async fn long_failed_rejection_reply_keeps_confirmed_reply_receipts() {
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
             .command("reject", "Long", |_| async {
                 Err(CommandError::Denied("x".repeat(2500)).into())
             })
-            .build())
+            .build()
+            .expect("valid bot configuration"))
         .await
         .unwrap_err(),
     );
@@ -789,7 +834,7 @@ async fn callback_keeps_structured_authorization_checks_while_scrubbing_credenti
         .sync_commands(false)
         .log(false)
         .command("bad", "Auth report", |_| async {
-            Err(YappinError::OperationAuthorization {
+            Err(Error::OperationAuthorization {
                 report: Box::new(rappin::capabilities::AuthorizationReport {
                     operation: "edit_channel".into(),
                     server_id: uuid::Uuid::nil(),
@@ -812,7 +857,8 @@ async fn callback_keeps_structured_authorization_checks_while_scrubbing_credenti
                 Ok(FailureDisposition::Stop)
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(profile()).unwrap())
         .await;
@@ -839,13 +885,14 @@ async fn callback_failure_retains_original_partial_receipts_and_independent_retr
         .log(false)
         .command("bad", "Partial", |_| async { Err(uncertain()) })
         .on_command_failure(|_, _| async {
-            Err(YappinError::Api {
+            Err(Error::Api {
                 status: 429,
                 message: "callback failed".into(),
                 retry_after: Some(0.125),
             })
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(profile()).unwrap())
         .await;
@@ -877,7 +924,9 @@ async fn panic_and_panicking_failure_callback_are_uncertain_and_never_completed_
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
             .command("bad", "Panic", move |_| async move {
                 if callback_panics {
                     Err(uncertain())
@@ -888,7 +937,11 @@ async fn panic_and_panicking_failure_callback_are_uncertain_and_never_completed_
         if callback_panics {
             builder = builder.on_command_failure(|_, _| async { panic!("failure callback panic") });
         }
-        let failure = report(run(builder.build()).await.unwrap_err());
+        let failure = report(
+            run(builder.build().expect("valid bot configuration"))
+                .await
+                .unwrap_err(),
+        );
         let error = failure.failed_events[0].error.to_json();
         if callback_panics {
             assert_eq!(error["source"], uncertain().to_json());
@@ -927,8 +980,10 @@ async fn cooldown_rejection_never_constructs_the_user_handler_and_reply_failure_
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .cursor_file(&cursor.0)
-            .handler_concurrency(1);
+            .configure(|settings| {
+                settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+            })
+            .configure(|settings| settings.execution.concurrency = 1);
         if cog {
             builder = builder.cog(
                 CogBuilder::new("cooldown")
@@ -944,7 +999,11 @@ async fn cooldown_rejection_never_constructs_the_user_handler_and_reply_failure_
                 async { Ok(()) }
             });
         }
-        let failure = report(run(builder.build()).await.unwrap_err());
+        let failure = report(
+            run(builder.build().expect("valid bot configuration"))
+                .await
+                .unwrap_err(),
+        );
         assert_eq!(cursor.last().await, 2);
         assert_eq!(constructed.load(Ordering::SeqCst), 1);
         let error = failure.failed_events[0].error.to_json();
@@ -981,9 +1040,11 @@ async fn handled_rejection_in_a_later_batch_waits_for_earlier_work_before_commit
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
-        .handler_concurrency(2)
-        .pending_batches(2)
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
+        .configure(|settings| settings.execution.concurrency = 2)
+        .configure(|settings| settings.execution.pending_batches = 2)
         .command("slow", "Earlier work", move |_| {
             let r = r.clone();
             async move {
@@ -1010,7 +1071,8 @@ async fn handled_rejection_in_a_later_batch_waits_for_earlier_work_before_commit
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     run(bot).await.unwrap();
     assert_eq!(cursor.last().await, 9);
     assert_eq!(handled.load(Ordering::SeqCst), 1);
@@ -1025,7 +1087,8 @@ async fn definition_errors_are_not_user_rejections_and_default_policy_never_repl
         .command("bad", "Definition", |_| async {
             Err(CommandError::Definition("invalid handler schema".into()).into())
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(profile()).unwrap())
         .await;
@@ -1033,10 +1096,7 @@ async fn definition_errors_are_not_user_rejections_and_default_policy_never_repl
         .process_event(serde_json::from_value(event(2, "bad")).unwrap())
         .await
         .unwrap_err();
-    assert!(matches!(
-        error,
-        YappinError::Command(CommandError::Definition(_))
-    ));
+    assert!(matches!(error, Error::Command(CommandError::Definition(_))));
 }
 
 #[tokio::test]
@@ -1062,7 +1122,9 @@ async fn preparation_failure_reports_every_undispatched_event_and_received_water
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&cursor.0)
+        .configure(|settings| {
+            settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
+        })
         .command("never", "Not prepared", move |_| {
             let c = c.clone();
             async move {
@@ -1070,7 +1132,8 @@ async fn preparation_failure_reports_every_undispatched_event_and_received_water
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     for id in 10000..14096 {
         let mut raw = button(id, "existing:")["data"].clone();
         raw["expires_at"] = json!(expiry);
@@ -1101,7 +1164,8 @@ async fn startup_auth_failure_closes_waiters_without_entering_completion_callbac
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let waiter = bot
         .client()
         .events()

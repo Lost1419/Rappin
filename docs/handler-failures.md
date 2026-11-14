@@ -4,7 +4,7 @@ Rappin distinguishes a completed rejection from an unfinished invocation. Native
 and worker commands/buttons share this policy on polling and WebSocket intake.
 Only the ordered completed prefix of events can be checkpointed.
 For a shared pre-dispatch gate or natural-language listener, use the additive
-[server-message policy](https://github.com/Lost1419/Rappin/blob/main/docs/message-policy.md); legacy `on_message` observers stay supported.
+[server-message policy](https://github.com/Lost1419/Rappin/blob/dev/docs/message-policy.md).
 
 ## Defaults and classification
 
@@ -20,7 +20,7 @@ Use typed errors for expected input, permission-check or clarification rejection
 when no unfinished workflow remains:
 
 ```rust,no_run
-use rappin::prelude::*;
+use rappin::*;
 let bot = Bot::builder("yb_token")
     .command("select", "Choose a unique target", |_ctx| async move {
         Err(CommandError::Invalid {
@@ -52,7 +52,7 @@ Both return `Result<FailureDisposition>`:
   callback/reply errors and stop intake.
 
 ```rust,no_run
-use rappin::prelude::*;
+use rappin::*;
 let bot = Bot::builder("yb_token")
     .on_command_failure(|ctx, failure| async move {
         if failure.class == FailureClass::Rejected {
@@ -83,7 +83,7 @@ their structured causes while the application completes a known rejection. For
 a route that performs one validated operation with no earlier writes:
 
 ```rust,no_run
-use rappin::prelude::*;
+use rappin::*;
 let bot = Bot::builder("yb_token").on_command_failure(|ctx, failure| async move {
     // Application contract: this route does nothing before its single operation.
     let preflight = failure.handler == "single_operation"
@@ -107,17 +107,9 @@ Keep that application contract explicit: one operation's `not_applied` or
 Remaining matching button handlers and message/interaction observers still run.
 Another failure there can still leave the event incomplete.
 
-### Legacy observers
+### Observing a failure
 
-`on_command_error` and `on_button_error` still observe unexpected failures.
-Returning `()` does not complete them. Expected rejections use the default path;
-use a new failure callback returning `Default` to observe those too. Legacy
-callbacks cannot return failed I/O, so migrate required replies to the new
-callbacks. The SDK cannot recover errors application code deliberately discards.
-
-For each handler kind, the latest registration selects either its legacy
-observer or its explicit failure callback. Registering one replaces the other;
-two competing error-reply callbacks are not run.
+Use `on_command_failure` or `on_button_failure` and return `Default` after recording the structured cause to retain default completion behavior. Await required replies or durable reconciliation before returning `Handled`. Callback failures retain both original and handling causes.
 
 ## Structured causes and workers
 
@@ -126,7 +118,7 @@ receipts and unknown outcomes. Known bot credentials are scrubbed without
 removing structured authorization objects; applications must redact their own
 additional secrets before logging receipts.
 
-- `YappinError::FailureHandling` has separate `source` and `handling_error` JSON.
+- `Error::FailureHandling` has separate `source` and `handling_error` JSON.
   Multi-part automatic replies keep confirmed messages and the failed step in
   the handling error's `PartialWrite`.
 - `HandlerInterrupted` reports worker timeout/completion loss or an unwinding
@@ -148,7 +140,7 @@ workflow because one request has Retry-After.
 
 ## Ordered checkpoints and mixed batches
 
-Configure `.cursor_file(...)` for restart continuity. Without durable storage,
+Configure `.configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new(...)))` for restart continuity. Without durable storage,
 progress is process-local and a new Bot uses its normal latest-cursor bootstrap.
 A cursor file has one owner. `handler_concurrency(1)` preserves handler order
 across batches; higher concurrency permits overlap, but checkpoints stay ordered.
@@ -197,7 +189,7 @@ read-only transport policy. None of these paths replays a handler or restarts
 the process.
 
 Failed cursor writes stop the run without advancing its in-memory committed
-cursor. `YappinError::EventProcessing` carries an `EventProcessingFailure` report:
+cursor. `Error::EventProcessing` carries an `EventProcessingFailure` report:
 
 - `committed_cursor` and `received_cursor`;
 - `failed_events`, each with its event ID and structured cause;

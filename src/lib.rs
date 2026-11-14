@@ -16,53 +16,38 @@
 //! - **Standalone Webhooks & OAuth2**: Lightweight `WebhookClient` for alerting/CI notifications and `OAuth2Client` for "Login with Yapin'".
 //! - **Asset CDN Helpers**: URL resolvers for avatars, banners, icons, and attachments (`https://files.yapper.website/...`).
 //!
-//! ## Quickstart: Building a Bot
+//! ## First bot
+//!
+//! The [tutorial](https://github.com/Lost1419/Rappin/blob/dev/docs/tutorial.md)
+//! teaches commands, typed arguments, buttons, state and cogs in order.
 //!
 //! ```no_run
 //! use rappin::prelude::*;
-//!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
-//!     let token = std::env::var("YAPPER_BOT_TOKEN")
-//!         .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
-//!
-//!     let bot = Bot::builder(token)
-//!         .prefix("!")
-//!         .prefix("/")
-//!         .command("ping", "Check if the bot is alive", |ctx| async move {
-//!             ctx.reply("pong 🏓").await?;
+//!     let bot = Bot::from_env()?
+//!         .command("ping", "Check the bot", |ctx| async move {
+//!             ctx.reply("pong").await?;
 //!             Ok(())
 //!         })
-//!         .command("roll", "Roll a die, like /roll 20", |ctx| async move {
-//!             let sides = ctx
-//!                 .argv
-//!                 .get(0)
-//!                 .and_then(|s| s.parse::<u32>().ok())
-//!                 .unwrap_or(6);
-//!             ctx.reply(format!("🎲 Rolled a d{sides}!")).await?;
-//!             Ok(())
-//!         })
-//!         .button("vote:", |ctx| async move {
-//!             let choice = ctx.custom_id().strip_prefix("vote:").unwrap_or("unknown");
-//!             ctx.ephemeral(format!("You voted for {choice}!")).await?;
-//!             Ok(())
-//!         })
-//!         .build();
-//!
-//!     bot.run().await?;
-//!     Ok(())
+//!         .build()?;
+//!     bot.run().await
 //! }
 //! ```
+//!
+//! Enable `gateway` and select `bot::TransportConfig::gateway()` for WebSocket
+//! events with polling fallback. Generated gateway projects configure both.
+//! Enable `derive` for `#[derive(FromArgs)]` argument parsing and help.
 //!
 //! ## Quickstart: Direct REST Client Usage
 //!
 //! ```no_run
-//! use rappin::prelude::*;
+//! use rappin::{Client, Result, Error};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<()> {
 //!     let token = std::env::var("YAPPER_BOT_TOKEN")
-//!         .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+//!         .map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
 //!     let client = Client::new(token);
 //!
 //!     let me = client.get_me().await?;
@@ -76,6 +61,8 @@
 //!     Ok(())
 //! }
 //! ```
+
+extern crate self as rappin;
 
 /// Rust-native command, collector, transport, and caching workflows.
 #[doc = include_str!("../docs/rust-bots.md")]
@@ -119,8 +106,11 @@ pub use availability::{
     AvailabilityStatus,
 };
 pub mod api;
+mod state;
+#[cfg(feature = "derive")]
+pub use rappin_rs_derive::FromArgs;
 pub mod resource_api;
-pub use resource_api::{ComputedPermissionsPolicy, ResourceApiExt};
+pub use resource_api::ComputedPermissionsPolicy;
 pub mod capabilities;
 pub mod lookup;
 pub use lookup::{LookupResult, LookupStatus, SearchStop};
@@ -175,7 +165,7 @@ pub use diagnostics::{
     EventTransport, FallbackReason, RequestEvent, RequestMetrics, RequestObservation,
     TransportMode, TransportStatus,
 };
-pub use error::{RemoteError, Result, YappinError};
+pub use error::{Error, RemoteError, Result};
 pub use interactions::{InteractionState, ResponsePhase};
 pub use models::*;
 pub use oauth2::{OAuth2Client, OAuth2Token, OAuth2User, Pkce};
@@ -192,54 +182,13 @@ pub use webhook_middleware::{
 
 /// Commonly used types for building bots and interacting with Yapin'.
 pub mod prelude {
-    pub use crate::bot::{
-        Bot, BotBuilder, BotHandle, Cog, CogBuilder, CogButton, CogCommand, EventFailure,
-        EventHandler, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,
-        HandlerKind, InteractionContext, MessageContext, MessageDisposition, MessageFailure,
-        MessageStage, RegistrationPlan,
-    };
-    pub use crate::client::{Client, ClientBuilder};
-    pub use crate::cooldown::{Cooldown, CooldownType};
-    pub use crate::error::{Result, YappinError};
-    pub use crate::events::{EventConsumer, EventCursor};
-    #[cfg(feature = "hot-reload")]
-    pub use crate::hot_reload::{HotReload, Listener, WorkerCog, WorkerContext, WorkerProject};
-    #[cfg(any(feature = "metrics", feature = "metrics-http"))]
-    pub use crate::metrics::{
-        install_prometheus, install_prometheus_with_config, record_availability_status,
-        record_request_metrics, record_request_observation, record_transport_status,
-    };
-    pub use crate::models::component::{
-        ActionRow, Button, ButtonStyle, Component, Container, FileDisplay, LayoutComponent,
-        MediaGallery, MediaItem, Section, Separator, TextDisplay, ThumbnailComponent,
-    };
-    pub use crate::models::embed::{Embed, EmbedAuthor, EmbedColor, EmbedField, EmbedFooter};
-    pub use crate::models::message::{CreateMessage, EditMessage, Message};
-    pub use crate::models::server::{Category, Member, Role, Server};
-    pub use crate::models::user::{BotProfile, BotStatus, User};
-    pub use crate::oauth2::{OAuth2Client, OAuth2Token, OAuth2User, Pkce};
-    pub use crate::paginator::{ConfirmDialog, Paginator};
-    pub use crate::utils::IS_COMPONENTS_V2;
-    pub use crate::validation::split_message;
-    pub use crate::webhook::{WebhookClient, WebhookInfo, WebhookMessage};
-    #[cfg(feature = "webhook-middleware")]
-    pub use crate::webhook_middleware::{
-        get_verified_event, route, verified_handler, verify_middleware, WebhookConfig,
-    };
     pub use crate::{
-        check_fn, Api, ApiExt, ArgumentInfo, ArgumentSchema, ArgumentType, Arguments, BoundedU32,
-        Cache, CachePolicy, Cached, ChannelId, Check, Collector, CommandCheck, CommandError,
-        CommandSchema, CommandSpec, CommandValues, DynamicCommandSpec, EventFilter, EventHub,
-        EventTransport, Freshness, FromArgs, HumanDuration, InteractionState, LookupCache,
-        Permission, PermissionEvaluation, PermissionSnapshot, ResponsePhase, TransportMode,
-        TransportStatus, UiApiExt, UiInteractionContext, UserId, WaitError,
+        ActionRow, ApiExt, Bot, BotBuilder, BotHandle, Button, ChannelId, Check, CommandError,
+        CommandSpec, Component, CreateMessage, EditMessage, Embed, Error, FromArgs,
+        InteractionContext, InteractionValues, Message, MessageContext, MessageId, Modal,
+        ModalValue, Permission, Result, RoleId, SelectMenu, SelectOption, ServerId, TextInput,
+        UserId,
     };
-    pub use crate::{
-        ApiObject, CategoryId, EmojiId, MemberPermissions, MessageId, ResolvedObject,
-        ResourceEvent, ResourceEventKind, ResourceOverride, RoleId, RolePosition, ScheduledEventId,
-        ServerId, StickerId, StickerMessage, ThreadId, WebhookId,
-    };
-    pub use crate::{ComputedPermissionsPolicy, ResourceApiExt};
 }
 
 pub use events::{EventConsumer, EventCursor};
@@ -266,18 +215,15 @@ pub mod capability_bindings_guide {}
 #[doc = include_str!("../docs/handler-failures.md")]
 pub mod handler_failures_guide {}
 
-#[doc = include_str!("../docs/api-1.2.md")]
-pub mod api_1_2_guide {}
+#[doc = include_str!("../docs/uploads-and-webhooks.md")]
+pub mod uploads_and_webhooks_guide {}
 
 /// Shared server-message gates, fallible listeners and explicit completion.
 #[doc = include_str!("../docs/message-policy.md")]
 pub mod message_policy_guide {}
 
-pub mod ui_api;
-pub use ui_api::{UiApiExt, UiInteractionContext};
+#[doc = include_str!("../docs/interactions.md")]
+pub mod interactions_guide {}
 
-#[doc = include_str!("../docs/api-1.3.md")]
-pub mod api_1_3_guide {}
-
-#[doc = include_str!("../docs/api-1.4.md")]
-pub mod api_1_4_guide {}
+#[doc = include_str!("../docs/resources.md")]
+pub mod resources_guide {}

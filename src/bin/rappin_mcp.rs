@@ -23,7 +23,7 @@ async fn send(sender: &mpsc::Sender<Value>, value: Value) -> Result<()> {
     sender
         .send(value)
         .await
-        .map_err(|_| YappinError::Config("MCP output closed".into()))
+        .map_err(|_| Error::Config("MCP output closed".into()))
 }
 async fn frame<R: AsyncBufRead + Unpin>(reader: &mut R) -> std::io::Result<Option<Vec<u8>>> {
     let mut result = Vec::new();
@@ -232,6 +232,6 @@ pub async fn serve(ctx: &Context, cursor: Option<&std::path::Path>) -> Result<()
     reader_task.abort();
     writer
         .await
-        .map_err(|_| YappinError::Config("MCP writer stopped".into()))??;
+        .map_err(|_| Error::Config("MCP writer stopped".into()))??;
     Ok(())
 }

@@ -1,6 +1,6 @@
 //! OAuth2 authorization-code and S256 PKCE support for Login with Yapin'.
 use crate::utils::DEFAULT_SITE_BASE;
-use crate::{Result, YappinError};
+use crate::{Error, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use reqwest::header;
 use serde::{Deserialize, Serialize};
@@ -108,7 +108,7 @@ impl Pkce {
     /// let original = Pkce::new();
     /// let restored = Pkce::from_verifier(original.verifier())?;
     /// assert_eq!(restored.challenge(), original.challenge());
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn from_verifier(verifier: impl Into<String>) -> Result<Self> {
         let verifier = verifier.into();
@@ -117,7 +117,7 @@ impl Pkce {
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || b"-._~".contains(&c))
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "code_verifier",
                 "requires 43 to 128 unreserved ASCII characters",
             ));
@@ -320,7 +320,7 @@ impl OAuth2Client {
     }
     async fn exchange(&self, code: &str, verifier: Option<&str>) -> Result<OAuth2Token> {
         if self.client_secret.is_empty() && verifier.is_none() {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "code_verifier",
                 "public clients require PKCE",
             ));
@@ -346,7 +346,7 @@ impl OAuth2Client {
             .form(&params)
             .send()
             .await
-            .map_err(|e| YappinError::Http(e.without_url()))?;
+            .map_err(|e| Error::Http(e.without_url()))?;
         decode(res, &[&self.client_secret, code, verifier.unwrap_or("")]).await
     }
     /// Fetch /api/oauth/me using a user access token with identify scope, not a bot token.
@@ -371,7 +371,7 @@ impl OAuth2Client {
             )
             .send()
             .await
-            .map_err(|e| YappinError::Http(e.without_url()))?;
+            .map_err(|e| Error::Http(e.without_url()))?;
         decode(res, &[access_token]).await
     }
 }
@@ -394,7 +394,7 @@ async fn decode<T: serde::de::DeserializeOwned>(
             .or(body["error"].as_str())
             .unwrap_or("OAuth request failed")
             .into();
-        return Err(YappinError::Api {
+        return Err(Error::Api {
             status: status.as_u16(),
             message: crate::security::scrub(&message, secrets),
             retry_after: delay,

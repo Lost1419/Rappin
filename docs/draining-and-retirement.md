@@ -16,8 +16,8 @@ use rappin::{Bot, Result};
 use std::time::Duration;
 async fn run(token: String) -> Result<()> {
     let bot = Bot::builder(token)
-        .drain_timeout(Some(Duration::from_secs(30)))
-        .build();
+        .configure(|settings| settings.execution.drain_timeout = Some(Duration::from_secs(30)))
+        .build().expect("valid bot configuration");
     let handle = bot.handle();
     // A supervisor requests handle.stop(), then awaits the run future.
     // handle.is_draining() distinguishes that phase from normal event intake.

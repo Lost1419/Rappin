@@ -149,8 +149,8 @@ fields, and different event kinds or identities remain meaningful. Existing
 `Event` deserialization/legacy aliases are unchanged. Restoring an old receipt
 recomputes its evidence without rewriting the event or completion.
 
-`YappinError::IngressConflict { conflict }` has JSON `kind: ingress_conflict`.
-`YappinError::ingress_conflict()` recovers its report from native, remote and
+`Error::IngressConflict { conflict }` has JSON `kind: ingress_conflict`.
+`Error::ingress_conflict()` recovers its report from native, remote and
 pipeline errors, including nested persistence failures. `IngressConflict` exposes:
 
 - `bot_id`, `event_id`, `existing_source`, `recovered_source`, `incoming_source`;
@@ -195,8 +195,8 @@ config.conflict_policy = IngressConflictPolicy::RetainCompletedAndPoll;
 config.conflict_recovery_timeout = Duration::from_secs(60);
 config.max_conflict_reports = 32;
 let bot = Bot::builder("read-token-from-your-private-configuration")
-    .shared_ingress(config)
-    .build();
+    .configure(|settings| settings.persistence.ingress = Some(config))
+    .build().expect("valid bot configuration");
 ```
 
 A conflicting webhook/gateway delivery still receives an explicit conflict error

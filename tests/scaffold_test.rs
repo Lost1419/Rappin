@@ -105,18 +105,19 @@ fn every_generated_template_compiles_offline_with_its_declared_features() {
             String::from_utf8_lossy(&output.stdout)
         );
         let manifest = root.join("Cargo.toml");
-        let mut text = std::fs::read_to_string(&manifest).unwrap();
-        let generated: toml::Value = toml::from_str(&text).unwrap();
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        let mut generated: toml::Value = toml::from_str(&text).unwrap();
         assert_eq!(
             generated["package"]["rust-version"].as_str(),
             Some(env!("CARGO_PKG_RUST_VERSION"))
         );
         // Compile generated code against the exact checkout under test, without registry publication.
-        text.push_str(&format!(
-            "\n[patch.crates-io]\nrappin-rs = {{ path = {:?} }}\n",
-            env!("CARGO_MANIFEST_DIR")
-        ));
-        std::fs::write(&manifest, text).unwrap();
+        let dependency = generated["dependencies"]["rappin"].as_table_mut().unwrap();
+        for key in ["git", "branch", "version"] {
+            dependency.remove(key);
+        }
+        dependency.insert("path".into(), env!("CARGO_MANIFEST_DIR").into());
+        std::fs::write(&manifest, toml::to_string_pretty(&generated).unwrap()).unwrap();
         std::fs::copy(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock"),
             root.join("Cargo.lock"),
@@ -131,4 +132,45 @@ fn every_generated_template_compiles_offline_with_its_declared_features() {
             .unwrap();
         assert!(status.success(), "{template} template failed compilation");
     }
+}
+
+#[test]
+fn human_init_is_explicit_and_default_starter_uses_gateway_and_derive() {
+    let scratch = Scratch::new();
+    let destination = scratch.0.join("human-bot");
+    let output = scratch.run(&["--human", "init", destination.to_str().unwrap()]);
+    assert!(output.status.success());
+    assert!(serde_json::from_slice::<Value>(&output.stdout).is_err());
+    let manifest: toml::Value =
+        toml::from_str(&std::fs::read_to_string(destination.join("Cargo.toml")).unwrap()).unwrap();
+    let features = manifest["dependencies"]["rappin"]["features"]
+        .as_array()
+        .unwrap();
+    assert!(features
+        .iter()
+        .any(|feature| feature.as_str() == Some("gateway")));
+    assert!(features
+        .iter()
+        .any(|feature| feature.as_str() == Some("derive")));
+    assert!(!scratch
+        .run(&["--human", "--json", "doctor", "--offline"])
+        .status
+        .success());
+    assert!(!scratch
+        .run(&["--human", "servers", "list"])
+        .status
+        .success());
+}
+
+#[test]
+fn human_doctor_is_offline_and_does_not_change_machine_default() {
+    let scratch = Scratch::new();
+    // Supply a valid empty config for doctor; init deliberately ignores the malformed one.
+    std::fs::write(scratch.0.join("nonexistent.toml"), "").unwrap();
+    let human = scratch.run(&["--human", "doctor", "--offline"]);
+    assert!(human.status.success());
+    assert!(serde_json::from_slice::<Value>(&human.stdout).is_err());
+    let machine = scratch.run(&["doctor", "--offline"]);
+    assert!(machine.status.success());
+    assert_eq!(value(&machine)["data"]["token_available"], false);
 }

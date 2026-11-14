@@ -10,11 +10,12 @@
 //! }
 //! ```
 //! Shared JSON transport for native handlers and isolated Rust workers.
-use crate::{Freshness, Result};
+use crate::resource_api::{decode_overrides, validate_role_order};
+use crate::*;
 use async_trait::async_trait;
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 /// Authenticated, origin-confined JSON access without exposing credentials.
@@ -93,7 +94,7 @@ pub trait Api: Send + Sync {
         _path: &str,
         _body: Option<Value>,
     ) -> Result<Value> {
-        Err(crate::YappinError::validation(
+        Err(crate::Error::validation(
             "request_once",
             "transport does not implement single-attempt requests",
         ))
@@ -132,7 +133,7 @@ pub trait Api: Send + Sync {
         _body: Value,
         _files: &[crate::UploadFile],
     ) -> Result<Value> {
-        Err(crate::YappinError::validation(
+        Err(crate::Error::validation(
             "upload",
             "transport does not support multipart uploads",
         ))
@@ -163,7 +164,7 @@ pub trait Api: Send + Sync {
         let expected_server = server;
         let server: crate::Server = serde_json::from_value(value["server"].clone())?;
         if server.id != expected_server {
-            return Err(crate::YappinError::validation(
+            return Err(crate::Error::validation(
                 "permissions",
                 "API returned a different server ID",
             ));
@@ -209,6 +210,42 @@ pub trait Api: Send + Sync {
 /// }
 /// ```
 pub trait ApiExt: Api {
+    /// Update the original interaction message using an explicit edit patch.
+    /// Omitted fields retain their values and null fields clear them. Ownership,
+    /// source-message eligibility and callback deadlines remain enforced.
+    ///
+    /// ```no_run
+    /// async fn clear(api: &impl rappin::Api, event: &rappin::InteractionEvent) -> rappin::Result<()> {
+    ///     use rappin::ApiExt;
+    ///     api.update_interaction(event, &rappin::EditMessage::new().clear_components()).await
+    /// }
+    /// ```
+    async fn update_interaction(
+        &self,
+        event: &InteractionEvent,
+        patch: &EditMessage,
+    ) -> Result<()> {
+        if event.kind.as_deref() == Some("command")
+            || event.kind.as_deref() == Some("modal_submit") && event.message_id.is_none()
+        {
+            return Err(Error::validation(
+                "type",
+                "this interaction has no original message to update",
+            ));
+        }
+        patch.validate()?;
+        Api::track_interaction(self, event).await?;
+        let mut value = json!(patch);
+        value["type"] = json!(InteractionCallbackType::Update);
+        crate::utils::strip_proxy_metadata(&mut value);
+        self.request(
+            Method::POST,
+            &crate::interactions::path(&event.id, &event.token),
+            Some(value),
+        )
+        .await?;
+        Ok(())
+    }
     /// Read unauthenticated API/build and official SDK version metadata. Client omits Authorization; custom adapters define their public-read handling.
     ///
     /// # Example
@@ -242,7 +279,7 @@ pub trait ApiExt: Api {
     /// ```
     async fn get_api_changelog(&self, limit: u32) -> Result<crate::ApiChangelog> {
         if !(1..=50).contains(&limit) {
-            return Err(crate::YappinError::validation(
+            return Err(crate::Error::validation(
                 "limit",
                 "requires 1 through 50 entries",
             ));
@@ -265,7 +302,13 @@ pub trait ApiExt: Api {
     ///     Ok(())
     /// }
     /// ```
-    async fn get_emojis(&self, server: Uuid) -> Result<crate::EmojisResponse> {
+    async fn get_emojis(
+        &self,
+        server: impl Into<crate::ServerId> + Send,
+    ) -> Result<crate::EmojisResponse> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+
         self.api_json::<_, ()>(Method::GET, &format!("/servers/{server}/emojis"), None)
             .await
     }
@@ -284,9 +327,12 @@ pub trait ApiExt: Api {
     /// ```
     async fn create_emoji(
         &self,
-        server: Uuid,
+        server: impl Into<crate::ServerId> + Send,
         body: &crate::CreateEmoji,
     ) -> Result<crate::EmojiCreateResult> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+
         body.validate()?;
         self.api_json(
             Method::POST,
@@ -310,16 +356,19 @@ pub trait ApiExt: Api {
     /// ```
     async fn upload_emoji(
         &self,
-        server: Uuid,
+        server: impl Into<crate::ServerId> + Send,
         name: &str,
         file: &crate::UploadFile,
     ) -> Result<crate::EmojiCreateResult> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+
         crate::validate_emoji_name(name)?;
         file.validate()?;
         if file.data.len() > 2_097_152
             || !matches!(file.mime()?, "image/png" | "image/gif" | "image/webp")
         {
-            return Err(crate::YappinError::validation(
+            return Err(crate::Error::validation(
                 "file",
                 "emoji requires PNG/GIF/WebP up to 2 MiB",
             ));
@@ -348,10 +397,15 @@ pub trait ApiExt: Api {
     /// ```
     async fn edit_emoji(
         &self,
-        server: Uuid,
-        emoji: Uuid,
+        server: impl Into<crate::ServerId> + Send,
+        emoji: impl Into<crate::EmojiId> + Send,
         name: &str,
     ) -> Result<crate::EmojiCreateResult> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+        let emoji: crate::EmojiId = emoji.into();
+        let emoji = Uuid::from(emoji);
+
         crate::validate_emoji_name(name)?;
         self.api_json(
             Method::PATCH,
@@ -373,7 +427,16 @@ pub trait ApiExt: Api {
     ///     Ok(())
     /// }
     /// ```
-    async fn delete_emoji(&self, server: Uuid, emoji: Uuid) -> Result<()> {
+    async fn delete_emoji(
+        &self,
+        server: impl Into<crate::ServerId> + Send,
+        emoji: impl Into<crate::EmojiId> + Send,
+    ) -> Result<()> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+        let emoji: crate::EmojiId = emoji.into();
+        let emoji = Uuid::from(emoji);
+
         self.request(
             Method::DELETE,
             &format!("/servers/{server}/emojis/{emoji}"),
@@ -395,7 +458,13 @@ pub trait ApiExt: Api {
     ///     Ok(())
     /// }
     /// ```
-    async fn get_channel_webhooks(&self, channel: Uuid) -> Result<crate::BotWebhooksResponse> {
+    async fn get_channel_webhooks(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+    ) -> Result<crate::BotWebhooksResponse> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+
         self.api_json::<_, ()>(Method::GET, &format!("/channels/{channel}/webhooks"), None)
             .await
     }
@@ -430,9 +499,12 @@ pub trait ApiExt: Api {
     /// ```
     async fn create_bot_webhook(
         &self,
-        channel: Uuid,
+        channel: impl Into<crate::ChannelId> + Send,
         body: &crate::CreateBotWebhook,
     ) -> Result<crate::BotWebhook> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+
         body.validate()?;
         #[derive(serde::Deserialize)]
         struct Response {
@@ -460,7 +532,10 @@ pub trait ApiExt: Api {
     ///     Ok(())
     /// }
     /// ```
-    async fn delete_bot_webhook(&self, webhook: Uuid) -> Result<()> {
+    async fn delete_bot_webhook(&self, webhook: impl Into<crate::WebhookId> + Send) -> Result<()> {
+        let webhook: crate::WebhookId = webhook.into();
+        let webhook = Uuid::from(webhook);
+
         self.request(Method::DELETE, &format!("/webhooks/{webhook}"), None)
             .await?;
         Ok(())
@@ -480,9 +555,12 @@ pub trait ApiExt: Api {
     /// ```
     async fn post_bot_webhook(
         &self,
-        webhook: Uuid,
+        webhook: impl Into<crate::WebhookId> + Send,
         body: &crate::webhook::WebhookMessage,
     ) -> Result<crate::Message> {
+        let webhook: crate::WebhookId = webhook.into();
+        let webhook = Uuid::from(webhook);
+
         let mut value = serde_json::to_value(body)?;
         crate::utils::strip_proxy_metadata(&mut value);
         crate::validation::validate_webhook(&value)?;
@@ -509,10 +587,13 @@ pub trait ApiExt: Api {
     /// ```
     async fn send_files(
         &self,
-        channel: Uuid,
+        channel: impl Into<crate::ChannelId> + Send,
         body: &crate::CreateMessage,
         files: &[crate::UploadFile],
     ) -> Result<Vec<crate::Message>> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+
         crate::validate_uploads(files)?;
         let clean = body.for_request();
         let body = clean.as_ref();
@@ -538,9 +619,12 @@ pub trait ApiExt: Api {
     /// ```
     async fn evaluate_bot_permissions(
         &self,
-        server: Uuid,
+        server: impl Into<crate::ServerId> + Send,
         freshness: Freshness,
     ) -> Result<crate::PermissionEvaluation> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+
         let profile: crate::BotProfile = self.api_json::<_, ()>(Method::GET, "/me", None).await?;
         self.evaluate_permissions(server, profile.id, freshness)
             .await
@@ -585,18 +669,658 @@ pub trait ApiExt: Api {
     /// ```
     async fn evaluate_permissions(
         &self,
-        server: Uuid,
-        actor: Uuid,
+        server: impl Into<crate::ServerId> + Send,
+        actor: impl Into<crate::UserId> + Send,
         freshness: Freshness,
     ) -> Result<crate::PermissionEvaluation> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+        let actor: crate::UserId = actor.into();
+        let actor = Uuid::from(actor);
+
         let snapshot = self.permission_snapshot(server, actor, freshness).await?;
         if snapshot.server.id != server || snapshot.actor != actor {
-            return Err(crate::YappinError::validation(
+            return Err(crate::Error::validation(
                 "permissions",
                 "snapshot identity does not match the requested actor/server",
             ));
         }
         snapshot.evaluate()
+    }
+    /// Read custom emojis used in one message, retaining platform image URLs and server-membership metadata. Platform scope, access and rollout still apply.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, channel: Uuid, message: Uuid) -> Result<()> {
+    ///     let response = api.get_message_emojis(channel, message).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn get_message_emojis(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        message: impl Into<crate::MessageId> + Send,
+    ) -> Result<MessageEmojis> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+        let message: crate::MessageId = message.into();
+        let message = Uuid::from(message);
+
+        Ok(serde_json::from_value(
+            self.request(
+                Method::GET,
+                &format!("/channels/{channel}/messages/{message}/emojis"),
+                None,
+            )
+            .await?,
+        )?)
+    }
+    /// Read a page of messages with lossless UI component trees. Limit must be 1 through 100; before and after are mutually exclusive.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, channel: Uuid) -> Result<()> {
+    ///     let response = api.get_messages(channel, Some(25), None, None).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn get_messages(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        limit: Option<u32>,
+        before: Option<chrono::DateTime<chrono::Utc>>,
+        after: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<MessagesResponse> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+
+        if before.is_some() && after.is_some() {
+            return Err(Error::validation(
+                "cursor",
+                "before and after are mutually exclusive",
+            ));
+        }
+        if limit.is_some_and(|limit| !(1..=100).contains(&limit)) {
+            return Err(Error::validation("limit", "must be 1..=100"));
+        }
+        let path = {
+            let mut query = url::form_urlencoded::Serializer::new(String::new());
+            if let Some(limit) = limit {
+                query.append_pair("limit", &limit.to_string());
+            }
+            if let Some(cursor) = before {
+                query.append_pair("before", &cursor.to_rfc3339());
+            }
+            if let Some(cursor) = after {
+                query.append_pair("after", &cursor.to_rfc3339());
+            }
+            format!("/channels/{channel}/messages?{}", query.finish())
+        };
+        Ok(serde_json::from_value(
+            self.request(Method::GET, &path, None).await?,
+        )?)
+    }
+    /// Read one message without discarding extended or unknown component fields.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, channel: Uuid, message: Uuid) -> Result<()> {
+    ///     let response = api.get_message(channel, message).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn get_message(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        message: impl Into<crate::MessageId> + Send,
+    ) -> Result<MessageDetailResponse> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+        let message: crate::MessageId = message.into();
+        let message = Uuid::from(message);
+
+        let value = self
+            .request(
+                Method::GET,
+                &format!("/channels/{channel}/messages/{message}"),
+                None,
+            )
+            .await?;
+        Ok(serde_json::from_value(value)?)
+    }
+    /// Validate and send an extended message body. This low-level helper does not assess requester authorization or application approval.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, channel: Uuid) -> Result<()> {
+    ///     let menu = SelectMenu::new("fruit").option(SelectOption::new("Apple", "apple"));
+    ///     let body = CreateMessage::new("Choose fruit").component(menu.row());
+    ///     let response = api.send_message(channel, &body).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn send_message(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        body: &CreateMessage,
+    ) -> Result<Message> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+
+        body.validate()?;
+        let mut value = json!(body);
+        crate::utils::strip_proxy_metadata(&mut value);
+        let response = self
+            .request(
+                Method::POST,
+                &format!("/channels/{channel}/messages"),
+                Some(value),
+            )
+            .await?;
+        Ok(serde_json::from_value(response["message"].clone())?)
+    }
+    /// Validate and edit an extended message body, preserving omission versus explicit null clearing. Reply targets cannot be changed by edits.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, channel: Uuid, message: Uuid) -> Result<()> {
+    ///     let body = EditMessage::new().content("Updated");
+    ///     let response = api.edit_message(channel, message, &body).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn edit_message(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        message: impl Into<crate::MessageId> + Send,
+        body: &EditMessage,
+    ) -> Result<Message> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+        let message: crate::MessageId = message.into();
+        let message = Uuid::from(message);
+
+        body.validate()?;
+        let mut value = json!(body);
+        crate::utils::strip_proxy_metadata(&mut value);
+        let response = self
+            .request(
+                Method::PATCH,
+                &format!("/channels/{channel}/messages/{message}"),
+                Some(value),
+            )
+            .await?;
+        Ok(serde_json::from_value(response["message"].clone())?)
+    }
+    /// Open a validated modal as an eligible initial interaction response. Opening from a modal submission is rejected; response deadlines and ownership are tracked by supporting adapters.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, event: &InteractionEvent) -> Result<()> {
+    ///     let modal = Modal::new("feedback", "Feedback").input(TextInput::paragraph("comment", "Comment"));
+    ///     let response = api.show_modal(event, &modal).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn show_modal(&self, event: &InteractionEvent, modal: &Modal) -> Result<()> {
+        if event.kind.as_deref() == Some("modal_submit") {
+            return Err(Error::validation(
+                "modal",
+                "cannot open a modal from a modal submission",
+            ));
+        }
+        modal.validate()?;
+        Api::track_interaction(self, event).await?;
+        self.request(
+            Method::POST,
+            &crate::interactions::path(&event.id, &event.token),
+            Some(json!({"type":"modal","modal":modal})),
+        )
+        .await?;
+        Ok(())
+    }
+    /// Send an extended reply, ephemeral response or original-message update. Reply targets, invalid updates, component-bearing ephemeral replies and Ack payloads are rejected before sending. Use existing ack helpers for acknowledgement.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api, event: &InteractionEvent) -> Result<()> {
+    ///     let response = api.respond(event, InteractionCallbackType::Ephemeral, &CreateMessage::new("Recorded")).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn respond(
+        &self,
+        event: &InteractionEvent,
+        kind: InteractionCallbackType,
+        body: &CreateMessage,
+    ) -> Result<()> {
+        if body.sticker_id.is_some() {
+            return Err(Error::validation(
+                "sticker_id",
+                "send stickers through the channel message endpoint",
+            ));
+        }
+        if body.reply_to.is_some() {
+            return Err(Error::validation(
+                "reply_to",
+                "interaction callbacks do not accept reply targets",
+            ));
+        }
+        if kind == InteractionCallbackType::Ack {
+            return Err(Error::validation(
+                "type",
+                "use the existing acknowledgement API",
+            ));
+        }
+        if kind == InteractionCallbackType::Update
+            && (event.kind.as_deref() == Some("command")
+                || event.kind.as_deref() == Some("modal_submit") && event.message_id.is_none())
+        {
+            return Err(Error::validation(
+                "type",
+                "this interaction has no original message to update",
+            ));
+        }
+        if kind == InteractionCallbackType::Ephemeral
+            && (body.components.is_some() || body.flags.is_some_and(|f| f & 32768 != 0))
+        {
+            return Err(Error::validation(
+                "components",
+                "ephemeral replies do not support components",
+            ));
+        }
+        crate::validation::validate_message(&json!(body), kind != InteractionCallbackType::Update)?;
+        Api::track_interaction(self, event).await?;
+        let mut value = json!(body);
+        value["type"] = json!(kind);
+        crate::utils::strip_proxy_metadata(&mut value);
+        self.request(
+            Method::POST,
+            &crate::interactions::path(&event.id, &event.token),
+            Some(value),
+        )
+        .await?;
+        Ok(())
+    }
+    /// Opt-in slash events. Existing set_commands leaves interactions omitted.
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::*;
+    /// use uuid::Uuid;
+    /// use reqwest::Method;
+    /// async fn example(api: &impl Api) -> Result<()> {
+    ///     let response = api.set_interaction_commands(&[Command::new("feedback", "Open feedback form")], true).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn set_interaction_commands(
+        &self,
+        commands: &[Command],
+        enabled: bool,
+    ) -> Result<Vec<Command>> {
+        crate::validation::validate_commands(commands)?;
+        let value = self
+            .request(
+                Method::PUT,
+                "/commands",
+                Some(json!({"commands":commands,"interactions":enabled})),
+            )
+            .await?;
+        Ok(serde_json::from_value(value["commands"].clone())?)
+    }
+    /// Resolve an ID visible to the bot. Hidden and absent resources return the platform 404.
+    ///
+    /// ```no_run
+    /// # use rappin::{Api, ApiExt, Result};
+    /// async fn resolve(api: &impl Api, id: uuid::Uuid) -> Result<rappin::ResolvedObject> {
+    ///     api.resolve_id(id).await
+    /// }
+    /// ```
+    async fn resolve_id(&self, id: Uuid) -> Result<ResolvedObject> {
+        let response = self
+            .request(Method::GET, &format!("/resolve/{id}"), None)
+            .await?;
+        let resolved: ResolvedObject = serde_json::from_value(response)?;
+        if resolved.id != id || resolved.object.is_empty() {
+            return Err(Error::validation(
+                "id",
+                "resolver returned a different identity or missing object kind",
+            ));
+        }
+        Ok(resolved)
+    }
+    /// Fetch server-computed permissions for one member, validating all requested scope.
+    /// Each call performs a fresh read. Platform rollout and access errors propagate.
+    ///
+    /// ```no_run
+    /// # use rappin::{Api, ApiExt, Result};
+    /// async fn access(api: &impl Api, server: uuid::Uuid, user: uuid::Uuid, channel: uuid::Uuid) -> Result<()> {
+    ///     let access = api.get_member_permissions(server, user, Some(channel)).await?;
+    ///     println!("{:?}", access.permission("manage_messages"));
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn get_member_permissions(
+        &self,
+        server: impl Into<crate::ServerId> + Send,
+        user: impl Into<crate::UserId> + Send,
+        channel: Option<Uuid>,
+    ) -> Result<MemberPermissions> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+        let user: crate::UserId = user.into();
+        let user = Uuid::from(user);
+
+        let path = match channel {
+            Some(channel) => format!("/channels/{channel}/permissions/{user}"),
+            None => format!("/servers/{server}/members/{user}/permissions"),
+        };
+        let response = self.request(Method::GET, &path, None).await?;
+        let permissions: MemberPermissions =
+            serde_json::from_value(response["permissions"].clone())?;
+        permissions.validate_scope(server, user, channel)?;
+        Ok(permissions)
+    }
+    /// Read one role in the requested server. Platform access and rollout apply.
+    ///
+    /// ```no_run
+    /// # use rappin::{Api, ApiExt, Result};
+    /// async fn role(api: &impl Api, server: uuid::Uuid, id: uuid::Uuid) -> Result<rappin::Role> {
+    ///     api.get_role(server, id).await
+    /// }
+    /// ```
+    async fn get_role(
+        &self,
+        server: impl Into<crate::ServerId> + Send,
+        role: impl Into<crate::RoleId> + Send,
+    ) -> Result<Role> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+        let role: crate::RoleId = role.into();
+        let role = Uuid::from(role);
+
+        let response = self
+            .request(
+                Method::GET,
+                &format!("/servers/{server}/roles/{role}"),
+                None,
+            )
+            .await?;
+        let result: Role = serde_json::from_value(response["role"].clone())?;
+        if result.id != role {
+            return Err(Error::validation(
+                "role",
+                "API returned a different role identity",
+            ));
+        }
+        Ok(result)
+    }
+    /// Reorder role IDs highest first. Roles at or above the bot's highest role stay put.
+    /// An ambiguous failure must be reconciled before retrying this mutation.
+    ///
+    /// ```no_run
+    /// # use rappin::{Api, ApiExt, Result};
+    /// async fn order(api: &impl Api, server: uuid::Uuid, ids: &[uuid::Uuid]) -> Result<()> {
+    ///     api.reorder_roles(server, ids).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn reorder_roles(
+        &self,
+        server: impl Into<crate::ServerId> + Send,
+        ids: &[Uuid],
+    ) -> Result<Vec<Role>> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+
+        validate_role_order(ids)?;
+        let response = self
+            .request(
+                Method::PATCH,
+                &format!("/servers/{server}/roles"),
+                Some(json!({"ids":ids})),
+            )
+            .await?;
+        Ok(serde_json::from_value(response["roles"].clone())?)
+    }
+    /// Apply explicit role positions using the documented alternate array body.
+    /// Ambiguous mutation failures require reconciliation before a retry.
+    ///
+    /// ```no_run
+    /// use rappin::{Api, ApiExt, RolePosition, Result};
+    /// async fn reorder(api: &impl Api, server: uuid::Uuid, role: uuid::Uuid) -> Result<()> {
+    ///     api.reposition_roles(server, &[RolePosition::new(role, 3)]).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn reposition_roles(
+        &self,
+        server: impl Into<crate::ServerId> + Send,
+        positions: &[RolePosition],
+    ) -> Result<Vec<Role>> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+
+        validate_role_order(
+            &positions
+                .iter()
+                .map(|position| position.id)
+                .collect::<Vec<_>>(),
+        )?;
+        let response = self
+            .request(
+                Method::PATCH,
+                &format!("/servers/{server}/roles"),
+                Some(json!(positions)),
+            )
+            .await?;
+        Ok(serde_json::from_value(response["roles"].clone())?)
+    }
+    /// List channel role/everyone overrides through the explicit override endpoint.
+    ///
+    /// ```no_run
+    /// # use rappin::{Api, ApiExt, Result};
+    /// async fn overrides(api: &impl Api, channel: uuid::Uuid) -> Result<Vec<rappin::ResourceOverride>> {
+    ///     api.get_channel_overrides(channel).await
+    /// }
+    /// ```
+    async fn get_channel_overrides(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+    ) -> Result<Vec<ResourceOverride>> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+
+        let response = self
+            .request(Method::GET, &format!("/channels/{channel}/overrides"), None)
+            .await?;
+        decode_overrides(response, Some(channel), None)
+    }
+    /// List category role/everyone overrides. Category inheritance is computed by Yapin.
+    ///
+    /// ```no_run
+    /// # use rappin::{Api, ApiExt, Result};
+    /// async fn overrides(api: &impl Api, category: uuid::Uuid) -> Result<Vec<rappin::ResourceOverride>> {
+    ///     api.get_category_overrides(category).await
+    /// }
+    /// ```
+    async fn get_category_overrides(
+        &self,
+        category: impl Into<crate::CategoryId> + Send,
+    ) -> Result<Vec<ResourceOverride>> {
+        let category: crate::CategoryId = category.into();
+        let category = Uuid::from(category);
+
+        let response = self
+            .request(
+                Method::GET,
+                &format!("/categories/{category}/overrides"),
+                None,
+            )
+            .await?;
+        decode_overrides(response, None, Some(category))
+    }
+    /// Replace a channel override for a role or everyone. Member overrides are unsupported upstream.
+    ///
+    /// ```no_run
+    /// # use rappin::{Api, ApiExt, Result, PermissionTarget, PermissionOverride};
+    /// async fn override_role(api: &impl Api, channel: uuid::Uuid) -> Result<serde_json::Value> {
+    ///     api.set_channel_override(channel, PermissionTarget::Everyone, &PermissionOverride::default()).await
+    /// }
+    /// ```
+    async fn set_channel_override(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        target: PermissionTarget,
+        body: &PermissionOverride,
+    ) -> Result<Value> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+
+        crate::models::api14::validate_override(body)?;
+        self.request(
+            Method::PUT,
+            &format!("/channels/{channel}/overrides/{target}"),
+            Some(json!(body)),
+        )
+        .await
+    }
+    /// Remove a channel override. Platform hierarchy, access and rollout remain authoritative.
+    ///
+    /// ```no_run
+    /// # use rappin::{Api, ApiExt, Result, PermissionTarget};
+    /// async fn clear(api: &impl Api, channel: uuid::Uuid) -> Result<serde_json::Value> {
+    ///     api.delete_channel_override(channel, PermissionTarget::Everyone).await
+    /// }
+    /// ```
+    async fn delete_channel_override(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        target: PermissionTarget,
+    ) -> Result<Value> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+
+        self.request(
+            Method::DELETE,
+            &format!("/channels/{channel}/overrides/{target}"),
+            None,
+        )
+        .await
+    }
+    /// Replace a category override, subject to access in every affected channel.
+    ///
+    /// ```no_run
+    /// # use rappin::{Api, ApiExt, Result, PermissionTarget, PermissionOverride};
+    /// async fn set(api: &impl Api, category: uuid::Uuid) -> Result<serde_json::Value> {
+    ///     api.set_category_override(category, PermissionTarget::Everyone, &PermissionOverride::default()).await
+    /// }
+    /// ```
+    async fn set_category_override(
+        &self,
+        category: impl Into<crate::CategoryId> + Send,
+        target: PermissionTarget,
+        body: &PermissionOverride,
+    ) -> Result<Value> {
+        let category: crate::CategoryId = category.into();
+        let category = Uuid::from(category);
+
+        crate::models::api14::validate_override(body)?;
+        self.request(
+            Method::PUT,
+            &format!("/categories/{category}/overrides/{target}"),
+            Some(json!(body)),
+        )
+        .await
+    }
+    /// Remove a category override. Unknown mutation outcomes require reconciliation.
+    ///
+    /// ```no_run
+    /// # use rappin::{Api, ApiExt, Result, PermissionTarget};
+    /// async fn clear(api: &impl Api, category: uuid::Uuid) -> Result<serde_json::Value> {
+    ///     api.delete_category_override(category, PermissionTarget::Everyone).await
+    /// }
+    /// ```
+    async fn delete_category_override(
+        &self,
+        category: impl Into<crate::CategoryId> + Send,
+        target: PermissionTarget,
+    ) -> Result<Value> {
+        let category: crate::CategoryId = category.into();
+        let category = Uuid::from(category);
+
+        self.request(
+            Method::DELETE,
+            &format!("/categories/{category}/overrides/{target}"),
+            None,
+        )
+        .await
+    }
+    /// Send a standalone sticker from the destination server, preserving ordinary API errors.
+    ///
+    /// ```no_run
+    /// # use rappin::{Api, ApiExt, Result, StickerMessage};
+    /// async fn send(api: &impl Api, channel: uuid::Uuid, sticker: uuid::Uuid) -> Result<rappin::Message> {
+    ///     api.send_sticker(channel, &StickerMessage::new(sticker)).await
+    /// }
+    /// ```
+    async fn send_sticker(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        body: &StickerMessage,
+    ) -> Result<Message> {
+        let channel: crate::ChannelId = channel.into();
+        let channel = Uuid::from(channel);
+
+        let value = self
+            .request(
+                Method::POST,
+                &format!("/channels/{channel}/messages"),
+                Some(json!(body)),
+            )
+            .await?;
+        let message: Message = serde_json::from_value(value["message"].clone())?;
+        if message.channel_id != channel {
+            return Err(Error::Remote(RemoteError {
+                kind: "operation_result_scope".into(),
+                message:
+                    "sticker write response has a different channel; reconcile before retrying"
+                        .into(),
+                status: None,
+                retry_after: None,
+                details: [("outcome".into(), "unknown".into())].into(),
+            }));
+        }
+        Ok(message)
     }
 }
 impl<T: Api + ?Sized> ApiExt for T {}
@@ -631,7 +1355,7 @@ impl Api for crate::Client {
         let expected_server = server;
         let server = self.get_server(server).await?;
         if server.id != expected_server {
-            return Err(crate::YappinError::validation(
+            return Err(crate::Error::validation(
                 "permissions",
                 "API returned a different server ID",
             ));

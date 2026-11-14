@@ -1,4 +1,4 @@
-use rappin::prelude::*;
+use rappin::*;
 use std::time::Duration;
 
 #[tokio::main]
@@ -6,7 +6,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let token = std::env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+        .map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
 
     let bot = Bot::builder(token)
         .prefix("!")
@@ -109,7 +109,8 @@ async fn main() -> Result<()> {
             }
             Ok(())
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
 
     println!("Starting advanced bot... Press Ctrl+C to exit.");
     bot.run().await?;

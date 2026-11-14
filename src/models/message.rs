@@ -27,6 +27,9 @@ use crate::utils::{attachment_url, IS_COMPONENTS_V2};
 /// assert!(!message.is_pinned());
 /// ```
 pub struct Message {
+    /// Additional platform fields retained for forward-compatible reads.
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, serde_json::Value>,
     /// Message ID.
     pub id: Uuid,
     /// Channel ID where message was posted.
@@ -108,10 +111,13 @@ impl Message {
 /// # Example
 ///
 /// ```rust
-/// let body = rappin::CreateMessage::new("Hello").with_reply_to(uuid::Uuid::nil());
+/// let body = rappin::CreateMessage::new("Hello").reply_to(uuid::Uuid::nil());
 /// assert_eq!(body.reply_to, Some(uuid::Uuid::nil()));
 /// ```
 pub struct CreateMessage {
+    /// Standalone sticker ID. Validation rejects mixing a sticker with content.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sticker_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Optional message text; normal message validation limits it to 2,000 characters.
     pub content: Option<String>,
@@ -130,6 +136,18 @@ pub struct CreateMessage {
 }
 
 impl CreateMessage {
+    /// Create a standalone sticker message.
+    ///
+    /// ```rust
+    /// let body = rappin::CreateMessage::sticker(uuid::Uuid::nil());
+    /// assert!(body.content.is_none());
+    /// ```
+    pub fn sticker(id: Uuid) -> Self {
+        Self {
+            sticker_id: Some(id),
+            ..Self::default()
+        }
+    }
     /// Create a plain-text message body. No request is sent until you pass it to a Client or context.
     ///
     /// # Example
@@ -140,6 +158,7 @@ impl CreateMessage {
     /// ```
     pub fn new(content: impl Into<String>) -> Self {
         Self {
+            sticker_id: None,
             content: Some(content.into()),
             reply_to: None,
             embeds: None,
@@ -157,23 +176,21 @@ impl CreateMessage {
     /// assert_eq!(body.reply_to, Some(uuid::Uuid::nil()));
     /// ```
     pub fn reply(content: impl Into<String>, reply_to: Uuid) -> Self {
-        Self::new(content).with_reply_to(reply_to)
+        Self::new(content).reply_to(reply_to)
     }
 
     /// Creates a Components V2 layout message (sets flag 32768, components is the layout).
     /// # Example
     ///
     /// ```rust
-    /// let body = rappin::CreateMessage::layout([rappin::TextDisplay::new("Welcome")], None);
+    /// let body = rappin::CreateMessage::layout([rappin::TextDisplay::new("Welcome")]);
     /// assert_eq!(body.flags, Some(rappin::IS_COMPONENTS_V2));
     /// ```
-    pub fn layout(
-        components: impl IntoIterator<Item = impl Into<Component>>,
-        reply_to: Option<Uuid>,
-    ) -> Self {
+    pub fn layout(components: impl IntoIterator<Item = impl Into<Component>>) -> Self {
         Self {
+            sticker_id: None,
             content: None,
-            reply_to,
+            reply_to: None,
             embeds: None,
             components: Some(components.into_iter().map(Into::into).collect()),
             flags: Some(IS_COMPONENTS_V2),
@@ -185,10 +202,10 @@ impl CreateMessage {
     /// # Example
     ///
     /// ```rust
-    /// let body = rappin::CreateMessage::new("Hello").with_content("Updated");
+    /// let body = rappin::CreateMessage::new("Hello").content("Updated");
     /// assert_eq!(body.content.as_deref(), Some("Updated"));
     /// ```
-    pub fn with_content(mut self, content: impl Into<String>) -> Self {
+    pub fn content(mut self, content: impl Into<String>) -> Self {
         self.content = Some(content.into());
         self
     }
@@ -198,10 +215,10 @@ impl CreateMessage {
     /// # Example
     ///
     /// ```rust
-    /// let body = rappin::CreateMessage::new("Hello").with_reply_to(uuid::Uuid::nil());
+    /// let body = rappin::CreateMessage::new("Hello").reply_to(uuid::Uuid::nil());
     /// assert_eq!(body.reply_to, Some(uuid::Uuid::nil()));
     /// ```
-    pub fn with_reply_to(mut self, reply_to: Uuid) -> Self {
+    pub fn reply_to(mut self, reply_to: Uuid) -> Self {
         self.reply_to = Some(reply_to);
         self
     }
@@ -262,6 +279,7 @@ impl CreateMessage {
 
 /// Request payload to edit an existing message (`PATCH /channels/{id}/messages/{mid}`).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 /// # Example
 ///
 /// ```rust
@@ -269,9 +287,13 @@ impl CreateMessage {
 /// assert_eq!(serde_json::to_value(patch).unwrap(), serde_json::json!({"embeds":null}));
 /// ```
 pub struct EditMessage {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    /// Replacement text; omission leaves the current text unchanged. An empty string clears it.
-    pub content: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::utils::deserialize_patch"
+    )]
+    /// Text patch. Omission retains text; `Some(None)` explicitly clears it.
+    pub content: Option<Option<String>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -310,10 +332,22 @@ impl EditMessage {
     ///
     /// ```rust
     /// let patch = rappin::EditMessage::new().content("Updated");
-    /// assert_eq!(patch.content.as_deref(), Some("Updated"));
+    /// assert_eq!(patch.content.as_ref().and_then(Option::as_deref), Some("Updated"));
     /// ```
     pub fn content(mut self, content: impl Into<String>) -> Self {
-        self.content = Some(content.into());
+        self.content = Some(Some(content.into()));
+        self
+    }
+
+    /// Clear message text with an explicit JSON null patch.
+    ///
+    /// ```rust
+    /// let patch = rappin::EditMessage::new().clear_content();
+    /// assert_eq!(serde_json::to_value(patch)?, serde_json::json!({"content":null}));
+    /// # Ok::<(), serde_json::Error>(())
+    /// ```
+    pub fn clear_content(mut self) -> Self {
+        self.content = Some(None);
         self
     }
 
@@ -495,26 +529,6 @@ impl CreateMessage {
             let mut copy = self.clone();
             for e in copy.embeds.iter_mut().flatten() {
                 e.clear_proxy_metadata();
-            }
-            std::borrow::Cow::Owned(copy)
-        } else {
-            std::borrow::Cow::Borrowed(self)
-        }
-    }
-}
-impl EditMessage {
-    pub(crate) fn for_request(&self) -> std::borrow::Cow<'_, Self> {
-        if self
-            .embeds
-            .as_ref()
-            .and_then(Option::as_ref)
-            .is_some_and(|e| e.iter().any(Embed::has_proxy_metadata))
-        {
-            let mut copy = self.clone();
-            if let Some(Some(embeds)) = &mut copy.embeds {
-                for e in embeds {
-                    e.clear_proxy_metadata();
-                }
             }
             std::borrow::Cow::Owned(copy)
         } else {

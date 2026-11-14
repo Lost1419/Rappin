@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rappin::prelude::*;
+use rappin::*;
 
 struct CounterCog {
     loaded: Arc<AtomicBool>,
@@ -41,7 +41,10 @@ async fn test_cog_lifecycle_and_dynamic_update() {
     let loaded = Arc::new(AtomicBool::new(false));
     let unloaded = Arc::new(AtomicBool::new(false));
 
-    let bot = Bot::builder("yb_dummy_token").sync_commands(false).build();
+    let bot = Bot::builder("yb_dummy_token")
+        .sync_commands(false)
+        .build()
+        .expect("valid bot configuration");
 
     let handle = bot.handle();
     assert!(!handle.has_cog("counter").await);

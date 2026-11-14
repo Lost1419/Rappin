@@ -151,7 +151,8 @@ async fn complete_plan_keys_reach_preparation_checks_execution_and_consumer_jour
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     bot.process_event(event()).await.unwrap();
     assert_eq!(journal.lock().unwrap().len(), 2);
@@ -209,7 +210,8 @@ async fn nesting_inherits_or_overrides_and_restores_scope_without_deduplicating(
             );
             Ok(())
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     bot.process_event(event()).await.unwrap();
     assert_eq!(
@@ -279,7 +281,8 @@ async fn operation_metadata_does_not_bypass_gate_cog_checks_or_revocation() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     struct Private;
     #[async_trait::async_trait]
@@ -316,10 +319,10 @@ async fn partial_uncertain_causes_keep_operation_identity_through_failure_callba
             async move {
                 assert_eq!(ctx.operation_id(), Some(id("uncertain-step")));
                 c.fetch_add(1, Ordering::SeqCst);
-                Err(YappinError::PartialWrite {
+                Err(Error::PartialWrite {
                     completed: vec![json!({"operation_id":"uncertain-step","receipt":"confirmed"})],
                     failed_step: 2,
-                    source: Box::new(YappinError::Api {
+                    source: Box::new(Error::Api {
                         status: 502,
                         message: "unknown".into(),
                         retry_after: Some(0.25),
@@ -351,7 +354,8 @@ async fn partial_uncertain_causes_keep_operation_identity_through_failure_callba
                 Ok(FailureDisposition::Stop)
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     assert!(bot.process_event(event()).await.is_err());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -389,7 +393,8 @@ async fn concurrent_identified_calls_keep_independent_task_local_metadata() {
             assert_eq!(ctx.operation_id(), None);
             Ok(())
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     seed(&bot).await;
     bot.process_event(event()).await.unwrap();
     let mut keys = seen

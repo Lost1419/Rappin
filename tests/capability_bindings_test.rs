@@ -69,7 +69,7 @@ impl Api for MockApi {
             let step = self.mutations.fetch_add(1, Ordering::SeqCst) + 1;
             if let Some(status) = self.mutation_error {
                 if self.fail_step == 0 || step == self.fail_step {
-                    return Err(YappinError::Api {
+                    return Err(Error::Api {
                         status,
                         message: "fixture failure".into(),
                         retry_after: None,
@@ -645,7 +645,8 @@ async fn permanent_commands_preflight_reload_and_keep_bound_help_without_info_pa
         .sync_commands(false)
         .log(false)
         .prefix("?")
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(support::profile()).unwrap())
         .await;
@@ -726,9 +727,10 @@ struct PublicationGate {
 }
 #[async_trait]
 impl EventHandler for PublicationGate {
-    async fn on_ready(&self, _: &Client, _: &BotProfile) {
+    async fn on_ready(&self, _: &Client, _: &BotProfile) -> rappin::Result<()> {
         self.ready.notify_one();
         self.resume.notified().await;
+        Ok(())
     }
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -767,7 +769,8 @@ async fn failed_publication_preserves_permanent_command_routes_and_help() {
             ready: ready.clone(),
             resume: resume.clone(),
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = calls.clone();
@@ -1155,7 +1158,8 @@ async fn channel_command_parsing_help_preflight_and_reload_share_operation_metad
         .sync_commands(false)
         .log(false)
         .prefix("?")
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(support::profile()).unwrap())
         .await;
@@ -1264,7 +1268,7 @@ async fn typed_channel_slowmode_validation_precedes_http() {
         .edit_channel(channel(), &EditChannelRequest::new().slowmode(21601))
         .await
         .unwrap_err();
-    assert!(matches!(error, YappinError::Validation { .. }));
+    assert!(matches!(error, Error::Validation { .. }));
 }
 
 #[tokio::test]
@@ -1429,7 +1433,8 @@ async fn api12_bot_webhook_lists_are_scoped_and_command_schemas_use_current_meta
     let bot = Bot::builder("fixture")
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let command = binding.bind(|_, _| async { Ok(()) }).unwrap();
     let cog = CogBuilder::new("emoji_commands")
         .registered_command(command)

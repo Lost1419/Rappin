@@ -45,7 +45,7 @@ serde_json="1"
     )
     .unwrap();
     std::fs::write(project.0.join("src/main.rs"),r#"
-use rappin::{*,hot_reload::WorkerCog};
+use rappin::{*, hot_reload::WorkerCog};
 
 struct Roll(BoundedU32<2,100>);
 impl FromArgs for Roll {
@@ -72,7 +72,7 @@ impl FromArgs for Roll {
     assert_eq!(ctx.operation_id().unwrap().as_str(),"partial/step");
     let first=ctx.say("confirmed").await?;
     let source=ctx.say("uncertain").await.unwrap_err();
-    Err(YappinError::PartialWrite{completed:vec![serde_json::json!({"message":first})],failed_step:2,source:Box::new(source)})
+    Err(Error::PartialWrite{completed:vec![serde_json::json!({"message":first})],failed_step:2,source:Box::new(source)})
  }).run().await
 }
 "#).unwrap();
@@ -238,7 +238,8 @@ impl FromArgs for Roll {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(support::profile()).unwrap())
         .await;

@@ -573,8 +573,8 @@ pub(super) fn digest(value: &impl Serialize) -> Result<String> {
     conflicts::canonicalize(&mut value);
     Ok(hex(&Sha256::digest(serde_json::to_vec(&value)?).into()))
 }
-fn rejected(reason: &str) -> YappinError {
-    YappinError::Remote(RemoteError {
+fn rejected(reason: &str) -> Error {
+    Error::Remote(RemoteError {
         kind: "timestamp_reconciliation".into(),
         message: "completed event timestamp reconciliation rejected".into(),
         status: None,
@@ -606,14 +606,14 @@ pub(super) async fn bounded_for<T>(
         .unwrap_or_else(|_| Err(timeout_cause()))
         .map_err(|cause| operation_failure_for(kind, phase, cause))
 }
-fn timeout_cause() -> YappinError {
-    YappinError::Config("reconciliation operation timed out; inspect store before retrying".into())
+fn timeout_cause() -> Error {
+    Error::Config("reconciliation operation timed out; inspect store before retrying".into())
 }
-fn operation_failure(phase: &str, cause: YappinError) -> YappinError {
+fn operation_failure(phase: &str, cause: Error) -> Error {
     operation_failure_for("timestamp_reconciliation", phase, cause)
 }
-fn operation_failure_for(kind: &str, phase: &str, cause: YappinError) -> YappinError {
-    YappinError::Remote(RemoteError {
+fn operation_failure_for(kind: &str, phase: &str, cause: Error) -> Error {
+    Error::Remote(RemoteError {
         kind: kind.into(),
         message: "reconciliation read or durable commit failed".into(),
         status: cause.status_code(),
@@ -693,7 +693,7 @@ impl EventIngress {
         )
         .await
         {
-            let error = YappinError::FailureHandling {
+            let error = Error::FailureHandling {
                 source: Box::new(report.to_error()),
                 handling_error: Box::new(error),
             };

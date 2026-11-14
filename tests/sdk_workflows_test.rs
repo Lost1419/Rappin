@@ -101,17 +101,17 @@ async fn common_api_works_with_clients_contexts_trait_objects_and_native_errors(
 
 #[test]
 fn remote_errors_retain_status_retry_outcome_and_partial_receipts() {
-    let error = YappinError::PartialWrite {
+    let error = Error::PartialWrite {
         completed: vec![json!({"id":Uuid::nil()})],
         failed_step: 2,
-        source: Box::new(YappinError::Api {
+        source: Box::new(Error::Api {
             status: 429,
             message: "wait".into(),
             retry_after: Some(0.5),
         }),
     };
     let wire = serde_json::to_string(&error.to_remote()).unwrap();
-    let remote = YappinError::Remote(serde_json::from_str(&wire).unwrap());
+    let remote = Error::Remote(serde_json::from_str(&wire).unwrap());
     assert_eq!(remote.status_code(), Some(429));
     assert!(remote.is_rate_limit());
     assert_eq!(remote.retry_after(), Some(Duration::from_millis(500)));
@@ -129,10 +129,7 @@ fn remote_errors_retain_status_retry_outcome_and_partial_receipts() {
         remote.to_json()["completed_steps"][0]["id"],
         Uuid::nil().to_string()
     );
-    assert!(
-        YappinError::Remote(YappinError::Command(CommandError::Extra).to_remote())
-            .is_command_error()
-    );
+    assert!(Error::Remote(Error::Command(CommandError::Extra).to_remote()).is_command_error());
 }
 
 #[test]
@@ -199,7 +196,8 @@ async fn dynamic_commands_preflight_conflicts_before_actions_and_replace_transac
         .sync_commands(false)
         .prefix("?")
         .registered_command(command)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(profile()).unwrap())
         .await;

@@ -64,7 +64,7 @@ incomplete by default. Preserve `FailureHandling.source` and `handling_error`.
 
 A shared `message_gate` runs before native/worker command dispatch. Gate Handled
 skips downstream handlers; Stop is incomplete. Fallible natural-language listeners
-use `on_message_result` or `WorkerCog::on_message`. Handled failure callbacks
+use `on_message` or `WorkerCog::on_message`. Handled failure callbacks
 complete a listener invocation but do not claim the remaining listeners; returning
 `MessageDisposition::Handled` from the listener does. Post-command rejection does
 not undo a command's earlier effects.
@@ -131,7 +131,7 @@ API 1.4 computed permission reads can establish requester and bot access
 independently. Use `get_member_permissions` with the actual server/user/channel.
 A missing flag stays unknown. Rollout-related 403 responses concern availability.
 Resource lifecycle worker listeners require protocol v9. See the
-[API 1.4 guide](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.4.md).
+[API 1.4 guide](https://github.com/Lost1419/Rappin/blob/main/docs/resources.md).
 
 ## API origin
 

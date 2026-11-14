@@ -334,17 +334,17 @@ impl CreateServerEvent {
     /// ```
     pub fn validate(&self) -> crate::Result<()> {
         if self.title.trim().is_empty() {
-            return Err(crate::YappinError::validation("title", "must not be empty"));
+            return Err(crate::Error::validation("title", "must not be empty"));
         }
         if self.channel_id.is_some() == self.location.as_ref().is_some_and(|s| !s.trim().is_empty())
         {
-            return Err(crate::YappinError::validation(
+            return Err(crate::Error::validation(
                 "location",
                 "provide either a voice channel or a nonempty external location",
             ));
         }
         if self.ends_at.is_some_and(|end| end <= self.starts_at) {
-            return Err(crate::YappinError::validation(
+            return Err(crate::Error::validation(
                 "ends_at",
                 "must be after starts_at",
             ));

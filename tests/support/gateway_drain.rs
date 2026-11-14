@@ -91,10 +91,19 @@ async fn admitted_requests_survive_intake_stop_and_keep_their_followup_edit() {
                 .base_url(&http.url)
                 .sync_commands(false)
                 .log(false)
-                .cursor_file(&path)
-                .gateway(url)
-                .drain_timeout(Some(Duration::from_secs(2)))
-                .pending_batches(if mode == "failure" { 2 } else { 1 })
+                .configure(|settings| {
+                    settings.persistence.cursor = Some(rappin::EventCursor::new(&path))
+                })
+                .configure(|settings| {
+                    settings.transport.gateway_url = Some(url);
+                    settings.transport.mode = rappin::TransportMode::GatewayPreferred;
+                })
+                .configure(|settings| {
+                    settings.execution.drain_timeout = Some(Duration::from_secs(2))
+                })
+                .configure(|settings| {
+                    settings.execution.pending_batches = if mode == "failure" { 2 } else { 1 }
+                })
                 .command("work", "fixture", move |ctx| {
                     let done = done.clone();
                     async move {
@@ -121,14 +130,16 @@ async fn admitted_requests_survive_intake_stop_and_keep_their_followup_edit() {
                     let notify = notify.clone();
                     async move {
                         notify.notified().await;
-                        Err(YappinError::Config("fixture handler failure".into()))
+                        Err(Error::Config("fixture handler failure".into()))
                     }
                 })
                 .command("noop", "fixture", |_| async { Ok(()) });
             if shared {
-                b = b.ingress_store(Arc::new(Store::default()));
+                b = b.configure(|settings| {
+                    settings.persistence.store = Some(Arc::new(Store::default()))
+                });
             }
-            let bot = b.build();
+            let bot = b.build().expect("valid bot configuration");
             let handle = bot.handle();
             handle
                 .client()
@@ -218,9 +229,16 @@ async fn drain_timeout_and_hard_cancellation_retain_unknown_submitted_work() {
                 .base_url(&http.url)
                 .sync_commands(false)
                 .log(false)
-                .cursor_file(&path)
-                .gateway(url)
-                .drain_timeout(Some(Duration::from_millis(50)))
+                .configure(|settings| {
+                    settings.persistence.cursor = Some(rappin::EventCursor::new(&path))
+                })
+                .configure(|settings| {
+                    settings.transport.gateway_url = Some(url);
+                    settings.transport.mode = rappin::TransportMode::GatewayPreferred;
+                })
+                .configure(|settings| {
+                    settings.execution.drain_timeout = Some(Duration::from_millis(50))
+                })
                 .command("work", "fixture", |ctx| async move {
                     ctx.bot()
                         .unwrap()
@@ -237,9 +255,9 @@ async fn drain_timeout_and_hard_cancellation_retain_unknown_submitted_work() {
                     }
                 });
             if shared {
-                b = b.ingress_store(store.clone());
+                b = b.configure(|settings| settings.persistence.store = Some(store.clone()));
             }
-            let bot = b.build();
+            let bot = b.build().expect("valid bot configuration");
             let handle = bot.handle();
             let ingress = handle.ingress();
             handle
@@ -346,8 +364,11 @@ async fn timestamp_conflicts_keep_started_work_in_both_real_transport_orders() {
         let release = Arc::new(Notify::new());
         let released = release.clone();
         let bot = builder(&http)
-            .gateway(url)
-            .drain_timeout(Some(Duration::from_secs(2)))
+            .configure(|settings| {
+                settings.transport.gateway_url = Some(url);
+                settings.transport.mode = rappin::TransportMode::GatewayPreferred;
+            })
+            .configure(|settings| settings.execution.drain_timeout = Some(Duration::from_secs(2)))
             .command("ping", "fixture", move |_| {
                 let called = called.clone();
                 let released = released.clone();
@@ -357,7 +378,8 @@ async fn timestamp_conflicts_keep_started_work_in_both_real_transport_orders() {
                     Ok(())
                 }
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         handle
             .client()
@@ -429,8 +451,11 @@ async fn polling_authority_ignores_real_gateway_and_webhook_arrival_order() {
         let mut config = IngressConfig::default();
         config.admission_policy = IngressAdmissionPolicy::PollingOnly;
         let bot = builder(&http)
-            .shared_ingress(config)
-            .gateway(url)
+            .configure(|settings| settings.persistence.ingress = Some(config))
+            .configure(|settings| {
+                settings.transport.gateway_url = Some(url);
+                settings.transport.mode = rappin::TransportMode::GatewayPreferred;
+            })
             .command("ping", "fixture", move |_| {
                 let called = called.clone();
                 async move {
@@ -438,7 +463,8 @@ async fn polling_authority_ignores_real_gateway_and_webhook_arrival_order() {
                     Ok(())
                 }
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let handle = bot.handle();
         handle
             .client()
@@ -490,11 +516,11 @@ async fn worker_requests_drain_and_preserve_partial_or_uncertain_failures() {
     std::fs::create_dir_all(project.0.join("src")).unwrap();
     std::fs::write(project.0.join("Cargo.toml"),format!("[package]\nname=\"drain-rpc-worker\"\nversion=\"0.0.0\"\nedition=\"2021\"\n[workspace]\n[dependencies]\nrappin={{package=\"rappin-rs\",path={},features=[\"hot-reload\"]}}\ntokio={{version=\"1\",features=[\"macros\",\"rt-multi-thread\"]}}\n",json!(env!("CARGO_MANIFEST_DIR")))).unwrap();
     std::fs::write(project.0.join("src/main.rs"),r#"
-use rappin::{*,hot_reload::WorkerCog};
+use rappin::{*, hot_reload::WorkerCog};
 #[tokio::main] async fn main()->Result<()> {
  WorkerCog::new("drain-rpc").single_attempt_api().command("work","fixture",|ctx|async move {
    let first=ctx.api_once("POST","/mutate",None).await?;
-   match ctx.api_once("PATCH","/mutate/id",None).await {Ok(_)=>Ok(()),Err(source)=>Err(YappinError::PartialWrite{completed:vec![first],failed_step:2,source:Box::new(source)})}
+   match ctx.api_once("PATCH","/mutate/id",None).await {Ok(_)=>Ok(()),Err(source)=>Err(Error::PartialWrite{completed:vec![first],failed_step:2,source:Box::new(source)})}
  }).run().await
 }
 "#).unwrap();
@@ -522,13 +548,20 @@ use rappin::{*,hot_reload::WorkerCog};
                 .base_url(&http.url)
                 .sync_commands(false)
                 .log(false)
-                .cursor_file(path)
-                .gateway(url)
-                .drain_timeout(Some(if mode == "worker_timeout" {
-                    Duration::from_millis(80)
-                } else {
-                    Duration::from_secs(3)
-                }))
+                .configure(|settings| {
+                    settings.persistence.cursor = Some(rappin::EventCursor::new(path))
+                })
+                .configure(|settings| {
+                    settings.transport.gateway_url = Some(url);
+                    settings.transport.mode = rappin::TransportMode::GatewayPreferred;
+                })
+                .configure(|settings| {
+                    settings.execution.drain_timeout = Some(if mode == "worker_timeout" {
+                        Duration::from_millis(80)
+                    } else {
+                        Duration::from_secs(3)
+                    })
+                })
                 .on_command_failure(move |_, failure| {
                     let observed = observed.clone();
                     async move {
@@ -537,9 +570,11 @@ use rappin::{*,hot_reload::WorkerCog};
                     }
                 });
             if shared {
-                b = b.ingress_store(Arc::new(Store::default()));
+                b = b.configure(|settings| {
+                    settings.persistence.store = Some(Arc::new(Store::default()))
+                });
             }
-            let bot = b.build();
+            let bot = b.build().expect("valid bot configuration");
             let handle = bot.handle();
             bot.cache()
                 .set_me(serde_json::from_value(support::profile()).unwrap())

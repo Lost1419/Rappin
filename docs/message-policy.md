@@ -30,19 +30,15 @@ invoke a failure callback. No outcome retries a gate, listener or handler.
 
 After an allowed gate, dispatch keeps the existing order: command/help processing,
 the global event handler, then cog listeners. Relative order among cogs is
-unspecified. `EventHandler::on_message_result` and `Cog::on_message_result` are the
-fallible hooks. Their defaults call the existing `on_message -> ()` hook exactly
-once and return `Continue`. Existing implementations and default behavior remain
-supported. Override the new hook for required I/O; when overriding it, explicitly
-call any legacy hook you still need. Errors deliberately discarded inside a legacy
-`()` callback cannot be recovered by the SDK.
+unspecified. `EventHandler::on_message` and `Cog::on_message` are the
+fallible hooks. Return an explicit disposition after awaiting required work. Errors propagate through the message failure policy and retain the event barrier.
 
 ```rust,no_run
-use rappin::prelude::*;
+use rappin::*;
 struct NaturalLanguage;
 #[async_trait::async_trait]
 impl EventHandler for NaturalLanguage {
-    async fn on_message_result(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
+    async fn on_message(&self, ctx: &MessageContext) -> Result<MessageDisposition> {
         if ctx.command.is_none() && ctx.content() == "hello" {
             ctx.reply("Hello!").await?;
             return Ok(MessageDisposition::Handled);
@@ -60,7 +56,7 @@ let bot = Bot::builder("yb_token")
         Ok(MessageDisposition::Continue)
     })
     .event_handler(NaturalLanguage)
-    .build();
+    .build().expect("valid bot configuration");
 ```
 
 The complete executable example is `examples/message_gate.rs`. Set
@@ -95,7 +91,7 @@ Do not turn uncertain effects into a typed rejection just to keep intake running
 Panic unwinds and lost worker completion remain uncertain failures.
 
 ```rust,no_run
-use rappin::prelude::*;
+use rappin::*;
 let bot = Bot::builder("yb_token").on_message_failure(|ctx, failure| async move {
     if failure.class == FailureClass::Rejected {
         ctx.reply(failure.error.to_string()).await?;
@@ -136,8 +132,7 @@ async fn worker() -> Result<()> {
 This registers `Listener::ServerMessage` and uses protocol v5 for explicit outcomes.
 Upgrade the parent before opting in. New parents accept older workers, and workers
 using only existing handlers retain protocol v4. Existing `listen(Listener::Message,
-...)` keeps its legacy observation/logging behavior; migrate required I/O to
-`on_message`. A worker cannot register both message contracts at once. Missing or
+...)` also propagates failures; use on_message for explicit message completion outcomes. A worker cannot register both message contracts at once. Missing or
 invalid outcome/completion frames are not implicit success: retain an uncertain
 barrier, poison the exchange and reconcile before explicit replacement. Workers
 and their build scripts remain trusted code, not a sandbox.
@@ -148,7 +143,7 @@ Polling and WebSocket intake use the same dispatch/completion path. Only the
 ordered completed prefix is persisted. An incomplete gate/listener prevents the
 cursor crossing that event; failed cursor persistence remains a storage failure.
 Concurrent work already started is drained, so other events can finish after a
-failure. Set `handler_concurrency(1)` for strict event ordering. Cancellation never
+failure. Set `settings.execution.concurrency = 1` inside configure for strict event ordering. Cancellation never
 implicitly completes unfinished work.
 
 Intake deduplicates transport event IDs within batches and drops previously received
@@ -163,5 +158,5 @@ The gate controls command/listener dispatch, not raw intake, cache maintenance o
 `EventHub` collectors, which receive authenticated events before dispatch. Use
 appropriate collector filters and application authorization for those workflows.
 Authentication, transport, preparation, cursor and storage errors do not enter the
-message failure callback. See [handler failures](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md) for ordered
+message failure callback. See [handler failures](https://github.com/Lost1419/Rappin/blob/dev/docs/handler-failures.md) for ordered
 checkpoint and recovery details shared with commands/buttons.

@@ -1,5 +1,5 @@
 use super::Source;
-use crate::{Result, YappinError};
+use crate::{Error, Result};
 use sha2::{Digest, Sha256};
 use std::{
     fs, io,
@@ -51,8 +51,8 @@ impl FileSystem for Disk {}
 pub(super) async fn fingerprint(source: Source) -> Result<Vec<u8>> {
     tokio::task::spawn_blocking(move || scan(&source, &Disk))
         .await
-        .map_err(|_| YappinError::Config("source watcher task failed".into()))?
-        .map_err(|error| YappinError::Io(io::Error::new(error.source.kind(), error)))
+        .map_err(|_| Error::Config("source watcher task failed".into()))?
+        .map_err(|error| Error::Io(io::Error::new(error.source.kind(), error)))
 }
 
 fn scan(source: &Source, disk: &impl FileSystem) -> ScanResult<Vec<u8>> {

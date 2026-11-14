@@ -107,7 +107,8 @@ async fn typed_routing_aliases_subcommands_prefixes_help_and_denials() {
             |_, _| async { panic!("denied handler ran") },
         )
         .help_command("help")
-        .build();
+        .build()
+        .expect("valid bot configuration");
     for content in [
         "?dice roll 20 'two words'",
         "?roll 20 'two words'",
@@ -135,20 +136,17 @@ async fn typed_routing_aliases_subcommands_prefixes_help_and_denials() {
 
 #[tokio::test]
 async fn invalid_and_conflicting_definitions_fail_before_network() {
-    let bot = Bot::builder("secret")
+    let error = Bot::builder("secret")
         .base_url("http://127.0.0.1:1")
         .log(false)
         .command_spec(
             CommandSpec::<()>::new("ping", "Ping").alias("ping"),
             |_, _| async { Ok(()) },
         )
-        .build();
-    assert!(bot
-        .process_event(raw(1, "!ping"))
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("already registered"));
+        .build()
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("already registered"));
 }
 
 #[tokio::test]
@@ -429,10 +427,14 @@ async fn pipeline_keeps_receiving_for_waiting_handler_and_commits_in_order() {
     struct StopAfterAnswer;
     #[async_trait::async_trait]
     impl EventHandler for StopAfterAnswer {
-        async fn on_message(&self, ctx: &MessageContext) {
+        async fn on_message(
+            &self,
+            ctx: &MessageContext,
+        ) -> rappin::Result<rappin::MessageDisposition> {
             if ctx.content() == "answer" {
                 ctx.bot().unwrap().stop();
             }
+            Ok(rappin::MessageDisposition::Continue)
         }
     }
     let p = path.clone();
@@ -440,9 +442,9 @@ async fn pipeline_keeps_receiving_for_waiting_handler_and_commits_in_order() {
         .base_url(format!("http://{address}"))
         .sync_commands(false)
         .log(false)
-        .cursor_file(&path)
-        .handler_concurrency(1)
-        .pending_batches(2)
+        .configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new(&path)))
+        .configure(|settings| settings.execution.concurrency = 1)
+        .configure(|settings| settings.execution.pending_batches = 2)
         .event_handler(StopAfterAnswer)
         .command("question", "Wait", move |ctx| {
             let registered = registered.clone();
@@ -456,7 +458,8 @@ async fn pipeline_keeps_receiving_for_waiting_handler_and_commits_in_order() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     tokio::time::timeout(Duration::from_secs(3), bot.run())
         .await
@@ -482,14 +485,18 @@ async fn auto_ack_defers_slow_handlers_but_skips_an_already_answered_interaction
             .base_url(base)
             .sync_commands(false)
             .log(false)
-            .auto_ack_after(Duration::from_millis(if aged { 100 } else { 10 }))
+            .configure(|settings| {
+                settings.execution.auto_ack_after =
+                    Some(Duration::from_millis(if aged { 100 } else { 10 }))
+            })
             .button("test", move |ctx| async move {
                 if slow {
                     tokio::time::sleep(Duration::from_millis(40)).await;
                 }
                 ctx.reply("done").await
             })
-            .build();
+            .build()
+            .expect("valid bot configuration");
         let mut event = json!({"id":1,"type":"interaction","data":{"id":"click","token":"callback-secret","custom_id":"test"}});
         if aged {
             event["created_at"] = json!(chrono::Utc::now() - chrono::Duration::seconds(2));
@@ -530,7 +537,8 @@ async fn cache_expires_and_membership_events_invalidate_before_dispatch() {
         .log(false)
         .sync_commands(false)
         .lookup_cache(CachePolicy::new(2, Duration::from_secs(60)))
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.client()
         .fetch_member(server, user, Freshness::PreferCache)
         .await
@@ -636,14 +644,14 @@ async fn later_success_never_commits_past_an_earlier_failed_batch() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .cursor_file(&path)
-        .handler_concurrency(2)
-        .pending_batches(2)
+        .configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new(&path)))
+        .configure(|settings| settings.execution.concurrency = 2)
+        .configure(|settings| settings.execution.pending_batches = 2)
         .command("fail", "Fail after later event", move |_| {
             let wait = wait.clone();
             async move {
                 wait.notified().await;
-                Err(YappinError::Config("fixture failure".into()))
+                Err(Error::Config("fixture failure".into()))
             }
         })
         .command("later", "Complete first", move |_| {
@@ -655,7 +663,8 @@ async fn later_success_never_commits_past_an_earlier_failed_batch() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     assert!(tokio::time::timeout(Duration::from_secs(2), bot.run())
         .await
         .unwrap()
@@ -684,8 +693,8 @@ async fn concurrency_one_orders_handlers_across_batch_boundaries() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .handler_concurrency(1)
-        .pending_batches(3)
+        .configure(|settings| settings.execution.concurrency = 1)
+        .configure(|settings| settings.execution.pending_batches = 3)
         .command("work", "Order", move |ctx| {
             let seen = seen.clone();
             async move {
@@ -698,7 +707,8 @@ async fn concurrency_one_orders_handlers_across_batch_boundaries() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     tokio::time::timeout(Duration::from_secs(2), bot.run())
         .await
         .unwrap()
@@ -721,7 +731,8 @@ async fn aborting_run_closes_collectors_and_clears_transport_status() {
         .base_url(base)
         .log(false)
         .sync_commands(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let handle = bot.handle();
     let mut status = handle.subscribe_transport();
     let waiter = handle.events().collect::<Event>().subscribe().unwrap();
@@ -751,7 +762,8 @@ async fn native_cog_replacement_updates_aliases_checks_and_live_help_together() 
         .base_url("http://127.0.0.1:1")
         .sync_commands(false)
         .log(false)
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(profile()).unwrap())
         .await;
@@ -822,7 +834,8 @@ async fn slash_sync_advertises_canonical_roots_without_local_aliases() {
             |_, _| async { Ok(()) },
         )
         .command("dice", "Root description", |_| async { Ok(()) })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.handle().sync_commands().await.unwrap();
     let request = requests.recv().await.unwrap();
     let body: serde_json::Value =
@@ -840,8 +853,9 @@ async fn unsupported_gateway_mode_fails_before_authentication() {
     let bot = Bot::builder("secret")
         .base_url("http://127.0.0.1:1")
         .log(false)
-        .transport_mode(TransportMode::GatewayOnly)
-        .build();
+        .configure(|settings| settings.transport.mode = TransportMode::GatewayOnly)
+        .build()
+        .expect("valid bot configuration");
     assert!(bot
         .run()
         .await

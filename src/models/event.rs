@@ -373,7 +373,7 @@ pub struct MessageEvent {
     /// Rich message cards included in this event.
     pub embeds: Option<Vec<Embed>>,
     #[serde(default)]
-    /// Legacy button rows or layouts included in the event. Extended selects use UiInteraction/UiMessage views.
+    /// Legacy button rows or layouts included in the event. Extended selects use UiInteraction/Message views.
     pub components: Option<Vec<Component>>,
     #[serde(default)]
     /// UTC message creation time, when supplied.

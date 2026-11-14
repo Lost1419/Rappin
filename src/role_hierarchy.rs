@@ -1,7 +1,6 @@
 //! Fresh role evidence and explicit application hierarchy rules.
 use crate::{
-    capabilities::*, Api, Freshness, MemberDetail, PermissionSnapshot, Result, Role, Server,
-    YappinError,
+    capabilities::*, Api, Error, Freshness, MemberDetail, PermissionSnapshot, Result, Role, Server,
 };
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -513,7 +512,7 @@ pub async fn execute_role_deletion<A: Api + ?Sized>(
     policy: &dyn OperationPolicy,
 ) -> Result<OperationResult> {
     if operation.name() != "delete_role" {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "operation",
             "this helper executes only delete_role",
         ));

@@ -6,17 +6,17 @@ use crate::{
 
 pub(super) fn validate(descriptor: &Capability, args: &Value) -> Result<ValidatedOperation> {
     validate_inner(descriptor, args).map_err(|error| match error {
-        YappinError::Json(_) => {
-            YappinError::validation("arguments", "payload does not match the typed SDK request")
+        Error::Json(_) => {
+            Error::validation("arguments", "payload does not match the typed SDK request")
         }
         other => other,
     })
 }
 fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOperation> {
     let entry = capability(descriptor.name)
-        .ok_or_else(|| YappinError::validation("operation", "unknown operation"))?;
+        .ok_or_else(|| Error::validation("operation", "unknown operation"))?;
     if serde_json::to_vec(args)?.len() > 131072 {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "arguments",
             "maximum inline arguments are 128 KiB",
         ));
@@ -31,8 +31,8 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
         }
     }
     validate_schema(schema::operation_input_schema(entry), &args).map_err(|error| match error {
-        YappinError::Validation { field, message } => {
-            YappinError::validation(field.strip_prefix("arguments.").unwrap_or(&field), message)
+        Error::Validation { field, message } => {
+            Error::validation(field.strip_prefix("arguments.").unwrap_or(&field), message)
         }
         other => other,
     })?;
@@ -40,16 +40,16 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
     match entry.name {
         "send_message" => {
             if args.get("body").is_some() {
-                let mut message: crate::UiMessageBody =
+                let mut message: crate::CreateMessage =
                     serde_json::from_value(args["body"].clone())?;
                 if let Some(reply) = args["reply_to"].as_str() {
                     message.reply_to = Some(
                         reply
                             .parse()
-                            .map_err(|_| YappinError::validation("reply_to", "invalid UUID"))?,
+                            .map_err(|_| Error::validation("reply_to", "invalid UUID"))?,
                     );
                 }
-                message.validate(true)?;
+                message.validate()?;
                 writes.push(serde_json::to_value(message)?);
             } else {
                 let mut message =
@@ -58,7 +58,7 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
                     message.reply_to = Some(
                         reply
                             .parse()
-                            .map_err(|_| YappinError::validation("reply_to", "invalid UUID"))?,
+                            .map_err(|_| Error::validation("reply_to", "invalid UUID"))?,
                     );
                 }
                 let messages = if args["split"] == true {
@@ -74,10 +74,7 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
                     vec![message]
                 };
                 if messages.is_empty() {
-                    return Err(YappinError::validation(
-                        "content",
-                        "message cannot be empty",
-                    ));
+                    return Err(Error::validation("content", "message cannot be empty"));
                 }
                 for message in messages {
                     message.validate()?;
@@ -86,8 +83,8 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
             }
         }
         "edit_message" => {
-            let body: crate::UiMessageBody = serde_json::from_value(args["body"].clone())?;
-            body.validate(false)?;
+            let body: crate::EditMessage = serde_json::from_value(args["body"].clone())?;
+            body.validate()?;
             args["body"] = serde_json::to_value(body)?;
         }
         "create_channel" => {
@@ -139,7 +136,7 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
         }
         "send_files" => {
             if !args["body"]["sticker_id"].is_null() {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "sticker_id",
                     "stickers cannot include file uploads",
                 ));
@@ -174,7 +171,7 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
             if args.get("name").is_some()
                 && (args.get("path").is_some() || args.get("method").is_some())
             {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "schema",
                     "choose a name or a method/path, not both",
                 ));
@@ -184,15 +181,15 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
                     .get(name)
                     .is_none()
                 {
-                    return Err(YappinError::validation("name", "unknown component schema"));
+                    return Err(Error::validation("name", "unknown component schema"));
                 }
             } else {
                 let path = args["path"]
                     .as_str()
-                    .ok_or_else(|| YappinError::validation("path", "required with method"))?;
+                    .ok_or_else(|| Error::validation("path", "required with method"))?;
                 let method = args["method"]
                     .as_str()
-                    .ok_or_else(|| YappinError::validation("method", "required with path"))?;
+                    .ok_or_else(|| Error::validation("method", "required with path"))?;
                 endpoint_schema(bundled_schema(), path, method)?;
             }
         }
@@ -201,7 +198,7 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
     if let Some(target) = args["target"].as_str() {
         target
             .parse::<crate::PermissionTarget>()
-            .map_err(|_| YappinError::validation("target", "expected a role UUID or everyone"))?;
+            .map_err(|_| Error::validation("target", "expected a role UUID or everyone"))?;
     }
     let limits = output::Limits {
         fields: args["fields"]

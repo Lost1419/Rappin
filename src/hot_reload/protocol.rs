@@ -1,11 +1,11 @@
 use crate::{
-    Command, InteractionEvent, MemberJoinEvent, MemberLeaveEvent, MessageEvent, Result, YappinError,
+    Command, Error, InteractionEvent, MemberJoinEvent, MemberLeaveEvent, MessageEvent, Result,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub(super) const VERSION: u32 = 9;
+pub(super) const VERSION: u32 = 10;
 const MAX_FRAME: u64 = 1024 * 1024;
 
 /// Optional listeners implemented by a worker in addition to commands and buttons.
@@ -282,6 +282,8 @@ impl CogEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct Manifest {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schemas: Vec<crate::CommandSchema>,
     pub name: String,
     pub commands: Vec<Command>,
     pub buttons: Vec<String>,
@@ -298,28 +300,63 @@ impl Manifest {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "cog.name",
                 "requires 1 to 64 letters, digits, _ or -",
             ));
         }
-        crate::validation::validate_commands(&self.commands)?;
+        if self.commands.len() > 100 {
+            return Err(Error::validation("cog.commands", "at most 100 commands"));
+        }
+        let mut routes = std::collections::HashSet::new();
+        for command in &self.commands {
+            let info = self
+                .help
+                .iter()
+                .find(|info| info.name == command.name)
+                .cloned()
+                .unwrap_or_else(|| crate::CommandInfo {
+                    name: command.name.clone(),
+                    description: command.description.clone(),
+                    aliases: vec![],
+                    arguments: vec![],
+                });
+            info.validate()?;
+            for route in std::iter::once(&info.name).chain(info.aliases.iter()) {
+                if !routes.insert(route.clone()) {
+                    return Err(Error::validation(
+                        "cog.commands",
+                        "conflicting command or alias",
+                    ));
+                }
+            }
+        }
         let mut help_names = std::collections::HashSet::new();
         if self.help.iter().any(|info| {
             !self
                 .commands
                 .iter()
                 .any(|command| command.name == info.name)
-                || !info.aliases.is_empty()
                 || !help_names.insert(&info.name)
         }) {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "cog.help",
                 "help entries require unique existing command names",
             ));
         }
         for info in &self.help {
             info.validate()?;
+        }
+        let mut schemas = std::collections::HashSet::new();
+        for schema in &self.schemas {
+            schema.validate()?;
+            if !schemas.insert(&schema.name) || !self.help.iter().any(|info| *info == schema.info())
+            {
+                return Err(Error::validation(
+                    "cog.schemas",
+                    "schemas require unique matching help metadata",
+                ));
+            }
         }
         let mut seen = std::collections::HashSet::new();
         if self.buttons.len() > 100
@@ -328,7 +365,7 @@ impl Manifest {
                 .iter()
                 .any(|b| b.is_empty() || b.len() > 100 || !seen.insert(b))
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "cog.buttons",
                 "requires unique nonempty prefixes, up to 100",
             ));
@@ -336,17 +373,14 @@ impl Manifest {
         if self.listeners.contains(&Listener::Message)
             && self.listeners.contains(&Listener::ServerMessage)
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "cog.listeners",
                 "choose legacy Message or fallible ServerMessage, not both",
             ));
         }
         let mut seen = std::collections::HashSet::new();
         if self.listeners.iter().any(|kind| !seen.insert(kind)) {
-            return Err(YappinError::validation(
-                "cog.listeners",
-                "duplicate listener",
-            ));
+            return Err(Error::validation("cog.listeners", "duplicate listener"));
         }
         Ok(())
     }
@@ -423,8 +457,8 @@ pub(super) enum Wire {
         structured_error: Option<crate::RemoteError>,
     },
 }
-pub(super) fn protocol_error() -> YappinError {
-    YappinError::Config("cog worker protocol failed; old routing is preserved during reload".into())
+pub(super) fn protocol_error() -> Error {
+    Error::Config("cog worker protocol failed; old routing is preserved during reload".into())
 }
 pub(super) async fn read<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Wire> {
     let mut bytes = Vec::new();
@@ -433,12 +467,12 @@ pub(super) async fn read<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Wire
         .read_until(b'\n', &mut bytes)
         .await?;
     if bytes.is_empty() {
-        return Err(YappinError::Config(
+        return Err(Error::Config(
             "cog worker exited or closed its output".into(),
         ));
     }
     if bytes.len() as u64 > MAX_FRAME || bytes.last() != Some(&b'\n') {
-        return Err(YappinError::Config(
+        return Err(Error::Config(
             "cog IPC frame exceeds 1 MiB or is incomplete".into(),
         ));
     }
@@ -447,7 +481,7 @@ pub(super) async fn read<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Wire
 pub(super) async fn write<W: AsyncWrite + Unpin>(writer: &mut W, message: &Wire) -> Result<()> {
     let bytes = serde_json::to_vec(message)?;
     if bytes.len() as u64 >= MAX_FRAME {
-        return Err(YappinError::Config("cog IPC frame exceeds 1 MiB".into()));
+        return Err(Error::Config("cog IPC frame exceeds 1 MiB".into()));
     }
     writer.write_all(&bytes).await?;
     writer.write_all(b"\n").await?;
@@ -468,7 +502,7 @@ pub(super) async fn read_upload<R: AsyncBufRead + Unpin>(
             .any(|f| f.size == 0 || f.size > 10 * 1024 * 1024 || f.name.len() > 255)
         || descriptors.iter().map(|f| f.size).sum::<usize>() > 12 * 1024 * 1024
     {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "upload",
             "invalid bounded worker upload metadata",
         ));

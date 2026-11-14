@@ -690,8 +690,8 @@ async fn bounded<T>(
 ) -> Result<T> {
     bounded_for("event_retirement", timeout, phase, future).await
 }
-fn reject(reason: &str) -> YappinError {
-    YappinError::Remote(RemoteError {
+fn reject(reason: &str) -> Error {
+    Error::Remote(RemoteError {
         kind: "event_retirement".into(),
         message: "explicit event retirement rejected; original work must not be replayed".into(),
         status: None,

@@ -1,5 +1,5 @@
 //! API 1.4 computed permissions, resource identity and explicit overrides.
-use crate::{PermissionOverride, Result, YappinError};
+use crate::{Error, PermissionOverride, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -62,7 +62,7 @@ impl MemberPermissions {
             || self.user_id != user
             || self.channel_id != channel
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "permissions",
                 "computed permission response has a different object or scope",
             ));
@@ -185,7 +185,7 @@ pub(crate) fn validate_override(body: &PermissionOverride) -> Result<()> {
             .as_array()
             .is_some_and(|a| a.contains(&serde_json::json!(key)))
     }) {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "permissions",
             "unsupported resource override permission",
         ));

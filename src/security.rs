@@ -1,5 +1,5 @@
 //! Credential transport boundaries shared by the SDK and agent interfaces.
-use crate::{Result, YappinError};
+use crate::{Error, Result};
 use reqwest::header::HeaderValue;
 use serde_json::Value;
 use url::{Host, Url};
@@ -26,8 +26,8 @@ pub(crate) fn endpoint(raw: &str, websocket: bool) -> Result<Url> {
     }
     Ok(url)
 }
-fn invalid_endpoint() -> YappinError {
-    YappinError::Config("credential endpoint must use TLS (loopback development excepted), without userinfo, query, or fragment".into())
+fn invalid_endpoint() -> Error {
+    Error::Config("credential endpoint must use TLS (loopback development excepted), without userinfo, query, or fragment".into())
 }
 /// Resolve only paths inside the configured API prefix; never reinterpret input as an authority.
 pub(crate) fn api_url(base: &str, path: &str) -> Result<Url> {
@@ -38,18 +38,18 @@ pub(crate) fn api_url(base: &str, path: &str) -> Result<Url> {
         || path.contains('#')
         || path.chars().any(char::is_control)
     {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "path",
             "requires a relative API path; URL authorities and backslashes are forbidden",
         ));
     }
     let prefix = base.path().trim_end_matches('/');
     let target = Url::parse(&format!("{}{path}", base.as_str().trim_end_matches('/')))
-        .map_err(|_| YappinError::validation("path", "invalid API path"))?;
+        .map_err(|_| Error::validation("path", "invalid API path"))?;
     if target.origin() != base.origin()
         || (!prefix.is_empty() && !target.path().starts_with(&format!("{prefix}/")))
     {
-        return Err(YappinError::validation(
+        return Err(Error::validation(
             "path",
             "path escapes the configured API prefix",
         ));
@@ -58,12 +58,12 @@ pub(crate) fn api_url(base: &str, path: &str) -> Result<Url> {
 }
 pub(crate) fn authorization(scheme: &str, secret: &str) -> Result<HeaderValue> {
     if secret.is_empty() || !secret.bytes().all(|b| b.is_ascii_graphic()) {
-        return Err(YappinError::Config(
+        return Err(Error::Config(
             "credential is empty or contains invalid characters".into(),
         ));
     }
     let mut value = HeaderValue::from_str(&format!("{scheme} {secret}"))
-        .map_err(|_| YappinError::Config("invalid credential header".into()))?;
+        .map_err(|_| Error::Config("invalid credential header".into()))?;
     value.set_sensitive(true);
     Ok(value)
 }
@@ -128,8 +128,8 @@ pub(crate) fn redact_fields(value: Value) -> Value {
     }
 }
 
-pub(crate) fn json_error(error: serde_json::Error, secrets: &[&str]) -> YappinError {
-    YappinError::Json(<serde_json::Error as serde::de::Error>::custom(scrub(
+pub(crate) fn json_error(error: serde_json::Error, secrets: &[&str]) -> Error {
+    Error::Json(<serde_json::Error as serde::de::Error>::custom(scrub(
         &error.to_string(),
         secrets,
     )))

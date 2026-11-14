@@ -4,7 +4,7 @@ use super::{
     pipeline::ExecutionGate,
     Bot, BotHandle,
 };
-use crate::{BotProfile, EventIngress, EventProcessingFailure, ReceiptStage, Result, YappinError};
+use crate::{BotProfile, Error, EventIngress, EventProcessingFailure, ReceiptStage, Result};
 use futures_util::{
     future::BoxFuture,
     stream::{self, FuturesOrdered},
@@ -46,7 +46,7 @@ impl Drop for EventGuard {
             self.ingress.interrupted(
                 self.id,
                 Some(
-                    YappinError::HandlerInterrupted {
+                    Error::HandlerInterrupted {
                         reason: "shared event processing cancelled before confirmed completion"
                             .into(),
                         source: None,
@@ -59,7 +59,7 @@ impl Drop for EventGuard {
 }
 fn supervise(
     future: impl std::future::Future<Output = ()> + Send + 'static,
-    failures: mpsc::UnboundedSender<YappinError>,
+    failures: mpsc::UnboundedSender<Error>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         if let Err(error) = super::failure::catch(async {
@@ -207,7 +207,7 @@ impl Bot {
                         failures = 0;
                         let watermark = after.max(response.last);
                         if response.events.iter().any(|event| event.id > watermark) {
-                            return Err(YappinError::validation(
+                            return Err(Error::validation(
                                 "ingress.watermark",
                                 "polling event exceeds the authoritative watermark",
                             ));
@@ -221,7 +221,7 @@ impl Bot {
                             .await?;
                         for event in unique {
                             events.push(intake.claim_polling(event).await?.ok_or_else(|| {
-                                YappinError::Config(
+                                Error::Config(
                                     "shared ingress claim capacity exhausted during polling".into(),
                                 )
                             })?);
@@ -297,7 +297,7 @@ impl Bot {
                                 if tx.capacity() == 0 { gateway.backpressure(); }
                                 let Ok(permit) = tx.reserve().await else { return; };
                                 let result = input.claim(event, super::IngressSource::Gateway).await
-                                    .and_then(|claim| claim.ok_or_else(|| YappinError::Config("shared ingress claim capacity exhausted during gateway delivery".into())))
+                                    .and_then(|claim| claim.ok_or_else(|| Error::Config("shared ingress claim capacity exhausted during gateway delivery".into())))
                                     .map(|event| Batch { watermark: None, events: vec![event] });
                                 if result.as_ref().err().is_some_and(|error|input.recoverable_conflict(error)) {drop(permit);continue;}
                                 let failed = result.is_err();
@@ -392,7 +392,7 @@ impl Bot {
                     match batch {
                         Some(Ok(batch))=>batches.push_back(Box::pin(self.dispatch_shared_batch(batch,me,gate.clone(),ingress.clone()))),
                         Some(Err(error))=>{report.intake_error=Some(self.failure_cause(&error));gate.halt();stopping=true;},
-                        None=>{report.intake_error=Some(YappinError::Config("shared ingress intake stopped".into()).to_remote());gate.halt();stopping=true;},
+                        None=>{report.intake_error=Some(Error::Config("shared ingress intake stopped".into()).to_remote());gate.halt();stopping=true;},
                     }
                 },
                 completed=batches.next(),if !batches.is_empty()=>{if let Some(batch)=completed{stopping|=self.checkpoint_shared(batch,&ingress,&mut report,&mut barrier,&mut polling_prefix,&gate).await;}}
@@ -450,7 +450,7 @@ impl Bot {
         {
             Ok(())
         } else {
-            Err(YappinError::EventProcessing {
+            Err(Error::EventProcessing {
                 report: Box::new(report),
             })
         }
@@ -481,9 +481,9 @@ impl Bot {
                                 ReceiptStage::Completed => Some(Ok(())),
                                 ReceiptStage::Failed => Some(Err(status
                                     .error
-                                    .map(YappinError::Remote)
+                                    .map(Error::Remote)
                                     .unwrap_or_else(|| {
-                                        YappinError::Config(
+                                        Error::Config(
                                             "shared event failed without completion".into(),
                                         )
                                     }))),
@@ -518,7 +518,7 @@ impl Bot {
                             })
                             .await
                         }
-                        Err(_) => Err(YappinError::Config("shared executor closed".into())),
+                        Err(_) => Err(Error::Config("shared executor closed".into())),
                     };
                     let stage = if result.is_ok() {
                         ReceiptStage::Completed
@@ -526,26 +526,24 @@ impl Bot {
                         ReceiptStage::Failed
                     };
                     let cause = result.as_ref().err().map(|e| self.failure_cause(e));
-                    let result =
-                        match ingress.transition(&claimed.event, stage, cause).await {
-                            Ok(()) => result,
-                            Err(storage) => {
-                                let original = result.err().unwrap_or_else(|| {
-                                    YappinError::HandlerInterrupted {
+                    let result = match ingress.transition(&claimed.event, stage, cause).await {
+                        Ok(()) => result,
+                        Err(storage) => {
+                            let original =
+                                result.err().unwrap_or_else(|| Error::HandlerInterrupted {
                                     reason:
                                         "handler completed but durable completion receipt failed"
                                             .into(),
                                     source: None,
-                                }
                                 });
-                                let error = YappinError::FailureHandling {
-                                    source: Box::new(original),
-                                    handling_error: Box::new(storage),
-                                };
-                                ingress.interrupted(id, Some(self.failure_cause(&error)));
-                                Err(error)
-                            }
-                        };
+                            let error = Error::FailureHandling {
+                                source: Box::new(original),
+                                handling_error: Box::new(storage),
+                            };
+                            ingress.interrupted(id, Some(self.failure_cause(&error)));
+                            Err(error)
+                        }
+                    };
                     guard.armed = false;
                     if result.is_err() {
                         gate.halt();

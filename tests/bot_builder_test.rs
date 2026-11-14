@@ -1,5 +1,5 @@
 use rappin::models::MessageEvent;
-use rappin::prelude::*;
+use rappin::*;
 
 #[tokio::test]
 async fn test_bot_builder_configuration() {
@@ -12,9 +12,10 @@ async fn test_bot_builder_configuration() {
         .command("ping", "Check ping", |_ctx| async move { Ok(()) })
         .command("roll", "Roll dice", |_ctx| async move { Ok(()) })
         .button("vote:", |_ctx| async move { Ok(()) })
-        .on_command_error(|_ctx, _err| async move {})
-        .on_button_error(|_ctx, _err| async move {})
-        .build();
+        .on_command_failure(|_ctx, _err| async move { Ok(rappin::FailureDisposition::Default) })
+        .on_button_failure(|_ctx, _err| async move { Ok(rappin::FailureDisposition::Default) })
+        .build()
+        .expect("valid bot configuration");
 
     assert_eq!(
         bot.client().base_url(),

@@ -1,5 +1,5 @@
 use super::protocol::{self, CogEvent, Listener, Manifest, Wire};
-use crate::{Command, CreateMessage, InteractionCallback, Message, Result, YappinError};
+use crate::{Command, CreateMessage, Error, InteractionCallback, Message, Result};
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -40,6 +40,7 @@ struct Connection {
 /// // Reserve stdout for IPC. Call run only in the executable started by the parent.
 /// ```
 pub struct WorkerContext {
+    state: Arc<crate::state::State>,
     /// Original parent-supplied handler input; operation identity is separate metadata, not a replacement message ID.
     pub event: CogEvent,
     connection: Arc<Mutex<Connection>>,
@@ -47,6 +48,16 @@ pub struct WorkerContext {
     operation_id: Option<crate::OperationId>,
 }
 impl WorkerContext {
+    /// Retrieve state initialized by this worker process.
+    ///
+    /// ```rust
+    /// fn settings(ctx: &rappin::WorkerContext) -> rappin::Result<std::sync::Arc<String>> {
+    ///     ctx.state::<String>()
+    /// }
+    /// ```
+    pub fn state<T: Send + Sync + 'static>(&self) -> Result<Arc<T>> {
+        self.state.get::<T>()
+    }
     /// Consumer operation key supplied by the parent, separate from CogEvent identity.
     /// # Example
     ///
@@ -88,7 +99,7 @@ impl WorkerContext {
             return Err(protocol::protocol_error());
         }
         let timeout_ms = u64::try_from(timeout.as_millis())
-            .map_err(|_| YappinError::validation("timeout", "timeout is too large"))?;
+            .map_err(|_| Error::validation("timeout", "timeout is too large"))?;
         connection.poisoned = true;
         protocol::write(
             &mut connection.output,
@@ -111,7 +122,7 @@ impl WorkerContext {
                     return Err(error.into());
                 }
                 if let Some(error) = error {
-                    return Err(YappinError::Config(error));
+                    return Err(Error::Config(error));
                 }
                 event.map(|e| *e).ok_or_else(protocol::protocol_error)
             }
@@ -155,7 +166,7 @@ impl WorkerContext {
     ) -> Result<crate::MessageEvent> {
         let channel = self
             .channel_id()
-            .ok_or_else(|| YappinError::Config("event has no channel".into()))?;
+            .ok_or_else(|| Error::Config("event has no channel".into()))?;
         let filter = crate::collectors::EventFilter {
             kind: Some(
                 if matches!(self.event, CogEvent::DmMessage { .. }) {
@@ -168,7 +179,7 @@ impl WorkerContext {
             channel_id: Some(channel),
             author_id: Some(
                 self.author_id()
-                    .ok_or_else(|| YappinError::Config("event has no author".into()))?,
+                    .ok_or_else(|| Error::Config("event has no author".into()))?,
             ),
             ..Default::default()
         };
@@ -185,7 +196,7 @@ impl WorkerContext {
         if self.connection.lock().await.allow_ui {
             Ok(())
         } else {
-            Err(YappinError::validation("ui_api","worker UI callbacks require WorkerCog::ui_api() or on_ui_interaction and a protocol v7 parent"))
+            Err(Error::validation("ui_api","worker UI callbacks require WorkerCog::ui_api() or on_interaction and a protocol v7 parent"))
         }
     }
     /// Borrow extended select/modal/command values for a UI listener event.
@@ -271,7 +282,7 @@ impl WorkerContext {
     pub async fn api_once(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value> {
         self.ensure_active()?;
         if !self.connection.lock().await.allow_single_attempt {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "request_once",
                 "worker requires WorkerCog::single_attempt_api() and a protocol v6 parent",
             ));
@@ -377,7 +388,7 @@ impl WorkerContext {
                     return Err(error.into());
                 }
                 match error {
-                    Some(error) => Err(YappinError::Config(error)),
+                    Some(error) => Err(Error::Config(error)),
                     None => Ok(value.unwrap_or(Value::Null)),
                 }
             }
@@ -401,9 +412,7 @@ impl WorkerContext {
         if self.active.load(Ordering::SeqCst) {
             Ok(())
         } else {
-            Err(YappinError::Config(
-                "worker handler has already returned".into(),
-            ))
+            Err(Error::Config("worker handler has already returned".into()))
         }
     }
     /// Send a message to an explicitly selected channel using the parent API.
@@ -444,7 +453,7 @@ impl WorkerContext {
     pub async fn say(&self, content: impl Into<String>) -> Result<Message> {
         let channel = self
             .channel_id()
-            .ok_or_else(|| YappinError::Config("event has no channel".into()))?;
+            .ok_or_else(|| Error::Config("event has no channel".into()))?;
         self.send(channel, CreateMessage::new(content)).await
     }
     /// Reply in the original message/interaction context.
@@ -468,7 +477,8 @@ impl WorkerContext {
             .await?;
             Ok(())
         } else {
-            self.respond(InteractionCallback::reply(content)).await
+            self.respond_callback(InteractionCallback::reply(content))
+                .await
         }
     }
     /// Send a customized reply preserving the original message target.
@@ -486,7 +496,7 @@ impl WorkerContext {
         let event = self
             .event
             .message()
-            .ok_or_else(|| YappinError::Config("reply_with requires a message event".into()))?;
+            .ok_or_else(|| Error::Config("reply_with requires a message event".into()))?;
         if message.reply_to.is_none() {
             message.reply_to = Some(event.id);
         }
@@ -499,16 +509,16 @@ impl WorkerContext {
     /// ```no_run
     /// use rappin::{Result, hot_reload::WorkerContext};
     /// async fn handle(ctx: &WorkerContext, channel: uuid::Uuid) -> Result<()> {
-    ///     let receipt = ctx.respond(rappin::InteractionCallback::ephemeral("Received")).await?;
+    ///     let receipt = ctx.respond_callback(rappin::InteractionCallback::ephemeral("Received")).await?;
     ///     Ok(())
     /// }
     /// ```
-    pub async fn respond(&self, callback: InteractionCallback) -> Result<()> {
+    pub async fn respond_callback(&self, callback: InteractionCallback) -> Result<()> {
         callback.validate()?;
         let event = self
             .event
             .interaction()
-            .ok_or_else(|| YappinError::Config("event is not an interaction".into()))?;
+            .ok_or_else(|| Error::Config("event is not an interaction".into()))?;
         let encode = |s: &str| {
             url::form_urlencoded::byte_serialize(s.as_bytes())
                 .collect::<String>()
@@ -538,7 +548,8 @@ impl WorkerContext {
     /// }
     /// ```
     pub async fn ephemeral(&self, content: impl Into<String>) -> Result<()> {
-        self.respond(InteractionCallback::ephemeral(content)).await
+        self.respond_callback(InteractionCallback::ephemeral(content))
+            .await
     }
     /// Update the original component message.
     ///
@@ -552,7 +563,8 @@ impl WorkerContext {
     /// }
     /// ```
     pub async fn update(&self, content: impl Into<String>) -> Result<()> {
-        self.respond(InteractionCallback::update(content)).await
+        self.respond_callback(InteractionCallback::update(content))
+            .await
     }
     /// Silently acknowledge the original interaction.
     ///
@@ -566,7 +578,7 @@ impl WorkerContext {
     /// }
     /// ```
     pub async fn ack(&self) -> Result<()> {
-        self.respond(InteractionCallback::ack()).await
+        self.respond_callback(InteractionCallback::ack()).await
     }
 }
 
@@ -582,6 +594,8 @@ impl WorkerContext {
 /// // Reserve stdout for IPC. Call run only in the executable started by the parent.
 /// ```
 pub struct WorkerCog {
+    command_specs: bool,
+    state: crate::state::State,
     manifest: Manifest,
     commands: HashMap<String, Handler>,
     buttons: HashMap<String, Handler>,
@@ -591,6 +605,59 @@ pub struct WorkerCog {
     operation_identity: bool,
 }
 impl WorkerCog {
+    /// Register the same command metadata, parser and built-in checks used by
+    /// native cogs. Supports aliases and command groups. Requires host protocol10.
+    ///
+    /// ```rust
+    /// use rappin::{WorkerCog, CommandSpec, Check};
+    /// let worker = WorkerCog::new("commands").command_spec(
+    ///     CommandSpec::<()>::new("status", "Show status").alias("health").check(Check::server_only()),
+    ///     |ctx, ()| async move { ctx.reply("Ready").await });
+    /// ```
+    pub fn command_spec<A, F, Fut>(mut self, spec: crate::CommandSpec<A>, handler: F) -> Self
+    where
+        A: crate::FromArgs,
+        F: Fn(WorkerContext, A) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.command_specs = true;
+        self.operation_identity = true;
+        self.single_attempt_api = true;
+        self.ui_api = true;
+        let info = spec.info;
+        if let Some(arguments) = A::schema() {
+            self.manifest.schemas.push(crate::CommandSchema {
+                name: info.name.clone(),
+                description: info.description.clone(),
+                aliases: info.aliases.clone(),
+                arguments,
+            });
+        }
+        self.manifest.help.push(info.clone());
+        let handler = Arc::new(handler);
+        let checks = Arc::new(spec.checks);
+        self.command(info.name, info.description, move |ctx| {
+            let handler = handler.clone();
+            let checks = checks.clone();
+            async move {
+                let args = ctx.parse::<A>()?;
+                for check in checks.iter() {
+                    check.check_worker(&ctx).await?;
+                }
+                handler(ctx, args).await
+            }
+        })
+    }
+    /// Register process-local state for this worker generation. Durable state
+    /// belongs in application storage.
+    ///
+    /// ```rust
+    /// let worker = rappin::WorkerCog::new("commands").state(std::sync::Arc::new(42u32));
+    /// ```
+    pub fn state<T: Send + Sync + 'static>(mut self, value: Arc<T>) -> Self {
+        self.state.insert(value);
+        self
+    }
     /// Bind a FromArgs parser and help metadata to a single-name worker route.
     ///
     /// # Example
@@ -640,12 +707,15 @@ impl WorkerCog {
     /// ```
     pub fn new(name: impl Into<String>) -> Self {
         Self {
+            command_specs: false,
+            state: Default::default(),
             manifest: Manifest {
                 name: name.into(),
                 commands: vec![],
                 buttons: vec![],
                 listeners: vec![],
                 help: vec![],
+                schemas: vec![],
             },
             commands: HashMap::new(),
             buttons: HashMap::new(),
@@ -814,13 +884,13 @@ impl WorkerCog {
     /// # Example
     ///
     /// ```rust
-    /// use rappin::{UiApiExt, InteractionCallbackType, UiMessageBody, hot_reload::WorkerCog};
-    /// let worker = WorkerCog::new("forms").on_ui_interaction(|ctx| async move {
+    /// use rappin::{ApiExt, InteractionCallbackType, CreateMessage, hot_reload::WorkerCog};
+    /// let worker = WorkerCog::new("forms").on_interaction(|ctx| async move {
     ///     let event = ctx.ui_interaction().expect("UI listener event");
-    ///     ctx.respond_ui(&event.interaction, InteractionCallbackType::Ephemeral, &UiMessageBody::new("Received")).await
+    ///     ctx.respond(&event.interaction, InteractionCallbackType::Ephemeral, &CreateMessage::new("Received")).await
     /// });
     /// ```
-    pub fn on_ui_interaction<F, Fut>(self, handler: F) -> Self
+    pub fn on_interaction<F, Fut>(self, handler: F) -> Self
     where
         F: Fn(WorkerContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
@@ -876,7 +946,9 @@ impl WorkerCog {
     /// }
     /// ```
     pub async fn run(self) -> Result<()> {
+        self.state.validate()?;
         self.manifest.validate()?;
+        let state = Arc::new(self.state);
         let connection = Arc::new(Mutex::new(Connection {
             input: BufReader::new(tokio::io::stdin()),
             output: tokio::io::stdout(),
@@ -889,7 +961,9 @@ impl WorkerCog {
             &Wire::Ready {
                 // Existing handlers retain protocol v4 compatibility. Opting into
                 // message outcomes requires a parent that understands protocol v5.
-                protocol: if self.manifest.listeners.contains(&Listener::ResourceEvent) {
+                protocol: if self.command_specs {
+                    10
+                } else if self.manifest.listeners.contains(&Listener::ResourceEvent) {
                     9
                 } else if self.operation_identity {
                     8
@@ -944,6 +1018,7 @@ impl WorkerCog {
             let result = match handler {
                 Some(handler) => {
                     handler(WorkerContext {
+                        state: state.clone(),
                         event,
                         connection: connection.clone(),
                         active: active.clone(),
@@ -951,9 +1026,7 @@ impl WorkerCog {
                     })
                     .await
                 }
-                None => Err(YappinError::Config(
-                    "worker has no handler for this event".into(),
-                )),
+                None => Err(Error::Config("worker has no handler for this event".into())),
             };
             let mut connection = connection.lock().await;
             active.store(false, Ordering::SeqCst);

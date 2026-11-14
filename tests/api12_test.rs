@@ -1,5 +1,5 @@
 mod support;
-use rappin::{Client, CreateEmoji, CreateMessage, UploadFile, YappinError};
+use rappin::{Client, CreateEmoji, CreateMessage, Error, UploadFile};
 use serde_json::{json, Value};
 use std::{
     sync::{
@@ -79,9 +79,7 @@ async fn multipart_success_and_partial_success_keep_every_receipt_without_replay
         .send_files(Uuid::nil(), &CreateMessage::default(), &files)
         .await
         .unwrap_err();
-    assert!(
-        matches!(&error,YappinError::PartialWrite{completed,failed_step:2,..} if completed.len()==1)
-    );
+    assert!(matches!(&error,Error::PartialWrite{completed,failed_step:2,..} if completed.len()==1));
     assert_eq!(
         error.to_remote().details["retry_safety"],
         "do_not_replay_workflow"
@@ -168,7 +166,7 @@ async fn retry_wait_budget_covers_shared_deadlines_and_retains_advice() {
         .send_message(Uuid::nil(), &CreateMessage::new("first"))
         .await
         .unwrap_err();
-    assert!(matches!(error, YappinError::RetryWaitExceeded { .. }));
+    assert!(matches!(error, Error::RetryWaitExceeded { .. }));
     assert_eq!(error.status_code(), Some(429));
     assert_eq!(error.retry_after(), Some(Duration::from_millis(200)));
     let now = tokio::time::Instant::now();
@@ -176,7 +174,7 @@ async fn retry_wait_budget_covers_shared_deadlines_and_retains_advice() {
         .send_message(Uuid::from_u128(1), &CreateMessage::new("second"))
         .await
         .unwrap_err();
-    assert!(matches!(error, YappinError::RetryWaitExceeded { .. }));
+    assert!(matches!(error, Error::RetryWaitExceeded { .. }));
     assert!(now.elapsed() < Duration::from_millis(150));
     assert_eq!(client.request_metrics().attempts, 1);
     assert!(calls.recv().await.unwrap().contains("first"));
@@ -227,12 +225,20 @@ impl rappin::EventHandler for DmHandler {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
-    async fn on_message(&self, _: &rappin::MessageContext) {
+    async fn on_message(
+        &self,
+        _: &rappin::MessageContext,
+    ) -> rappin::Result<rappin::MessageDisposition> {
         panic!("DM must not enter server messages");
     }
-    async fn on_reaction_add(&self, _: &Client, event: &rappin::ReactionEvent) {
+    async fn on_reaction_add(
+        &self,
+        _: &Client,
+        event: &rappin::ReactionEvent,
+    ) -> rappin::Result<()> {
         assert!(event.is_dm);
         self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 }
 #[tokio::test]
@@ -251,7 +257,8 @@ async fn typed_dm_collectors_and_callbacks_never_dispatch_server_commands() {
                 Ok(())
             }
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.cache()
         .set_me(serde_json::from_value(support::profile()).unwrap())
         .await;
@@ -357,7 +364,7 @@ fn missing_per_file_confirmation_is_an_unknown_partial_write() {
     let response: rappin::UploadedMessages =
         serde_json::from_value(json!({"message":message(1)})).unwrap();
     let error = response.into_result_for(2).unwrap_err();
-    assert!(matches!(error, YappinError::PartialWrite { .. }));
+    assert!(matches!(error, Error::PartialWrite { .. }));
     assert_eq!(error.to_json()["outcome"], "unknown");
 }
 
@@ -365,7 +372,7 @@ struct FailedDm;
 #[async_trait::async_trait]
 impl rappin::EventHandler for FailedDm {
     async fn on_dm(&self, _: &rappin::MessageContext) -> rappin::Result<()> {
-        Err(YappinError::RateLimited { retry_after: 2.0 })
+        Err(Error::RateLimited { retry_after: 2.0 })
     }
 }
 #[tokio::test]
@@ -392,13 +399,14 @@ async fn failed_dm_processing_retains_original_cause_and_cursor_barrier() {
         .base_url(base)
         .sync_commands(false)
         .log(false)
-        .handler_concurrency(1)
-        .cursor_file(&path)
+        .configure(|settings| settings.execution.concurrency = 1)
+        .configure(|settings| settings.persistence.cursor = Some(rappin::EventCursor::new(&path)))
         .event_handler(FailedDm)
         .command("later", "must not run", |_| async {
             panic!("failed DM cannot be checkpointed implicitly")
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
     let error = bot.run().await.unwrap_err();
     assert_eq!(error.status_code(), Some(429));
     assert_eq!(error.retry_after(), Some(Duration::from_secs(2)));

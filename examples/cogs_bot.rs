@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rappin::prelude::*;
+use rappin::*;
 
 /// A Cog grouping fun commands with internal state.
 struct FunCog {
@@ -84,8 +84,8 @@ fn rand_bool() -> bool {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
-    let token = env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+    let token =
+        env::var("YAPPER_BOT_TOKEN").map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
 
     let bot = Bot::builder(token)
         .prefix("!")
@@ -131,7 +131,8 @@ async fn main() -> Result<()> {
             }
             Ok(())
         })
-        .build();
+        .build()
+        .expect("valid bot configuration");
 
     println!("Starting bot with Cogs support... Type /joke, /flip, or /reload fun");
     bot.run().await?;

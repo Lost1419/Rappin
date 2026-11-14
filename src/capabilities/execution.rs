@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Api, ApiExt, Member, MemberDetail, UiMessagesResponse};
+use crate::{Api, ApiExt, Member, MemberDetail, MessagesResponse};
 use uuid::Uuid;
 
 /// Constructed only by catalogue validation, never by deserializing model data.
@@ -14,7 +14,7 @@ use uuid::Uuid;
 /// assert_eq!(operation.name(), "send_message");
 /// assert!(operation.preview().dry_run);
 /// assert!(operation.preview().authorization.is_none());
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct ValidatedOperation {
     pub(super) entry: &'static Capability,
@@ -35,7 +35,7 @@ pub struct ValidatedOperation {
 /// assert_eq!(operation.name(), "send_message");
 /// assert!(operation.preview().dry_run);
 /// assert!(operation.preview().authorization.is_none());
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct OperationResult {
     /// Canonical executed operation name.
@@ -60,7 +60,7 @@ impl ValidatedOperation {
     /// assert_eq!(operation.name(), "send_message");
     /// assert!(operation.preview().dry_run);
     /// assert!(operation.preview().authorization.is_none());
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn name(&self) -> &'static str {
         self.entry.name
@@ -77,7 +77,7 @@ impl ValidatedOperation {
     /// assert_eq!(operation.arguments()["content"], "Hello");
     /// assert!(operation.preview().dry_run);
     /// assert!(operation.preview().authorization.is_none());
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn arguments(&self) -> &Value {
         &self.args
@@ -94,7 +94,7 @@ impl ValidatedOperation {
     /// assert_eq!(operation.capability().name, "send_message");
     /// assert!(operation.preview().dry_run);
     /// assert!(operation.preview().authorization.is_none());
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn capability(&self) -> &'static Capability {
         self.entry
@@ -118,7 +118,7 @@ impl ValidatedOperation {
     /// assert!(operation.preview().dry_run);
     /// assert!(operation.preview().dry_run);
     /// assert!(operation.preview().authorization.is_none());
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn preview(&self) -> OperationResult {
         let mut arguments = self.args.clone();
@@ -184,7 +184,7 @@ impl ValidatedOperation {
         if self.args["dry_run"] == true {
             let scope = self.local_scope(context);
             if !scope.allowed() {
-                return Err(YappinError::OperationAuthorization {
+                return Err(Error::OperationAuthorization {
                     report: Box::new(scope),
                 });
             }
@@ -192,7 +192,7 @@ impl ValidatedOperation {
         }
         let report = self.assess_with_policy(api, context, policy).await?;
         if !report.allowed() {
-            return Err(YappinError::OperationAuthorization {
+            return Err(Error::OperationAuthorization {
                 report: Box::new(report),
             });
         }
@@ -281,9 +281,9 @@ impl ValidatedOperation {
         if valid {
             Ok(())
         } else if self.entry.write {
-            Err(YappinError::Remote(crate::RemoteError{kind:"operation_result_scope".into(),message:"API write result identity did not match the bound resource scope; reconcile before retrying".into(),status:None,retry_after:None,details:[("outcome".into(),"unknown".into()),("retry_safety".into(),"do_not_replay_workflow".into())].into()}))
+            Err(Error::Remote(crate::RemoteError{kind:"operation_result_scope".into(),message:"API write result identity did not match the bound resource scope; reconcile before retrying".into(),status:None,retry_after:None,details:[("outcome".into(),"unknown".into()),("retry_safety".into(),"do_not_replay_workflow".into())].into()}))
         } else {
-            Err(YappinError::validation(
+            Err(Error::validation(
                 "scope",
                 "API result identity does not match the bound resource scope",
             ))
@@ -322,7 +322,7 @@ impl ValidatedOperation {
                             == Some(server)
                     });
                 } else {
-                    return Err(YappinError::validation(
+                    return Err(Error::validation(
                         "webhooks",
                         "API did not return a webhook list",
                     ));
@@ -488,11 +488,11 @@ impl ValidatedOperation {
                         }
                         format!("/channels/{channel}/messages?{}", query.finish())
                     };
-                    let page: UiMessagesResponse = api
+                    let page: MessagesResponse = api
                         .api_json::<_, ()>("GET".parse().unwrap(), &path, None)
                         .await?;
                     if page.messages.iter().any(|m| m.channel_id != channel) {
-                        return Err(YappinError::validation(
+                        return Err(Error::validation(
                             "scope",
                             "API returned a message from another channel",
                         ));
@@ -539,7 +539,7 @@ impl ValidatedOperation {
                             if self.args["split"] != true {
                                 return Err(source);
                             }
-                            return Err(YappinError::PartialWrite {
+                            return Err(Error::PartialWrite {
                                 completed,
                                 failed_step: step + 1,
                                 source: Box::new(source),
@@ -649,7 +649,7 @@ impl ValidatedOperation {
                 )
                 .await
             }
-            _ => Err(YappinError::validation(
+            _ => Err(Error::validation(
                 "operation",
                 "operation requires a runtime outside server-scoped API bindings",
             )),

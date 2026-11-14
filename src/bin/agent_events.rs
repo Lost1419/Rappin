@@ -36,7 +36,7 @@ fn lock(cursor: &Path) -> Result<std::fs::File> {
                 .raw_os_error()
                 .is_some_and(|code| fs2::lock_contended_error().raw_os_error() == Some(code))
         {
-            YappinError::Config("event cursor is in use by another consumer".into())
+            Error::Config("event cursor is in use by another consumer".into())
         } else {
             error.into()
         }
@@ -61,9 +61,9 @@ fn load(cursor: &Path, ctx: &Context) -> Result<Option<Delivery>> {
         Err(e) => return Err(e.into()),
     };
     let delivery: Delivery = serde_json::from_slice(&bytes)
-        .map_err(|_| YappinError::Config("invalid pending event receipt".into()))?;
+        .map_err(|_| Error::Config("invalid pending event receipt".into()))?;
     if delivery.binding != binding(ctx) {
-        return Err(YappinError::Config(
+        return Err(Error::Config(
             "event receipt belongs to a different bot or API base; choose a separate cursor file"
                 .into(),
         ));
@@ -121,7 +121,7 @@ pub async fn poll(
                     save(path, &delivery)?;
                 }
                 if after.is_some_and(|id| id != delivery.after) {
-                    return Err(YappinError::validation(
+                    return Err(Error::validation(
                         "after",
                         "acknowledge the pending batch before choosing another cursor",
                     ));
@@ -158,16 +158,13 @@ pub async fn acknowledge(
     let checkpoint = EventCursor::new(cursor);
     let previous = checkpoint.load().await?;
     if previous.is_some_and(|old| old > id) {
-        return Err(YappinError::validation(
-            "id",
-            "cannot move a cursor backwards",
-        ));
+        return Err(Error::validation("id", "cannot move a cursor backwards"));
     }
     let pending = if force {
         None
     } else {
         Some(load(cursor, ctx)?.ok_or_else(|| {
-            YappinError::validation(
+            Error::validation(
                 "id",
                 "no pending delivery; poll with this cursor file first",
             )
@@ -180,13 +177,13 @@ pub async fn acknowledge(
             );
         }
         if batch_id.is_some_and(|id| id != delivery.batch_id) {
-            return Err(YappinError::validation("batch_id", "stale event receipt"));
+            return Err(Error::validation("batch_id", "stale event receipt"));
         }
         if id < delivery.after
             || (id != delivery.batch.last
                 && !delivery.batch.events.iter().any(|event| event.id == id))
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "id",
                 "ID was not delivered in the pending batch",
             ));

@@ -1,6 +1,6 @@
 //! Checked invocation within the lifetime of an authenticated message dispatch.
 use super::{failure, BotHandle, Cog, CommandDef, MessageContext, MessageDisposition};
-use crate::{MessageEvent, Result, YappinError};
+use crate::{Error, MessageEvent, Result};
 use serde::{Deserialize, Serialize};
 use std::{future::Future, sync::Arc};
 
@@ -25,7 +25,7 @@ struct Origin {
 /// let id = OperationId::new("request:42:step:1")?;
 /// assert_eq!(id.as_str(), "request:42:step:1");
 /// assert!(OperationId::new("invalid\nkey").is_err());
-/// # Ok::<(), rappin::YappinError>(())
+/// # Ok::<(), rappin::Error>(())
 /// ```
 pub struct OperationId(String);
 impl OperationId {
@@ -40,13 +40,13 @@ impl OperationId {
     /// let id = OperationId::new("request:42:step:1")?;
     /// assert_eq!(id.as_str(), "request:42:step:1");
     /// assert!(OperationId::new("invalid\nkey").is_err());
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn new(value: impl Into<String>) -> Result<Self> {
         let value = value.into();
         if value.is_empty() || value.len() > Self::MAX_BYTES || value.chars().any(char::is_control)
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "invocation.operation_id",
                 "requires 1 to 128 UTF-8 bytes without control characters",
             ));
@@ -62,14 +62,14 @@ impl OperationId {
     /// let id = OperationId::new("request:42:step:1")?;
     /// assert_eq!(id.as_str(), "request:42:step:1");
     /// assert!(OperationId::new("invalid\nkey").is_err());
-    /// # Ok::<(), rappin::YappinError>(())
+    /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 impl TryFrom<String> for OperationId {
-    type Error = YappinError;
+    type Error = Error;
     fn try_from(value: String) -> Result<Self> {
         Self::new(value)
     }
@@ -171,7 +171,7 @@ pub struct InvocationOutcome {
     /// Conservative: arbitrary cog/check/handler code or the message gate ran.
     pub effects_possible: bool,
     /// Original structured cause when one is available.
-    pub error: Option<YappinError>,
+    pub error: Option<Error>,
     operation_id: Option<OperationId>,
 }
 impl InvocationOutcome {
@@ -213,21 +213,21 @@ impl InvocationOutcome {
         if self.status == InvocationStatus::Completed {
             return Ok(());
         }
-        let error = YappinError::Invocation {
+        let error = Error::Invocation {
             command: self.command,
             status: self.status,
             effects_possible: self.effects_possible,
             source: self.error.map(Box::new),
         };
         Err(match self.operation_id {
-            Some(operation_id) => YappinError::IdentifiedInvocation {
+            Some(operation_id) => Error::IdentifiedInvocation {
                 operation_id,
                 source: Box::new(error),
             },
             None => error,
         })
     }
-    fn failed(command: &str, error: YappinError, effects_possible: bool) -> Self {
+    fn failed(command: &str, error: Error, effects_possible: bool) -> Self {
         Self {
             status: if error.is_command_rejection() {
                 InvocationStatus::Denied
@@ -400,13 +400,13 @@ impl InvocationSnapshot {
 impl BotHandle {
     fn invocation_origin(&self, ctx: &MessageContext) -> Result<Origin> {
         let origin = ORIGIN.try_with(Clone::clone).map_err(|_| {
-            YappinError::validation(
+            Error::validation(
                 "invocation.context",
                 "requires an active authenticated message task",
             )
         })?;
         if origin.gate_running {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "invocation.context",
                 "message gates cannot recursively invoke commands",
             ));
@@ -419,7 +419,7 @@ impl BotHandle {
                 .is_some_and(|bot| Arc::ptr_eq(&bot.inner, &self.inner))
             || &ctx.event != origin.event.as_ref()
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "invocation.context",
                 "message identity or bot does not match authenticated dispatch",
             ));
@@ -517,17 +517,15 @@ impl BotHandle {
         origin.operation_id = operation_id.clone();
         ORIGIN
             .scope(origin, async {
-                let (path, args) =
-                    self.resolve_invocation(name, arguments)
-                        .await
-                        .ok_or_else(|| {
-                            YappinError::validation("invocation.command", "command not found")
-                        })?;
+                let (path, args) = self
+                    .resolve_invocation(name, arguments)
+                    .await
+                    .ok_or_else(|| Error::validation("invocation.command", "command not found"))?;
                 let snapshot = self.invocation_snapshot(&path).await.ok_or_else(|| {
-                    YappinError::validation("invocation.command", "command was unloaded")
+                    Error::validation("invocation.command", "command was unloaded")
                 })?;
                 if operation_id.is_some() && !snapshot.def.operation_identity_supported {
-                    return Err(YappinError::validation(
+                    return Err(Error::validation(
                         "invocation.operation_id",
                         "worker requires protocol v8 operation identity support",
                     ));
@@ -547,6 +545,9 @@ impl BotHandle {
                     report.deferred.push("cog check".into());
                 }
                 if let Some(recipe) = &snapshot.def.preparation {
+                    if recipe.worker_checks {
+                        report.deferred.push("worker command checks".into());
+                    }
                     if let Some(schema) = &recipe.schema {
                         schema.parse(&context.args)?;
                         report.assessed.push("dynamic argument schema".into());
@@ -715,7 +716,7 @@ impl BotHandle {
             }
             _ => InvocationOutcome::failed(
                 &name,
-                YappinError::validation(
+                Error::validation(
                     "invocation.binding",
                     "binding changed or was unloaded; prepare again",
                 ),
@@ -732,7 +733,7 @@ impl BotHandle {
         if operation_id.is_some() && !snapshot.def.operation_identity_supported {
             return InvocationOutcome::failed(
                 ctx.command.as_deref().unwrap_or_default(),
-                YappinError::validation(
+                Error::validation(
                     "invocation.operation_id",
                     "worker requires protocol v8 operation identity support",
                 ),
@@ -754,7 +755,7 @@ impl BotHandle {
         if ORIGIN.with(|o| o.depth) >= MAX_INVOCATION_DEPTH {
             return InvocationOutcome::failed(
                 &name,
-                YappinError::validation("invocation.depth", "nested command depth exceeded"),
+                Error::validation("invocation.depth", "nested command depth exceeded"),
                 false,
             );
         }
@@ -785,7 +786,7 @@ impl BotHandle {
                 Ok(MessageDisposition::Stop) => {
                     return InvocationOutcome::failed(
                         &name,
-                        YappinError::HandlerInterrupted {
+                        Error::HandlerInterrupted {
                             reason: "message gate stopped invocation".into(),
                             source: None,
                         },
@@ -804,7 +805,7 @@ impl BotHandle {
         {
             return InvocationOutcome::failed(
                 &name,
-                YappinError::validation(
+                Error::validation(
                     "invocation.binding",
                     "binding changed before execution; prepare again",
                 ),
@@ -823,7 +824,7 @@ impl BotHandle {
         if origin.depth >= MAX_INVOCATION_DEPTH {
             return InvocationOutcome::failed(
                 &name,
-                YappinError::validation("invocation.depth", "nested command depth exceeded"),
+                Error::validation("invocation.depth", "nested command depth exceeded"),
                 false,
             );
         }

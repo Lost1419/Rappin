@@ -1,11 +1,14 @@
 //! YAPPER_BOT_TOKEN=... cargo run --features gateway --example gateway_api_requests
-use rappin::{gateway::GatewayRequestConfig, Bot, Result, YappinError};
+use rappin::{gateway::GatewayRequestConfig, Bot, Error, Result};
 #[tokio::main]
 async fn main() -> Result<()> {
     let token = std::env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+        .map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
     let bot = Bot::builder(token)
-        .gateway(rappin::gateway::DEFAULT_GATEWAY)
+        .configure(|settings| {
+            settings.transport.gateway_url = Some((rappin::gateway::DEFAULT_GATEWAY).into());
+            settings.transport.mode = rappin::TransportMode::GatewayPreferred;
+        })
         .command(
             "ping",
             "Reply through the selected API transport",
@@ -19,7 +22,8 @@ async fn main() -> Result<()> {
                 Ok(())
             },
         )
-        .build();
+        .build()
+        .expect("valid bot configuration");
     bot.client()
         .configure_gateway_requests(Some(GatewayRequestConfig::default()))?;
     // HTTPS is selected before ready.requests=true and for uploads/events.

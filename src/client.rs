@@ -18,7 +18,7 @@ use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::cache::Cache;
-use crate::error::{Result, YappinError};
+use crate::error::{Error, Result};
 use crate::models::*;
 use crate::utils::DEFAULT_API_BASE;
 
@@ -34,8 +34,8 @@ impl ReadWaitBudget {
     pub(crate) fn remaining(&self) -> Duration {
         *self.remaining.lock().expect("read wait budget")
     }
-    pub(crate) fn exceeded(&self, source: YappinError) -> YappinError {
-        YappinError::RetryWaitExceeded {
+    pub(crate) fn exceeded(&self, source: Error) -> Error {
+        Error::RetryWaitExceeded {
             waited: self.limit.saturating_sub(self.remaining()),
             budget: self.limit,
             source: Box::new(source),
@@ -366,7 +366,7 @@ impl Client {
                 result.map_err(|error| {
                     if mutation
                         && status.is_some()
-                        && matches!(error, YappinError::Json(_) | YappinError::Http(_))
+                        && matches!(error, Error::Json(_) | Error::Http(_))
                     {
                         let source = self.redact_credentials(error.to_json());
                         let mut cause: crate::RemoteError =
@@ -580,7 +580,16 @@ impl Client {
         self.events().publish(event);
     }
 
-    async fn invalidate_member(&self, server: Uuid, user: Uuid) {
+    async fn invalidate_member(
+        &self,
+        server: impl Into<crate::ServerId> + Send,
+        user: impl Into<crate::UserId> + Send,
+    ) {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+        let user: crate::UserId = user.into();
+        let user = Uuid::from(user);
+
         self.cache().invalidate_member(server, user).await;
         if let Some(backend) = &self.inner.lookup_backend {
             backend.invalidate_member(server, user).await;
@@ -607,10 +616,15 @@ impl Client {
     /// ```
     pub async fn fetch_member(
         &self,
-        server: Uuid,
-        user: Uuid,
+        server: impl Into<crate::ServerId> + Send,
+        user: impl Into<crate::UserId> + Send,
         freshness: crate::cache::Freshness,
     ) -> Result<MemberDetail> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+        let user: crate::UserId = user.into();
+        let user = Uuid::from(user);
+
         if freshness == crate::cache::Freshness::PreferCache {
             if let Some(backend) = &self.inner.lookup_backend {
                 if let Some(value) = backend.get_member(server, user).await {
@@ -637,9 +651,12 @@ impl Client {
     /// ```
     pub async fn fetch_roles(
         &self,
-        server: Uuid,
+        server: impl Into<crate::ServerId> + Send,
         freshness: crate::cache::Freshness,
     ) -> Result<Vec<Role>> {
+        let server: crate::ServerId = server.into();
+        let server = Uuid::from(server);
+
         if freshness == crate::cache::Freshness::PreferCache {
             if let Some(backend) = &self.inner.lookup_backend {
                 if let Some(value) = backend.get_roles(server).await {
@@ -665,7 +682,7 @@ impl Client {
     where
         F: FnMut(url::Url) -> Fut,
         Fut: std::future::Future<Output = std::result::Result<Response, E>>,
-        E: Into<YappinError>,
+        E: Into<Error>,
     {
         let telemetry = self.inner.request_telemetry.start();
         let result = self
@@ -685,7 +702,7 @@ impl Client {
     where
         F: FnMut(url::Url) -> Fut,
         Fut: std::future::Future<Output = std::result::Result<Response, E>>,
-        E: Into<YappinError>,
+        E: Into<Error>,
     {
         let mut retries = if single_attempt_active() {
             0
@@ -698,7 +715,7 @@ impl Client {
         let route = crate::rate_limits::route_template(path);
         let mut wait = Duration::ZERO;
         let mut attempts = 0;
-        let mut last_advice: Option<YappinError> = None;
+        let mut last_advice: Option<Error> = None;
         // Pin each call to its initial origin. Only an explicit safe-read
         // failover below may move it; concurrent failures must not move writes.
         let mut base = self.active_base_url();
@@ -719,7 +736,7 @@ impl Client {
                         let _ = READ_WAIT_BUDGET.try_with(|budget| budget.charge(remaining));
                         let source = match last_advice.take() {
                             Some(error) => error,
-                            None => YappinError::RateLimited {
+                            None => Error::RateLimited {
                                 retry_after: self
                                     .inner
                                     .rate_limits
@@ -730,7 +747,7 @@ impl Client {
                         };
                         let error = READ_WAIT_BUDGET
                             .try_with(|budget| budget.exceeded(source.to_remote().into()));
-                        return Err(error.unwrap_or_else(|_| YappinError::RetryWaitExceeded {
+                        return Err(error.unwrap_or_else(|_| Error::RetryWaitExceeded {
                             waited: wait,
                             budget: self.inner.max_retry_wait,
                             source: Box::new(source),
@@ -785,7 +802,7 @@ impl Client {
                     response.status(),
                     StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT
                 ),
-                Err(YappinError::Http(error)) => error.is_connect(),
+                Err(Error::Http(error)) => error.is_connect(),
                 Err(_) => false,
             };
             if unavailable && self.inner.failover.activate(&base) {
@@ -807,7 +824,7 @@ impl Client {
             }
 
             if status == StatusCode::UNAUTHORIZED {
-                return Err(YappinError::Unauthorized);
+                return Err(Error::Unauthorized);
             }
 
             let retry_header = res
@@ -843,13 +860,13 @@ impl Client {
                         self.inner.rate_limits.delay(key, delay, global).await;
                     }
                     if retries > 0 && delay <= Duration::from_secs(60) {
-                        let source = YappinError::Api {
+                        let source = Error::Api {
                             status: status.as_u16(),
                             message: crate::security::scrub(&msg, &[self.inner.token.as_str()]),
                             retry_after: Some(delay.as_secs_f64()),
                         };
                         if delay > self.inner.max_retry_wait.saturating_sub(wait) {
-                            return Err(YappinError::RetryWaitExceeded {
+                            return Err(Error::RetryWaitExceeded {
                                 waited: wait,
                                 budget: self.inner.max_retry_wait,
                                 source: Box::new(source),
@@ -866,7 +883,7 @@ impl Client {
                     }
                 }
             }
-            return Err(YappinError::Api {
+            return Err(Error::Api {
                 status: status.as_u16(),
                 message: crate::security::scrub(&msg, &[&self.inner.token]),
                 retry_after: retry_header.map(|d| d.as_secs_f64()),
@@ -923,13 +940,10 @@ impl Client {
         if let Some(entry) = &mut tracked {
             use crate::interactions::ResponsePhase;
             if tokio::time::Instant::now() >= entry.expires {
-                return Err(YappinError::validation(
-                    "interaction",
-                    "interaction expired",
-                ));
+                return Err(Error::validation("interaction", "interaction expired"));
             }
             if entry.state.phase == ResponsePhase::Uncertain {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "interaction",
                     "previous response outcome is uncertain; do not blindly retry",
                 ));
@@ -938,10 +952,10 @@ impl Client {
                 return serde_json::from_value(serde_json::json!({})).map_err(Into::into);
             }
             if kind.as_deref() == Some("modal") && entry.state.phase != ResponsePhase::Unanswered {
-                return Err(YappinError::validation("modal", "modal must be the first response; acknowledgement or an earlier response prevents opening it"));
+                return Err(Error::validation("modal", "modal must be the first response; acknowledgement or an earlier response prevents opening it"));
             }
             if kind.as_deref() == Some("modal") && entry.kind.as_deref() == Some("modal_submit") {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "modal",
                     "cannot open a modal from its submission",
                 ));
@@ -950,7 +964,7 @@ impl Client {
                 && (entry.kind.as_deref() == Some("command")
                     || entry.kind.as_deref() == Some("modal_submit") && !entry.has_message)
             {
-                return Err(YappinError::validation(
+                return Err(Error::validation(
                     "interaction",
                     "interaction has no source message to update",
                 ));
@@ -990,9 +1004,7 @@ impl Client {
                     {
                         return result;
                     }
-                    req.send()
-                        .await
-                        .map_err(|e| YappinError::Http(e.without_url()))
+                    req.send().await.map_err(|e| Error::Http(e.without_url()))
                 }
             })
             .await;
@@ -1008,7 +1020,7 @@ impl Client {
                     entry.state.responses = entry.state.responses.saturating_add(1);
                 }
                 Err(error) if error.to_json()["outcome"] == "unknown" => (),
-                Err(YappinError::Api { .. } | YappinError::Unauthorized) => {
+                Err(Error::Api { .. } | Error::Unauthorized) => {
                     if let Some(previous) = previous {
                         entry.state = previous;
                     }
@@ -1044,7 +1056,7 @@ impl Client {
         let bytes = response
             .bytes()
             .await
-            .map_err(|e| YappinError::Http(e.without_url()))?;
+            .map_err(|e| Error::Http(e.without_url()))?;
         if bytes.is_empty() {
             // Support endpoints returning 200/204 with no body
             let val = serde_json::from_str("{}")?;
@@ -1097,7 +1109,7 @@ impl Client {
         let resp_bytes = response
             .bytes()
             .await
-            .map_err(|e| YappinError::Http(e.without_url()))?;
+            .map_err(|e| Error::Http(e.without_url()))?;
         let parsed = serde_json::from_slice(&resp_bytes)
             .map_err(|e| crate::security::json_error(e, &[&self.inner.token]))?;
         Ok(parsed)
@@ -1112,7 +1124,7 @@ impl Client {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<()> {
@@ -1148,7 +1160,7 @@ impl Client {
             .is_some_and(|s| s.chars().count() > 32)
             || req.bio.as_ref().is_some_and(|s| s.chars().count() > 300)
         {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "profile",
                 "display_name maximum 32 and bio maximum 300 characters (developer guide; server enforces its active limit)",
             ));
@@ -1231,7 +1243,7 @@ impl Client {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<()> {
@@ -1242,7 +1254,7 @@ impl Client {
     /// ```
     pub async fn set_status(&self, status: BotStatus, activity: Option<&str>) -> Result<()> {
         if activity.is_some_and(|s| s.chars().count() > 60) {
-            return Err(YappinError::validation("activity", "maximum 60 characters"));
+            return Err(Error::validation("activity", "maximum 60 characters"));
         }
         let req = StatusUpdateRequest {
             status,
@@ -1335,7 +1347,7 @@ impl Client {
         max_age: Option<u32>,
     ) -> Result<EventsResponse> {
         if wait.is_some_and(|w| w > 25) || max_age.is_some_and(|age| age > 86400) {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "events",
                 "wait maximum 25 and max_age maximum 86400 seconds",
             ));
@@ -1366,7 +1378,7 @@ impl Client {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     ///
     /// #[tokio::main]
     /// async fn main() -> Result<()> {
@@ -1395,7 +1407,7 @@ impl Client {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     /// use uuid::Uuid;
     ///
     /// #[tokio::main]
@@ -1406,7 +1418,10 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn get_server(&self, server_id: Uuid) -> Result<Server> {
+    pub async fn get_server(&self, server_id: impl Into<crate::ServerId> + Send) -> Result<Server> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+
         #[derive(Deserialize)]
         struct Resp {
             server: Server,
@@ -1430,7 +1445,13 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn get_roles(&self, server_id: Uuid) -> Result<Vec<Role>> {
+    pub async fn get_roles(
+        &self,
+        server_id: impl Into<crate::ServerId> + Send,
+    ) -> Result<Vec<Role>> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+
         #[derive(Deserialize)]
         struct Resp {
             roles: Vec<Role>,
@@ -1459,15 +1480,15 @@ impl Client {
     /// ```
     pub async fn get_members(
         &self,
-        server_id: Uuid,
+        server_id: impl Into<crate::ServerId> + Send,
         limit: Option<u32>,
         after: Option<Uuid>,
     ) -> Result<Vec<Member>> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+
         if limit.is_some_and(|l| !(1..=500).contains(&l)) {
-            return Err(YappinError::validation(
-                "limit",
-                "must be between 1 and 500",
-            ));
+            return Err(Error::validation("limit", "must be between 1 and 500"));
         }
         let mut path = format!("/servers/{}/members?", server_id);
         if let Some(l) = limit {
@@ -1498,7 +1519,16 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn get_member(&self, server_id: Uuid, user_id: Uuid) -> Result<MemberDetail> {
+    pub async fn get_member(
+        &self,
+        server_id: impl Into<crate::ServerId> + Send,
+        user_id: impl Into<crate::UserId> + Send,
+    ) -> Result<MemberDetail> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+        let user_id: crate::UserId = user_id.into();
+        let user_id = Uuid::from(user_id);
+
         #[derive(Deserialize)]
         struct Resp {
             member: MemberDetail,
@@ -1531,9 +1561,19 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn set_nickname(&self, server_id: Uuid, user_id: Uuid, nickname: &str) -> Result<()> {
+    pub async fn set_nickname(
+        &self,
+        server_id: impl Into<crate::ServerId> + Send,
+        user_id: impl Into<crate::UserId> + Send,
+        nickname: &str,
+    ) -> Result<()> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+        let user_id: crate::UserId = user_id.into();
+        let user_id = Uuid::from(user_id);
+
         if nickname.chars().count() > 32 {
-            return Err(YappinError::validation("nickname", "maximum 32 characters"));
+            return Err(Error::validation("nickname", "maximum 32 characters"));
         }
         #[derive(Serialize)]
         struct Req<'a> {
@@ -1560,7 +1600,19 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn add_role(&self, server_id: Uuid, user_id: Uuid, role_id: Uuid) -> Result<()> {
+    pub async fn add_role(
+        &self,
+        server_id: impl Into<crate::ServerId> + Send,
+        user_id: impl Into<crate::UserId> + Send,
+        role_id: impl Into<crate::RoleId> + Send,
+    ) -> Result<()> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+        let user_id: crate::UserId = user_id.into();
+        let user_id = Uuid::from(user_id);
+        let role_id: crate::RoleId = role_id.into();
+        let role_id = Uuid::from(role_id);
+
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
                 Method::PUT,
@@ -1585,7 +1637,19 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn remove_role(&self, server_id: Uuid, user_id: Uuid, role_id: Uuid) -> Result<()> {
+    pub async fn remove_role(
+        &self,
+        server_id: impl Into<crate::ServerId> + Send,
+        user_id: impl Into<crate::UserId> + Send,
+        role_id: impl Into<crate::RoleId> + Send,
+    ) -> Result<()> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+        let user_id: crate::UserId = user_id.into();
+        let user_id = Uuid::from(user_id);
+        let role_id: crate::RoleId = role_id.into();
+        let role_id = Uuid::from(role_id);
+
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
                 Method::DELETE,
@@ -1610,7 +1674,16 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn kick_member(&self, server_id: Uuid, user_id: Uuid) -> Result<()> {
+    pub async fn kick_member(
+        &self,
+        server_id: impl Into<crate::ServerId> + Send,
+        user_id: impl Into<crate::UserId> + Send,
+    ) -> Result<()> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+        let user_id: crate::UserId = user_id.into();
+        let user_id = Uuid::from(user_id);
+
         #[derive(Serialize)]
         struct Req {
             user_id: Uuid,
@@ -1636,7 +1709,10 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn get_bans(&self, server_id: Uuid) -> Result<Vec<Ban>> {
+    pub async fn get_bans(&self, server_id: impl Into<crate::ServerId> + Send) -> Result<Vec<Ban>> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+
         #[derive(Deserialize)]
         struct Resp {
             bans: Vec<Ban>,
@@ -1660,10 +1736,15 @@ impl Client {
     /// ```
     pub async fn ban_member(
         &self,
-        server_id: Uuid,
-        user_id: Uuid,
+        server_id: impl Into<crate::ServerId> + Send,
+        user_id: impl Into<crate::UserId> + Send,
         reason: Option<&str>,
     ) -> Result<()> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+        let user_id: crate::UserId = user_id.into();
+        let user_id = Uuid::from(user_id);
+
         let req = BanRequest {
             user_id,
             reason: reason.map(|s| s.to_string()),
@@ -1689,7 +1770,16 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn unban_member(&self, server_id: Uuid, user_id: Uuid) -> Result<()> {
+    pub async fn unban_member(
+        &self,
+        server_id: impl Into<crate::ServerId> + Send,
+        user_id: impl Into<crate::UserId> + Send,
+    ) -> Result<()> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+        let user_id: crate::UserId = user_id.into();
+        let user_id = Uuid::from(user_id);
+
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
                 Method::DELETE,
@@ -1713,13 +1803,18 @@ impl Client {
     /// ```
     pub async fn timeout_member(
         &self,
-        server_id: Uuid,
-        user_id: Uuid,
+        server_id: impl Into<crate::ServerId> + Send,
+        user_id: impl Into<crate::UserId> + Send,
         minutes: u32,
         reason: Option<&str>,
     ) -> Result<()> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+        let user_id: crate::UserId = user_id.into();
+        let user_id = Uuid::from(user_id);
+
         if minutes > 40320 || reason.is_some_and(|r| r.chars().count() > 200) {
-            return Err(YappinError::validation(
+            return Err(Error::validation(
                 "timeout",
                 "maximum 40320 minutes and 200 reason characters",
             ));
@@ -1752,10 +1847,13 @@ impl Client {
     /// ```
     pub async fn create_category(
         &self,
-        server_id: Uuid,
+        server_id: impl Into<crate::ServerId> + Send,
         name: &str,
         position: Option<i32>,
     ) -> Result<Category> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+
         let req = CreateCategoryRequest {
             name: name.to_string(),
             position,
@@ -1787,10 +1885,15 @@ impl Client {
     /// ```
     pub async fn edit_category(
         &self,
-        server_id: Uuid,
-        category_id: Uuid,
+        server_id: impl Into<crate::ServerId> + Send,
+        category_id: impl Into<crate::CategoryId> + Send,
         name: &str,
     ) -> Result<()> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+        let category_id: crate::CategoryId = category_id.into();
+        let category_id = Uuid::from(category_id);
+
         let req = EditCategoryRequest {
             name: name.to_owned(),
         };
@@ -1815,7 +1918,16 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn delete_category(&self, server_id: Uuid, category_id: Uuid) -> Result<()> {
+    pub async fn delete_category(
+        &self,
+        server_id: impl Into<crate::ServerId> + Send,
+        category_id: impl Into<crate::CategoryId> + Send,
+    ) -> Result<()> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+        let category_id: crate::CategoryId = category_id.into();
+        let category_id = Uuid::from(category_id);
+
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
                 Method::DELETE,
@@ -1839,9 +1951,12 @@ impl Client {
     /// ```
     pub async fn get_server_channels(
         &self,
-        server_id: Uuid,
+        server_id: impl Into<crate::ServerId> + Send,
         channel_type: Option<ChannelKind>,
     ) -> Result<ServerChannelsResponse> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+
         let path = match channel_type {
             Some(ChannelKind::Text) => format!("/servers/{}/channels?type=text", server_id),
             Some(ChannelKind::Voice) => format!("/servers/{}/channels?type=voice", server_id),
@@ -1870,9 +1985,12 @@ impl Client {
     /// ```
     pub async fn create_channel(
         &self,
-        server_id: Uuid,
+        server_id: impl Into<crate::ServerId> + Send,
         req: &CreateChannelRequest,
     ) -> Result<Channel> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+
         #[derive(Deserialize)]
         struct Resp {
             channel: Channel,
@@ -1899,7 +2017,13 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn get_voice_states(&self, server_id: Uuid) -> Result<Vec<VoiceChannel>> {
+    pub async fn get_voice_states(
+        &self,
+        server_id: impl Into<crate::ServerId> + Send,
+    ) -> Result<Vec<VoiceChannel>> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+
         #[derive(Deserialize)]
         struct Resp {
             voice: Vec<VoiceChannel>,
@@ -1923,10 +2047,17 @@ impl Client {
     /// ```
     pub async fn move_voice_member(
         &self,
-        server_id: Uuid,
-        user_id: Uuid,
-        channel_id: Uuid,
+        server_id: impl Into<crate::ServerId> + Send,
+        user_id: impl Into<crate::UserId> + Send,
+        channel_id: impl Into<crate::ChannelId> + Send,
     ) -> Result<MoveMemberResponse> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+        let user_id: crate::UserId = user_id.into();
+        let user_id = Uuid::from(user_id);
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+
         let req = MoveMemberRequest::new(user_id, channel_id);
         self.request_json(
             Method::POST,
@@ -1949,9 +2080,14 @@ impl Client {
     /// ```
     pub async fn disconnect_voice_member(
         &self,
-        server_id: Uuid,
-        user_id: Uuid,
+        server_id: impl Into<crate::ServerId> + Send,
+        user_id: impl Into<crate::UserId> + Send,
     ) -> Result<DisconnectMemberResponse> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+        let user_id: crate::UserId = user_id.into();
+        let user_id = Uuid::from(user_id);
+
         let req = DisconnectMemberRequest::new(user_id);
         self.request_json(
             Method::POST,
@@ -1966,7 +2102,7 @@ impl Client {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     /// use uuid::Uuid;
     ///
     /// #[tokio::main]
@@ -1977,7 +2113,16 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn join_voice(&self, server_id: Uuid, channel_id: Uuid) -> Result<VoiceTicket> {
+    pub async fn join_voice(
+        &self,
+        server_id: impl Into<crate::ServerId> + Send,
+        channel_id: impl Into<crate::ChannelId> + Send,
+    ) -> Result<VoiceTicket> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+
         #[derive(Serialize)]
         struct Req {
             channel_id: Uuid,
@@ -2001,7 +2146,10 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn leave_voice(&self, server_id: Uuid) -> Result<()> {
+    pub async fn leave_voice(&self, server_id: impl Into<crate::ServerId> + Send) -> Result<()> {
+        let server_id: crate::ServerId = server_id.into();
+        let server_id = Uuid::from(server_id);
+
         let _: serde_json::Value = self
             .request_json::<serde_json::Value, ()>(
                 Method::POST,
@@ -2058,7 +2206,13 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn get_channel(&self, channel_id: Uuid) -> Result<ChannelRow> {
+    pub async fn get_channel(
+        &self,
+        channel_id: impl Into<crate::ChannelId> + Send,
+    ) -> Result<ChannelRow> {
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+
         #[derive(Deserialize)]
         struct Resp {
             channel: ChannelRow,
@@ -2082,9 +2236,12 @@ impl Client {
     /// ```
     pub async fn edit_channel(
         &self,
-        channel_id: Uuid,
+        channel_id: impl Into<crate::ChannelId> + Send,
         req: &EditChannelRequest,
     ) -> Result<Channel> {
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+
         req.validate()?;
         #[derive(Deserialize)]
         struct Resp {
@@ -2112,7 +2269,13 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn delete_channel(&self, channel_id: Uuid) -> Result<()> {
+    pub async fn delete_channel(
+        &self,
+        channel_id: impl Into<crate::ChannelId> + Send,
+    ) -> Result<()> {
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
                 Method::DELETE,
@@ -2137,35 +2300,15 @@ impl Client {
     /// ```
     pub async fn get_messages(
         &self,
-        channel_id: Uuid,
+        channel_id: impl Into<crate::ChannelId> + Send,
         limit: Option<u32>,
         before: Option<chrono::DateTime<chrono::Utc>>,
         after: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<MessagesResponse> {
-        if limit.is_some_and(|l| !(1..=100).contains(&l)) {
-            return Err(YappinError::validation(
-                "limit",
-                "must be between 1 and 100",
-            ));
-        }
-        if before.is_some() && after.is_some() {
-            return Err(YappinError::validation("cursor", "choose before or after"));
-        }
-        let path = {
-            let mut query = url::form_urlencoded::Serializer::new(String::new());
-            if let Some(l) = limit {
-                query.append_pair("limit", &l.to_string());
-            }
-            if let Some(b) = before {
-                query.append_pair("before", &b.to_rfc3339());
-            }
-            if let Some(a) = after {
-                query.append_pair("after", &a.to_rfc3339());
-            }
-            format!("/channels/{channel_id}/messages?{}", query.finish())
-        };
-        self.request_json::<MessagesResponse, ()>(Method::GET, &path, None)
-            .await
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+
+        crate::ApiExt::get_messages(self, channel_id, limit, before, after).await
     }
 
     /// Fetches a single message by ID (`GET /channels/{id}/messages/{mid}`).
@@ -2181,15 +2324,15 @@ impl Client {
     /// ```
     pub async fn get_message(
         &self,
-        channel_id: Uuid,
-        message_id: Uuid,
+        channel_id: impl Into<crate::ChannelId> + Send,
+        message_id: impl Into<crate::MessageId> + Send,
     ) -> Result<MessageDetailResponse> {
-        self.request_json::<MessageDetailResponse, ()>(
-            Method::GET,
-            &format!("/channels/{}/messages/{}", channel_id, message_id),
-            None,
-        )
-        .await
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+        let message_id: crate::MessageId = message_id.into();
+        let message_id = Uuid::from(message_id);
+
+        crate::ApiExt::get_message(self, channel_id, message_id).await
     }
 
     /// Posts a message into a channel (`POST /channels/{id}/messages`).
@@ -2197,7 +2340,7 @@ impl Client {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     /// use uuid::Uuid;
     ///
     /// #[tokio::main]
@@ -2210,22 +2353,15 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn send_message(&self, channel_id: Uuid, message: &CreateMessage) -> Result<Message> {
-        let clean = message.for_request();
-        let message = clean.as_ref();
-        message.validate()?;
-        #[derive(Deserialize)]
-        struct Resp {
-            message: Message,
-        }
-        let resp: Resp = self
-            .request_json(
-                Method::POST,
-                &format!("/channels/{}/messages", channel_id),
-                Some(message),
-            )
-            .await?;
-        Ok(resp.message)
+    pub async fn send_message(
+        &self,
+        channel_id: impl Into<crate::ChannelId> + Send,
+        message: &CreateMessage,
+    ) -> Result<Message> {
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+
+        crate::ApiExt::send_message(self, channel_id, message).await
     }
 
     /// Convenience shortcut to post a Components V2 layout message.
@@ -2233,7 +2369,7 @@ impl Client {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     /// use uuid::Uuid;
     ///
     /// #[tokio::main]
@@ -2248,11 +2384,15 @@ impl Client {
     /// ```
     pub async fn send_layout(
         &self,
-        channel_id: Uuid,
+        channel_id: impl Into<crate::ChannelId> + Send,
         components: impl IntoIterator<Item = impl Into<Component>>,
         reply_to: Option<Uuid>,
     ) -> Result<Message> {
-        let msg = CreateMessage::layout(components, reply_to);
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+
+        let mut msg = CreateMessage::layout(components);
+        msg.reply_to = reply_to;
         self.send_message(channel_id, &msg).await
     }
 
@@ -2269,25 +2409,16 @@ impl Client {
     /// ```
     pub async fn edit_message(
         &self,
-        channel_id: Uuid,
-        message_id: Uuid,
+        channel_id: impl Into<crate::ChannelId> + Send,
+        message_id: impl Into<crate::MessageId> + Send,
         edit: &EditMessage,
     ) -> Result<Message> {
-        #[derive(Deserialize)]
-        struct Resp {
-            message: Message,
-        }
-        let clean = edit.for_request();
-        let edit = clean.as_ref();
-        edit.validate()?;
-        let resp: Resp = self
-            .request_json(
-                Method::PATCH,
-                &format!("/channels/{}/messages/{}", channel_id, message_id),
-                Some(edit),
-            )
-            .await?;
-        Ok(resp.message)
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+        let message_id: crate::MessageId = message_id.into();
+        let message_id = Uuid::from(message_id);
+
+        crate::ApiExt::edit_message(self, channel_id, message_id, edit).await
     }
 
     /// Convenience shortcut to update a Components V2 layout message.
@@ -2303,10 +2434,15 @@ impl Client {
     /// ```
     pub async fn edit_layout(
         &self,
-        channel_id: Uuid,
-        message_id: Uuid,
+        channel_id: impl Into<crate::ChannelId> + Send,
+        message_id: impl Into<crate::MessageId> + Send,
         components: impl IntoIterator<Item = impl Into<Component>>,
     ) -> Result<Message> {
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+        let message_id: crate::MessageId = message_id.into();
+        let message_id = Uuid::from(message_id);
+
         let edit = EditMessage::layout(components);
         self.edit_message(channel_id, message_id, &edit).await
     }
@@ -2322,7 +2458,16 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn delete_message(&self, channel_id: Uuid, message_id: Uuid) -> Result<()> {
+    pub async fn delete_message(
+        &self,
+        channel_id: impl Into<crate::ChannelId> + Send,
+        message_id: impl Into<crate::MessageId> + Send,
+    ) -> Result<()> {
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+        let message_id: crate::MessageId = message_id.into();
+        let message_id = Uuid::from(message_id);
+
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
                 Method::DELETE,
@@ -2346,14 +2491,14 @@ impl Client {
     /// ```
     pub async fn bulk_delete_messages(
         &self,
-        channel_id: Uuid,
+        channel_id: impl Into<crate::ChannelId> + Send,
         message_ids: &[Uuid],
     ) -> Result<BulkDeleteResponse> {
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+
         if message_ids.is_empty() || message_ids.len() > 100 {
-            return Err(YappinError::validation(
-                "ids",
-                "requires 1 to 100 message IDs",
-            ));
+            return Err(Error::validation("ids", "requires 1 to 100 message IDs"));
         }
         let req = BulkDeleteRequest::new(message_ids.iter().copied());
         self.request_json(
@@ -2375,7 +2520,16 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn pin_message(&self, channel_id: Uuid, message_id: Uuid) -> Result<bool> {
+    pub async fn pin_message(
+        &self,
+        channel_id: impl Into<crate::ChannelId> + Send,
+        message_id: impl Into<crate::MessageId> + Send,
+    ) -> Result<bool> {
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+        let message_id: crate::MessageId = message_id.into();
+        let message_id = Uuid::from(message_id);
+
         #[derive(Deserialize)]
         struct Resp {
             #[serde(default)]
@@ -2402,7 +2556,16 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn unpin_message(&self, channel_id: Uuid, message_id: Uuid) -> Result<bool> {
+    pub async fn unpin_message(
+        &self,
+        channel_id: impl Into<crate::ChannelId> + Send,
+        message_id: impl Into<crate::MessageId> + Send,
+    ) -> Result<bool> {
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+        let message_id: crate::MessageId = message_id.into();
+        let message_id = Uuid::from(message_id);
+
         #[derive(Deserialize)]
         struct Resp {
             #[serde(default)]
@@ -2429,7 +2592,16 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn get_reactions(&self, channel_id: Uuid, message_id: Uuid) -> Result<Vec<Reaction>> {
+    pub async fn get_reactions(
+        &self,
+        channel_id: impl Into<crate::ChannelId> + Send,
+        message_id: impl Into<crate::MessageId> + Send,
+    ) -> Result<Vec<Reaction>> {
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+        let message_id: crate::MessageId = message_id.into();
+        let message_id = Uuid::from(message_id);
+
         #[derive(Deserialize)]
         struct Resp {
             reactions: Vec<Reaction>,
@@ -2457,10 +2629,15 @@ impl Client {
     /// ```
     pub async fn add_reaction(
         &self,
-        channel_id: Uuid,
-        message_id: Uuid,
+        channel_id: impl Into<crate::ChannelId> + Send,
+        message_id: impl Into<crate::MessageId> + Send,
         emoji: &str,
     ) -> Result<()> {
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+        let message_id: crate::MessageId = message_id.into();
+        let message_id = Uuid::from(message_id);
+
         let encoded: String = url::form_urlencoded::byte_serialize(emoji.as_bytes()).collect();
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
@@ -2488,10 +2665,15 @@ impl Client {
     /// ```
     pub async fn remove_reaction(
         &self,
-        channel_id: Uuid,
-        message_id: Uuid,
+        channel_id: impl Into<crate::ChannelId> + Send,
+        message_id: impl Into<crate::MessageId> + Send,
         emoji: &str,
     ) -> Result<()> {
+        let channel_id: crate::ChannelId = channel_id.into();
+        let channel_id = Uuid::from(channel_id);
+        let message_id: crate::MessageId = message_id.into();
+        let message_id = Uuid::from(message_id);
+
         let encoded: String = url::form_urlencoded::byte_serialize(emoji.as_bytes()).collect();
         let _: OkResponse = self
             .request_json::<OkResponse, ()>(
@@ -2560,7 +2742,10 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn get_user(&self, user_id: Uuid) -> Result<UserDetail> {
+    pub async fn get_user(&self, user_id: impl Into<crate::UserId> + Send) -> Result<UserDetail> {
+        let user_id: crate::UserId = user_id.into();
+        let user_id = Uuid::from(user_id);
+
         #[derive(Deserialize)]
         struct Resp {
             user: UserDetail,
@@ -2576,7 +2761,7 @@ impl Client {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use rappin::prelude::*;
+    /// use rappin::*;
     /// use uuid::Uuid;
     ///
     /// #[tokio::main]
@@ -2587,7 +2772,10 @@ impl Client {
     ///     Ok(())
     /// }
     /// ```
-    pub async fn create_dm(&self, user_id: Uuid) -> Result<Uuid> {
+    pub async fn create_dm(&self, user_id: impl Into<crate::UserId> + Send) -> Result<Uuid> {
+        let user_id: crate::UserId = user_id.into();
+        let user_id = Uuid::from(user_id);
+
         #[derive(Deserialize)]
         struct Resp {
             channel_id: Uuid,
@@ -2606,6 +2794,28 @@ impl Client {
     #[cfg(feature = "hot-reload")]
     pub(crate) fn worker_output(&self, value: serde_json::Value) -> serde_json::Value {
         self.redact_credentials(value)
+    }
+}
+
+impl Client {
+    /// Read custom emoji metadata from one scoped message; the platform enforces access and rollout.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rappin::{Client, Result};
+    /// async fn inspect(client: &Client, channel: uuid::Uuid, message: uuid::Uuid) -> Result<()> {
+    ///     let result = client.get_message_emojis(channel, message).await?;
+    ///     for emoji in result.emojis { println!("{}: {}", emoji.name, emoji.url); }
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn get_message_emojis(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        message: impl Into<crate::MessageId> + Send,
+    ) -> Result<MessageEmojis> {
+        crate::ApiExt::get_message_emojis(self, channel, message).await
     }
 }
 

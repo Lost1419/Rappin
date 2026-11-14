@@ -1,6 +1,6 @@
 //! Run with YAPPER_BOT_TOKEN set and `cargo run --example api14_resources`.
 //! Computed permission reads require the platform's API 1.4 test rollout.
-use rappin::prelude::*;
+use rappin::*;
 
 struct Resources;
 #[async_trait::async_trait]
@@ -19,7 +19,7 @@ impl EventHandler for Resources {
 #[tokio::main]
 async fn main() -> Result<()> {
     let token = std::env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+        .map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
     Bot::builder(token)
         .event_handler(Resources)
         .command(
@@ -43,6 +43,7 @@ async fn main() -> Result<()> {
             },
         )
         .build()
+        .expect("valid bot configuration")
         .run()
         .await
 }

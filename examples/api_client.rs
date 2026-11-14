@@ -6,13 +6,13 @@
 //! cargo run --example api_client
 //! ```
 
-use rappin::prelude::*;
+use rappin::*;
 use std::env;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let token = env::var("YAPPER_BOT_TOKEN")
-        .map_err(|_| YappinError::Config("set YAPPER_BOT_TOKEN".into()))?;
+    let token =
+        env::var("YAPPER_BOT_TOKEN").map_err(|_| Error::Config("set YAPPER_BOT_TOKEN".into()))?;
 
     let client = Client::new(token);
 

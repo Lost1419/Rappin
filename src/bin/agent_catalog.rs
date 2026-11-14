@@ -13,11 +13,11 @@ pub fn prepare(
     let entry = rappin::capabilities::catalogue()
         .iter()
         .find(|e| e.name == name)
-        .ok_or_else(|| YappinError::validation("tool", "unknown tool"))?;
+        .ok_or_else(|| Error::validation("tool", "unknown tool"))?;
     entry.validate(args)?;
     if entry.cli.first() == Some(&"platform") {
         let mut parsed = Args::try_parse_from(["rappin", "platform", name])
-            .map_err(|_| YappinError::validation("arguments", "invalid platform operation"))?;
+            .map_err(|_| Error::validation("arguments", "invalid platform operation"))?;
         parsed.fields = args["fields"]
             .as_str()
             .map(|s| s.split(',').map(str::to_owned).collect())
@@ -59,18 +59,18 @@ pub fn prepare(
             argv.push("--cursor-file".into());
             argv.push(
                 path.to_str()
-                    .ok_or_else(|| YappinError::Config("event cursor path must be UTF-8".into()))?
+                    .ok_or_else(|| Error::Config("event cursor path must be UTF-8".into()))?
                     .into(),
             );
         } else if name == "ack_events" {
-            return Err(YappinError::Config(
+            return Err(Error::Config(
                 "start MCP with --cursor-file PATH or use the explicit events CLI to acknowledge"
                     .into(),
             ));
         }
     }
     let parsed = Args::try_parse_from(argv).map_err(|_| {
-        YappinError::validation(
+        Error::validation(
             "arguments",
             "invalid arguments; inspect tools/list or CLI help",
         )

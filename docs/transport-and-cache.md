@@ -1,6 +1,6 @@
 # REST transport and application-owned caches
 
-Available in `rappin-rs` 0.1.8.
+Advanced bot settings are grouped under configure. Standalone ClientBuilder configuration is available for direct API integrations.
 
 ## API origins and retries
 
@@ -47,7 +47,7 @@ fn configure(token: &str, store: Arc<dyn LookupCache>) -> (Client, Bot) {
         .build();
     let bot = Bot::builder(token)
         .lookup_cache_backend(store)
-        .build();
+        .build().expect("valid bot configuration");
     (client, bot)
 }
 ```
@@ -76,7 +76,7 @@ or consult application state. Results are not retained across messages.
 Mention prefixes can be combined with either form.
 
 ```rust,no_run
-use rappin::prelude::*;
+use rappin::*;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
@@ -92,7 +92,7 @@ let bot = Bot::builder("yb_token")
         }
     })
     .mention_prefix(true)
-    .build();
+    .build().expect("valid bot configuration");
 ```
 
 Cog installs, replacements and removals update the command-root index under the
@@ -127,4 +127,4 @@ existing JSON without those fields continues to decode.
 Unchanged event checkpoints no longer trigger file writes. Advancing checkpoints
 still use atomic replacement and file synchronization after ordered handler
 completion. An unprocessed handler failure blocks progress at that event;
-the completed prefix can commit. See [handler failures](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md).
+the completed prefix can commit. See [handler failures](https://github.com/Lost1419/Rappin/blob/dev/docs/handler-failures.md).

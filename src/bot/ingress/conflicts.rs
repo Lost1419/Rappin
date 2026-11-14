@@ -190,8 +190,8 @@ impl IngressConflict {
     ///     let error = conflict.to_error(); // Retains bounded source/schema evidence.
     /// }
     /// ```
-    pub fn to_error(&self) -> YappinError {
-        YappinError::IngressConflict {
+    pub fn to_error(&self) -> Error {
+        Error::IngressConflict {
             conflict: Box::new(self.clone()),
         }
     }

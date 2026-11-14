@@ -79,7 +79,7 @@ async fn run_plan(api: &(impl Api + ?Sized), server: Uuid, requester: Uuid) -> R
 See [`examples/planner_bindings.rs`](https://github.com/Lost1419/Rappin/blob/main/examples/planner_bindings.rs) for an
 offline executable and a permanent-command installation helper. Run
 `cargo run --example planner_bindings` to print capabilities without credentials.
-The library can be used as `rappin-rs = { version = "0.1.29", default-features = false }`.
+The library can be used as `rappin-rs = { git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "2.0.0-dev.1", default-features = false }`.
 
 ## Channel and category management
 
@@ -150,7 +150,7 @@ An assessment is diagnostic, not a reservation. `execute` checks again before
 performing an action; it does not accept a caller-supplied "approved" report.
 Yapin still enforces concurrent changes and server rules. Permission-policy
 errors retain sanitized structured causes in the report. The error variant
-`YappinError::OperationAuthorization { report }` distinguishes denied from
+`Error::OperationAuthorization { report }` distinguishes denied from
 unknown; `to_json()` exposes `decision` and `authorization.checks` with separate
 requester/bot/context entries. No mutation has run in that case.
 
