@@ -141,6 +141,9 @@ WorkerCog::new("forms").on_interaction(|ctx| async move {
 # }
 ```
 
+Legacy `Listener::Interaction` retains button-only routing. Use
+`WorkerCog::on_interaction` for the unified typed interaction listener.
+
 A worker `command_spec` uses protocol10 and enables supported UI, single-attempt
 and operation-identity requests together. Legacy-style worker routes can select
 UI support with `ui_api()`. Upgrade the parent before enabling a newer worker

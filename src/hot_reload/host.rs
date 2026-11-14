@@ -1018,6 +1018,11 @@ impl Cog for ProcessCog {
                 .invoke(CogEvent::UiInteraction { event: ctx.data() }, &ctx.client)
                 .await
                 .map(|_| ())
+        } else if matches!(
+            ctx.event.kind.as_deref(),
+            Some("select" | "modal_submit" | "command")
+        ) {
+            Ok(())
         } else {
             self.listen_result(
                 Listener::Interaction,

@@ -1542,3 +1542,58 @@ async fn main() -> Result<()> {
         .expect("mock HTTP fixture did not finish")
         .unwrap();
 }
+
+#[tokio::test]
+async fn legacy_worker_component_listeners_keep_their_button_event_scope() {
+    let project = Project::new().await;
+    project
+        .code_with_listeners("legacy", &[], 0, None, &["interaction"])
+        .await;
+    let (base, mut requests, http) = support::mock(vec![support::response(
+        200,
+        json!({"message":rappin::Message::default()}),
+    )])
+    .await;
+    let bot = Bot::builder("unused-fixture")
+        .base_url(base)
+        .sync_commands(false)
+        .log(false)
+        .interactive_events(true)
+        .build()
+        .unwrap();
+    bot.cache().set_me(me()).await;
+    let reload = HotReload::load(bot.handle(), project.spec()).await.unwrap();
+    for kind in ["select", "modal_submit", "command", "button"] {
+        let mut data = json!({"id":uuid::Uuid::new_v4(),"token":"fixture-interaction","type":kind,"custom_id":"other","channel_id":uuid::Uuid::nil(),"user_id":uuid::Uuid::nil()});
+        match kind {
+            "select" => data["values"] = json!(["rust"]),
+            "modal_submit" => data["values"] = json!({"name":"Rust"}),
+            "command" => data["command"] = json!("apply"),
+            _ => (),
+        }
+        let event = serde_json::from_value(
+            json!({"id":1,"type":if kind=="command" {"command"}else{"interaction"},"data":data}),
+        )
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), bot.process_event(event))
+            .await
+            .expect("interaction dispatch timed out")
+            .unwrap();
+        if kind != "button" {
+            assert!(
+                requests.try_recv().is_err(),
+                "legacy worker received {kind}"
+            );
+        }
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), requests.recv())
+            .await
+            .unwrap()
+            .unwrap()
+            .contains("legacy")
+    );
+    assert!(requests.try_recv().is_err());
+    reload.unload().await.unwrap();
+    http.await.unwrap();
+}
