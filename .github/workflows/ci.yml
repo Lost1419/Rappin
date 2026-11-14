@@ -5,11 +5,74 @@ on:
     branches: [ main, master, dev ]
   pull_request:
     branches: [ main, master, dev ]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Classify CI changes
+    runs-on: ubuntu-latest
+    outputs:
+      markdown-only: ${{ steps.diff.outputs.markdown-only }}
+      guides: ${{ steps.diff.outputs.guides }}
+    steps:
+      - uses: actions/checkout@v4
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'pull_request' && github.base_ref == 'dev')
+        with:
+          fetch-depth: 0
+      - name: Check whether only Markdown changed
+        id: diff
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'pull_request' && github.base_ref == 'dev')
+        shell: bash
+        env:
+          PUSH_BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            range="$PR_BASE...$PR_HEAD"
+          else
+            range="$PUSH_BEFORE..$GITHUB_SHA"
+          fi
+          # Unavailable history or an empty diff leaves the full suite enabled.
+          if ! git diff --name-only --no-renames -z "$range" -- > "$RUNNER_TEMP/changed-paths"; then
+            exit 0
+          fi
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          paths = (Path(os.environ["RUNNER_TEMP"]) / "changed-paths").read_bytes().split(b"\0")[:-1]
+          root_docs = {b"README.md", b"CHANGELOG.md"}
+          if paths and all(
+              path in root_docs or (path.startswith((b"docs/", b"skills/")) and path.endswith(b".md"))
+              for path in paths
+          ):
+              guides = any(path == b"README.md" or path.startswith(b"docs/") for path in paths)
+              with open(os.environ["GITHUB_OUTPUT"], "a") as outputs:
+                  print("markdown-only=true", file=outputs)
+                  print(f"guides={str(guides).lower()}", file=outputs)
+          PY
+
+  markdown-guides:
+    name: Markdown guide checks
+    needs: changes
+    if: needs.changes.outputs.markdown-only == 'true' && needs.changes.outputs.guides == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fetch --locked
+      - name: Check public documentation
+        env:
+          RUSTDOCFLAGS: -D warnings -D missing_docs
+        run: cargo doc --locked --all-features --no-deps
+      - name: Check README and every guide
+        run: python3 scripts/check-guides.py
+
   api-audit-skill:
     name: API audit skill tests
     runs-on: ubuntu-latest
@@ -22,6 +85,8 @@ jobs:
         run: python -B -m unittest discover -s skills/yapin-api-audit/scripts -p 'test_*.py'
 
   minimum-rust:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.markdown-only != 'true' }}
     name: Rust 1.89 / ${{ matrix.feature }}
     runs-on: ubuntu-latest
     strategy:
@@ -64,6 +129,8 @@ jobs:
           cargo check --manifest-path target/msrv-consumer/Cargo.toml --target-dir target --config 'resolver.incompatible-rust-versions="fallback"'
 
   documentation-coverage:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.outputs.markdown-only != 'true' || needs.changes.outputs.guides == 'true') }}
     name: Documentation coverage
     runs-on: ubuntu-latest
     steps:
@@ -77,6 +144,8 @@ jobs:
         run: python3 scripts/check-doc-coverage.py target/doc/rappin.json
 
   fuzz-smoke:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.markdown-only != 'true' }}
     name: Bounded offline fuzz smoke
     runs-on: ubuntu-latest
     steps:
@@ -97,6 +166,8 @@ jobs:
           if-no-files-found: ignore
 
   compatibility:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.markdown-only != 'true' }}
     name: Public API checks
     runs-on: ubuntu-latest
     steps:
@@ -112,6 +183,8 @@ jobs:
           feature-group: all-features
 
   test:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.markdown-only != 'true' }}
     name: Build & Test
     runs-on: ${{ matrix.os }}
     strategy:
@@ -169,6 +242,8 @@ jobs:
         run: cargo check --no-default-features
 
   audit:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.markdown-only != 'true' }}
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
