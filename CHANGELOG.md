@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.34 — 2026-11-14
 
 - Separate GET/HEAD and mutation retry budgets with `max_read_retries` and `max_write_retries` on ClientBuilder and BotBuilder. Existing ClientBuilder::max_retries sets both. Defaults and known-unapplied mutation rules stay compatible.
 - Add opt-in handler/client read availability recovery, including parent-proxied worker requests. Share the existing bounded backoff, structured exhaustion and server-wait budget. Suppress nested retry loops and preserve single-attempt requests. Keep exact attempt/retry counters and coherent latest-episode telemetry under concurrent reads.
