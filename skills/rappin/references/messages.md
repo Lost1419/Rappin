@@ -21,7 +21,7 @@ sending messages or moderation.
 
 For uploads, discover the installed named operation and its inline file schema.
 MCP accepts bounded inline data, not arbitrary local paths (128 KiB inline-data
-boundary in Rappin 0.1.20). Explicit operator CLI uploads and Rust SDK uploads can
+boundary). Explicit operator CLI uploads and Rust SDK uploads can
 handle larger files within their documented limits. Confirm the intended files
 and destination; do not convert a tool-selected path into filesystem access.
 Preserve every confirmed per-file/message receipt when an upload partially succeeds.

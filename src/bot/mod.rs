@@ -1239,7 +1239,8 @@ impl BotBuilder {
         self
     }
 
-    /// Enable extended interaction events for native/cog/worker UI hooks.
+    /// Enable or disable extended interaction events for native/cog/worker UI hooks.
+    /// Enabled by default.
     /// # Example
     ///
     /// ```rust
@@ -1250,8 +1251,8 @@ impl BotBuilder {
         self.ui_events = enabled;
         self
     }
-    /// Opt into slash command interaction events, leaving message commands unchanged.
-    /// Register an on_command_interaction handler or cog UI hook to answer them.
+    /// Enable or disable slash command interaction events. Enabled by default.
+    /// Registered commands handle matching interactions before generic UI hooks.
     /// # Example
     ///
     /// ```rust

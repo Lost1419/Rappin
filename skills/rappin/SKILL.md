@@ -7,7 +7,8 @@ Use an available Rappin MCP connection or installed `rappin` from any directory.
 For CLI setup, inspect `rappin --version`, `rappin capabilities` and
 `rappin doctor --offline`. Install with
 `cargo install rappin-rs --features cli` if needed. Preserve existing
-configuration and compiled feature choices. Authentication uses `YAPPER_BOT_TOKEN`
+configuration and compiled feature choices. To build the 2.0 preview CLI from a
+`dev` checkout, run `cargo install --path . --features cli`. Authentication uses `YAPPER_BOT_TOKEN`
 or `~/.config/rappin/config.toml`; never put credentials in command arguments or
 print configuration contents. Run live `rappin doctor` when auth/reachability
 needs checking, rather than adding it to every operation.

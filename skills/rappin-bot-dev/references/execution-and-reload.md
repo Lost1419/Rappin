@@ -102,8 +102,10 @@ a checkout also includes `examples/message_gate.rs` and hot-reload examples.
 Use `CreateMessage`, `EditMessage` and `ApiExt` for messages, nullable updates,
 select menus and modal forms. Native `on_select`, `on_modal` and
 `on_command_interaction` receive the shared `InteractionContext`. Cog and worker
-listeners use `on_interaction`. Protocol 12 provides UI, single-attempt API and operation-identity support
-on every worker route. Rebuild parent and workers together. The parent must enable `interactive_events(true)`.
-Slash interactions have their own authorization boundary. A modal must precede
+listeners use `on_interaction`. The parent enables UI delivery and slash commands
+by default. Registered slash commands use the same `CommandContext` as message
+commands and dispatch before generic interaction listeners. Protocol 12 provides UI,
+single-attempt requests and operation identities on every worker route.
+Derive authorization from the original event and its available identity facts. A modal must precede
 acknowledgement or another response. Propagate incomplete work through the
 explicit failure policy. See `interactions_guide` and the included forms example.

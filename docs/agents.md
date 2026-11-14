@@ -4,7 +4,7 @@ For computed member permissions, resource resolution, role ordering and explicit
 overrides, see [resource and permission workflows](resources.md). The catalogue includes the named
 operations and preserves their test-server rollout requirements.
 
-For select menus, modal forms, optional slash interaction delivery and
+For select menus, modal forms, slash interaction delivery and
 message emoji lookup, see [interactive message workflows](interactions.md). The shared catalogue
 exposes `get_message_emojis`; rich send/edit/history preserve the new component data.
 
@@ -299,5 +299,5 @@ prove absence of every vulnerability or protect against malicious trusted code.
 Use `rappin platform get_api_version` for public metadata without credentials.
 The shared catalogue includes file uploads, custom emojis and bot-owned webhooks;
 see [API 1.2 workflows](uploads-and-webhooks.md) for arguments, partial-write receipts, DM routing,
-worker v4, image proxy metadata and the 128 KiB inline-data boundary. Larger files
+worker uploads, image proxy metadata and the 128 KiB inline-data boundary. Larger files
 use the Rust SDK or explicit operator CLI upload commands, never MCP file paths.

@@ -1,7 +1,7 @@
 # Troubleshooting paths
 
-Use the application's selected SDK version. Availability/hierarchy/single-attempt
-helpers below require Rappin 0.1.20+; older deployments need their matching contract.
+These instructions describe the 2.0 preview. For a deployment on 0.1, use the
+contract for its installed version.
 
 ## Slow replies
 
@@ -62,8 +62,7 @@ Do not add a catch-all retry loop or tune budgets without evidence.
 
 Determine whether the failure came from a command, button, server-message gate or
 post-command listener. `on_command_failure`, `on_button_failure` and
-`on_message_failure` supply explicit dispositions; legacy `()` callbacks observe
-failures without completing them. Typed `CommandError` input/check rejections
+`on_message_failure` return explicit failure dispositions. Typed `CommandError` input/check rejections
 complete after a successful reply; failed replies and unexpected errors remain
 incomplete by default. Preserve `FailureHandling.source` and `handling_error`.
 

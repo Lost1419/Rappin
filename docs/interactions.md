@@ -82,7 +82,7 @@ async fn run(token: String) -> Result<()> {
 A modal contains up to five text or select fields. `InteractionValues::Selected`
 contains selected strings. `Submitted` maps modal field IDs to `ModalValue::Text`
 or selected lists. For a custom cog, implement fallible `Cog::on_interaction`
-and enable `interactive_events(true)` on the parent.
+with UI delivery enabled on the parent (the default).
 
 The `on_select`, `on_modal` and `on_command_interaction` builders enable typed
 routing. These event kinds use their registered handlers and the unified cog

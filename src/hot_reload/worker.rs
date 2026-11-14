@@ -852,7 +852,7 @@ impl WorkerCog {
         );
         self
     }
-    /// Extended select/modal/command event values. Parent must opt into interactive_events.
+    /// Extended select/modal/command event values. The parent enables UI delivery by default.
     /// # Example
     ///
     /// ```rust
