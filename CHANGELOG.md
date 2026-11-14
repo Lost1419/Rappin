@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.35 — 2026-11-14
 
 - Refresh the bundled Yapin API 1.4.0 contract to build `f136961`. Add thread operations, reaction moderation, private channel allowlists, caller-supplied send nonces, typed slash options and form parsing, ephemeral reply buttons, and typed views of message/server change events.
 - Add opt-in preservation of Yapin error codes, permission fields and allowed methods. Decode unpublished official SDK package names while preserving the existing Rust field types.
