@@ -159,6 +159,21 @@ impl CommandContext {
             Source::Worker(ctx) => ctx.args(),
         }
     }
+    /// Parse positional or named slash arguments with a caller-supplied declaration.
+    ///
+    /// ```no_run
+    /// fn options(ctx: &rappin::CommandContext, command: &rappin::SlashCommand)
+    ///     -> rappin::Result<std::collections::BTreeMap<String, serde_json::Value>>
+    /// {
+    ///     ctx.parse_slash_options(command)
+    /// }
+    /// ```
+    pub fn parse_slash_options(
+        &self,
+        command: &crate::SlashCommand,
+    ) -> Result<std::collections::BTreeMap<String, serde_json::Value>> {
+        command.parse_options(self.args())
+    }
     /// Parse with the existing typed parser and reject trailing arguments.
     /// # Example
     /// ```rust

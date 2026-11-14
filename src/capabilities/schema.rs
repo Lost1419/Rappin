@@ -44,7 +44,10 @@ pub(super) fn body_schema(name: &str) -> Option<Value> {
         "create_bot_webhook" => ("post", "/channels/{id}/webhooks"),
         "post_bot_webhook" => ("post", "/webhooks/{id}"),
         "send_files" => ("post", "/channels/{id}/messages"),
-        "send_message" => ("post", "/channels/{id}/messages"),
+        "send_message" | "send_with_nonce" => ("post", "/channels/{id}/messages"),
+        "publish_slash_commands" => ("put", "/commands"),
+        "create_thread" => ("post", "/channels/{id}/threads"),
+        "edit_thread" => ("patch", "/threads/{id}"),
         "edit_message" => ("patch", "/channels/{id}/messages/{mid}"),
         "reorder_roles" => ("patch", "/servers/{id}/roles"),
         "set_channel_override" => ("put", "/channels/{id}/overrides/{target}"),
@@ -153,6 +156,13 @@ pub(super) fn body_schema(name: &str) -> Option<Value> {
     schema["additionalProperties"] = false.into();
     // Fill gaps in the bundled OpenAPI using the existing typed SDK contract.
     match name {
+        "send_with_nonce" => schema["required"] = json!(["nonce"]),
+        "send_message" | "send_files" => {
+            schema["properties"]
+                .as_object_mut()
+                .expect("body properties")
+                .remove("nonce");
+        }
         "edit_channel" => {
             schema["properties"]["category_id"]["format"] = "uuid".into();
             schema["properties"]["slowmode"]["minimum"] = 0.into();

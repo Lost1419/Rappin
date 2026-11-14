@@ -165,11 +165,11 @@ rappin --dry-run request POST "/servers/$SERVER_ID/timeouts" --body-file timeout
 
 Raw requests preserve supplied JSON and bypass typed payload validation. They use
 the same auth, bounded retries, and error contract. Use only requested writes.
-The client retries 429/503 responses only with a valid numeric `Retry-After`, up to
-its configured retry budget, with delays at most 60 seconds. Headerless 429s are
-returned immediately. Transport errors and other 5xx responses aren't blindly
-retried because writes may already have executed. Preserve message IDs and check
-history before retrying an ambiguous send; the API has no documented idempotency key.
+The client accepts seconds or an HTTP date in `Retry-After` for 429/503 retries.
+A single advised delay is capped at 60 seconds and the total wait budget defaults
+to 30 seconds. Headerless 429s return immediately. Preserve confirmed message IDs
+and reconcile ambiguous sends before repeating them. Yapin's rollout-gated
+`bot_send_nonce` provides a 10-minute deduplication window for sends without files.
 
 ## Resume events
 
@@ -233,7 +233,7 @@ types, and out-of-range values are rejected. Writes accept `dry_run:true`.
 See [CLI/MCP workflows](cli-mcp.md) for operation names, inline bodies, bounded
 output, delivery receipts, cancellation, and partial-write recovery.
 See [server management](server-management.md) for the new role/permission,
-invite, count and scheduled-event tools, which currently require test-server access.
+invite, count and scheduled-event tools and their documented rollout flags.
 
 ```json
 {"mcpServers":{"yapin":{"command":"rappin","args":["mcp"]}}}

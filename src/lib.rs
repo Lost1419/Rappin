@@ -121,6 +121,12 @@ pub use availability::{
 pub mod api;
 pub mod resource_api;
 pub use resource_api::{ComputedPermissionsPolicy, ResourceApiExt};
+mod november_api;
+pub use november_api::*;
+mod slash_options;
+pub use slash_options::*;
+mod change_events;
+pub use change_events::*;
 pub mod capabilities;
 pub mod lookup;
 pub use lookup::{LookupResult, LookupStatus, SearchStop};

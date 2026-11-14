@@ -305,17 +305,34 @@ impl crate::InteractionCallback {
         if self.kind == Ack {
             return Ok(());
         }
-        if self.kind == Ephemeral
-            && (self.flags.is_some_and(|v| v & 32768 != 0) || self.components.is_some())
-        {
-            return Err(invalid(
-                "components",
-                "ephemeral replies do not support components",
-            ));
+        let body = serde_json::to_value(self)?;
+        if self.kind == Ephemeral {
+            validate_ephemeral_buttons(&body)?;
         }
-        validate_message(&serde_json::to_value(self)?, self.kind != Update)
+        validate_message(&body, self.kind != Update)
     }
 }
+pub(crate) fn validate_ephemeral_buttons(body: &Value) -> Result<()> {
+    if body["flags"]
+        .as_u64()
+        .is_some_and(|flags| flags & 32768 != 0)
+        || body["components"].as_array().is_some_and(|rows| {
+            rows.iter().any(|row| {
+                kind(row) != 1
+                    || row["components"]
+                        .as_array()
+                        .is_none_or(|items| items.iter().any(|item| kind(item) != 2))
+            })
+        })
+    {
+        return Err(invalid(
+            "components",
+            "ephemeral replies accept classic button rows",
+        ));
+    }
+    Ok(())
+}
+
 /// Split long output on Unicode character boundaries, preferring newlines or spaces.
 /// # Example
 ///

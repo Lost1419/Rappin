@@ -112,10 +112,8 @@ before responding. Custom collectors still need an authenticated event source.
 `WebhookClient::get_info()` inspects a channel webhook without posting. Returned
 `WebhookInfo` deliberately omits credential fields, even if the server sends them.
 
-The developer guide now documents 300-character bot biographies, while OpenAPI
-still declares 190. Local validation accepts up to 300 Unicode characters and
-preserves any stricter server rejection. This is a guide-aligned client limit,
-not a claim that every deployment has enabled 300 characters.
+The developer guide and OpenAPI document a 300-character bot biography limit.
+Local validation accepts up to 300 Unicode characters and preserves any server rejection.
 
 ## Migration
 

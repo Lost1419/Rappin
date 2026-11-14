@@ -4,6 +4,8 @@ pub fn collection(command: &Command) -> Option<&'static str> {
     match command {
         Command::Platform { operation, .. } => match operation.as_str() {
             "list_emojis" => Some("emojis"),
+            "list_threads" => Some("threads"),
+            "list_slash_commands" => Some("commands"),
             "list_channel_webhooks" | "list_bot_webhooks" => Some("webhooks"),
             _ => None,
         },

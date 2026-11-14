@@ -730,6 +730,9 @@ pub struct UiInteraction {
     #[serde(default)]
     /// Raw command arguments when included in the interaction event.
     pub args: Option<String>,
+    /// Ephemeral reply targeted by this button click, when supplied by Yapin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_id: Option<Uuid>,
 }
 impl UiInteraction {
     /// Decode a select, modal or command interaction from a raw event. Rejects mismatched select/modal values and preserves the base credential and deadline metadata.

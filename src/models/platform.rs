@@ -60,11 +60,19 @@ pub struct SdkVersions {
 /// assert_eq!(value.npm, "yapin");
 /// ```
 pub struct SdkPackages {
-    /// Official npm package name.
+    /// Official npm package name, or empty while unpublished.
+    #[serde(default, deserialize_with = "unpublished_package")]
     pub npm: String,
-    /// Official PyPI package name.
+    /// Official PyPI package name, or empty while unpublished.
+    #[serde(default, deserialize_with = "unpublished_package")]
     pub pypi: String,
 }
+fn unpublished_package<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 /// Public platform changelog response.

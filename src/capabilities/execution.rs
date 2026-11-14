@@ -227,6 +227,22 @@ impl ValidatedOperation {
                     })
             }
             "get_role" => uuid(&data["role"]["id"]) == Some(self.uuid("role")),
+            "list_threads" => data["threads"].as_array().is_some_and(|threads| {
+                threads.iter().all(|thread| {
+                    uuid(&thread["parent_id"]) == Some(self.uuid("channel"))
+                        && uuid(&thread["server_id"]) == Some(context.server_id())
+                })
+            }),
+            "create_thread" => {
+                uuid(&data["thread"]["parent_id"]) == Some(self.uuid("channel"))
+                    && uuid(&data["thread"]["server_id"]) == Some(context.server_id())
+                    && uuid(&data["thread"]["id"]).is_some()
+                    && uuid(&data["message"]["channel_id"]) == uuid(&data["thread"]["id"])
+            }
+            "send_with_nonce" => {
+                uuid(&data["message"]["channel_id"]) == Some(self.uuid("channel"))
+                    && (data["nonce"].is_null() || data["nonce"] == self.args["body"]["nonce"])
+            }
             "send_sticker" => uuid(&data["message"]["channel_id"]) == Some(self.uuid("channel")),
             "get_channel_overrides" => crate::resource_api::decode_overrides(
                 data.clone(),
@@ -261,6 +277,14 @@ impl ValidatedOperation {
                 rows.iter()
                     .all(|row| uuid(&row["channel_id"]) == Some(self.uuid("channel")))
             }),
+            "create_channel" if self.args["body"]["private"] == true => {
+                uuid(&data["channel"]["id"]).is_some()
+                    && self.channel_result_in_scope(data, context)
+            }
+            "edit_channel" if self.args["body"].get("user_ids").is_some() => {
+                uuid(&data["channel"]["id"]) == Some(self.uuid("id"))
+                    && self.channel_result_in_scope(data, context)
+            }
             "get_member" => uuid(&data["member"]["id"]) == Some(self.uuid("user")),
             "get_server" => uuid(&data["server"]["id"]) == Some(context.server_id()),
             "get_channel" => {
@@ -288,6 +312,13 @@ impl ValidatedOperation {
                 "API result identity does not match the bound resource scope",
             ))
         }
+    }
+    fn channel_result_in_scope(&self, data: &Value, context: &OperationContext) -> bool {
+        data["channel"]["server_id"].is_null()
+            || data["channel"]["server_id"]
+                .as_str()
+                .and_then(|id| id.parse::<Uuid>().ok())
+                == Some(context.server_id())
     }
     async fn run<A: Api + ?Sized>(&self, api: &A, context: &OperationContext) -> Result<Value> {
         let server = context.server_id();

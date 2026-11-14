@@ -24,7 +24,12 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
     let mut args = args.clone();
     if matches!(
         entry.name,
-        "send_message" | "edit_message" | "send_files" | "post_bot_webhook"
+        "send_message"
+            | "edit_message"
+            | "send_files"
+            | "post_bot_webhook"
+            | "send_with_nonce"
+            | "create_thread"
     ) {
         if let Some(body) = args.get_mut("body") {
             crate::utils::strip_proxy_metadata(body);
@@ -90,14 +95,44 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
             body.validate(false)?;
             args["body"] = serde_json::to_value(body)?;
         }
-        "create_channel" => {
-            let body: CreateChannelRequest = serde_json::from_value(args["body"].clone())?;
-            args["body"] = serde_json::to_value(body)?;
-        }
-        "edit_channel" => {
-            let body: EditChannelRequest = serde_json::from_value(args["body"].clone())?;
-            body.validate()?;
-            args["body"] = serde_json::to_value(body)?;
+        "create_channel" | "edit_channel" => {
+            let requested = &args["body"];
+            let mut body = if entry.name == "create_channel" {
+                serde_json::to_value(serde_json::from_value::<CreateChannelRequest>(
+                    requested.clone(),
+                )?)?
+            } else {
+                let edit: EditChannelRequest = serde_json::from_value(requested.clone())?;
+                edit.validate()?;
+                serde_json::to_value(edit)?
+            };
+            if let Some(ids) = requested.get("user_ids") {
+                let users: Vec<uuid::Uuid> = serde_json::from_value(ids.clone())?;
+                crate::november_api::validate_user_ids(&users)?;
+                if requested["private"] == false
+                    || entry.name == "create_channel" && requested["private"] != true
+                {
+                    return Err(YappinError::validation(
+                        "private",
+                        "an allowlist requires a private channel",
+                    ));
+                }
+                body["user_ids"] = ids.clone();
+            }
+            if entry.name == "create_channel" {
+                if requested.get("role_ids").is_some() && requested["private"] != true {
+                    return Err(YappinError::validation(
+                        "private",
+                        "an allowlist requires a private channel",
+                    ));
+                }
+                for key in ["private", "role_ids"] {
+                    if let Some(value) = requested.get(key) {
+                        body[key] = value.clone();
+                    }
+                }
+            }
+            args["body"] = body;
         }
         "create_category" => {
             let body: CreateCategoryRequest = serde_json::from_value(args["body"].clone())?;
@@ -110,6 +145,39 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
         "reorder_roles" => {
             crate::resource_api::role_order_ids(&args["body"])?;
         }
+        "publish_slash_commands" => {
+            let commands: Vec<crate::SlashCommand> =
+                serde_json::from_value(args["body"]["commands"].clone())?;
+            crate::slash_options::validate_slash_commands(&commands)?;
+        }
+        "send_with_nonce" => {
+            let body = &args["body"];
+            crate::november_api::validate_nonce(body["nonce"].as_str().expect("validated nonce"))?;
+            crate::validation::validate_message(body, true)?;
+            writes.push(body.clone());
+        }
+        "moderate_reactions" => {
+            if args["emoji"].as_str().is_some_and(str::is_empty)
+                || args.get("user").is_some() && args.get("emoji").is_none()
+            {
+                return Err(YappinError::validation(
+                    "emoji",
+                    "a user target requires an emoji",
+                ));
+            }
+        }
+        "create_thread" => {
+            let body = &args["body"];
+            crate::november_api::thread_name(body["name"].as_str())?;
+            if body["name"].is_null() && body["message_id"].is_null() {
+                return Err(YappinError::validation(
+                    "name",
+                    "provide a name or a parent message",
+                ));
+            }
+            crate::validation::validate_message(body, true)?;
+        }
+        "edit_thread" => crate::november_api::thread_name(args["body"]["name"].as_str())?,
         "send_sticker" => {
             writes.push(json!({"sticker_id":args["sticker"]}));
         }
@@ -224,6 +292,8 @@ pub(super) fn collection_key(name: &str) -> Option<&'static str> {
     match name {
         "list_servers" => Some("servers"),
         "list_channels" => Some("channels"),
+        "list_threads" => Some("threads"),
+        "list_slash_commands" => Some("commands"),
         "list_members" => Some("members"),
         "read_messages" => Some("messages"),
         "search_channels" | "search_members" => Some("matches"),

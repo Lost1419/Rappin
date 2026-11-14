@@ -1,9 +1,39 @@
 # API 1.4 resources and computed access
 
-Rappin supports the public API 1.4 contract captured on 12 November 2026. The new
-resource endpoints and lifecycle events require the platform's `bot_api_round2`
-rollout. The developer guide limits this to test servers and eligible test bot
+The resource extensions introduced in Rappin 0.1.32 use the API 1.4 contract
+first captured on 12 November 2026. The resource endpoints and lifecycle events
+require the platform's `bot_api_round2` rollout. The developer guide limits
+this to test servers and eligible test bot
 owners. Preserve a returned 403 and its cause when eligibility is unavailable.
+
+## November 13 contract update
+
+The bundled OpenAPI snapshot includes the November 13 additions under the same
+API version. Availability depends on the bot and server. The changelog records
+the observed `403 feature_off` responses.
+
+- Import `NovemberApiExt` for threads, reaction moderation, private-channel
+  creation and membership edits, or file-free sends with an explicit nonce.
+  The CLI and MCP expose thread and reaction operations through the shared
+  catalogue, along with explicit nonce sends and slash metadata. Callers decide
+  when to continue reaction cleanup or retry a nonce-bearing send. Reuse the same
+  nonce only for the same send within
+  Yapin's documented 10-minute window. Workers use the existing
+  `WorkerCog::single_attempt_api()` opt-in for nonce sends.
+- Use `BotBuilder::slash_options` to attach metadata to existing command roots,
+  or `SlashCommandApiExt` to explicitly manage publication. Use
+  `SlashCommand::parse_options` for positional inputs and named form values.
+  Global publication tools are operator-only. Existing handler routing and parser
+  behavior are preserved. Yapin handles offline notices and its UI response
+  detection. Rappin auto-ack stays opt-in.
+- Ephemeral replies accept classic button rows. `UiInteraction::reply_id` exposes
+  the target from a click. Answer that click with an update through its original
+  callback. Select menus and Components V2 remain invalid for ephemeral replies.
+- Use `Event::parse_change` for message updates, deletion batches, individual
+  deletions and bot server membership changes. Existing bot unknown-event hooks
+  still receive those kinds, so applications can opt into typed interpretation.
+- Enable `structured_api_errors(true)` on a client or bot builder to retain
+  Yapin's error code, permission fields and allowed methods in structured errors.
 
 ## Computed permissions
 

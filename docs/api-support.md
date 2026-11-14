@@ -9,6 +9,11 @@ different versions.
 | 0.1.29 | API 1.3.0, captured 8 November 2026 UTC | [All 76 operations](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.29.md) | [JSON](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.29.json) |
 | 0.1.28 | API 1.3.0, captured 8 November 2026 UTC | [Feature support](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.28.md) | [JSON](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.28.json) |
 
+For the November API 1.4 additions and observed rollout responses on the stable
+development line, see [API 1.4 resources](https://github.com/Lost1419/Rappin/blob/main/docs/api-1.4.md) and the
+[changelog](https://github.com/Lost1419/Rappin/blob/main/CHANGELOG.md). The reports above retain their original release
+and snapshot scope.
+
 The 0.1.29 report assesses all 76 documented operations; the earlier 0.1.28 report
 reviews nine selected features. Operation coverage describes the stated primary
 request/response workflow, with explicit field and transport limitations. It does

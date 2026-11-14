@@ -212,7 +212,7 @@ pub trait UiApiExt: Api {
         .await?;
         Ok(())
     }
-    /// Send an extended reply, ephemeral response or original-message update. Reply targets, invalid updates, component-bearing ephemeral replies and Ack payloads are rejected before sending. Use existing ack helpers for acknowledgement.
+    /// Send an extended reply, ephemeral response or original-message update. Ephemeral replies may use classic button rows when the platform rollout is enabled. Use existing ack helpers for acknowledgement.
     ///
     /// # Example
     ///
@@ -258,17 +258,12 @@ pub trait UiApiExt: Api {
                 "this interaction has no original message to update",
             ));
         }
-        if kind == InteractionCallbackType::Ephemeral
-            && (body.components.is_some() || body.flags.is_some_and(|f| f & 32768 != 0))
-        {
-            return Err(YappinError::validation(
-                "components",
-                "ephemeral replies do not support components",
-            ));
+        let mut value = json!(body);
+        if kind == InteractionCallbackType::Ephemeral {
+            crate::validation::validate_ephemeral_buttons(&value)?;
         }
         body.validate(kind != InteractionCallbackType::Update)?;
         Api::track_interaction(self, event).await?;
-        let mut value = json!(body);
         value["type"] = json!(kind);
         crate::utils::strip_proxy_metadata(&mut value);
         self.request(

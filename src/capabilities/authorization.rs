@@ -660,7 +660,10 @@ impl ValidatedOperation {
         let sticker = self.args["sticker"]
             .as_str()
             .or_else(|| self.args["body"]["sticker_id"].as_str());
-        if self.entry.availability.test_servers_only || sticker.is_some() {
+        let private_audience = matches!(self.name(), "create_channel" | "edit_channel")
+            && (self.args["body"].get("user_ids").is_some()
+                || self.name() == "create_channel" && self.args["body"]["private"] == true);
+        if self.entry.availability.test_servers_only || sticker.is_some() || private_audience {
             match context.test_server {
                 Some(true) => report.record(
                     "test_server_availability",
@@ -834,8 +837,8 @@ impl ValidatedOperation {
                     continue;
                 }
                 if *check == ExternalCheck::OverrideAuthority
-                    && self.name() == "edit_channel"
-                    && !["private", "role_ids", "post_role_ids"]
+                    && matches!(self.name(), "create_channel" | "edit_channel")
+                    && !["private", "role_ids", "post_role_ids", "user_ids"]
                         .iter()
                         .any(|key| self.args["body"].get(key).is_some())
                 {
@@ -949,6 +952,46 @@ impl ValidatedOperation {
             .or_else(|| self.args["target"].as_str().filter(|s| *s != "everyone"))
             .into_iter()
             .collect();
+        if matches!(self.name(), "create_channel" | "edit_channel") {
+            if let Some(users) = self.args["body"]["user_ids"].as_array() {
+                for user in users {
+                    let user: Uuid = user
+                        .as_str()
+                        .expect("validated UUID")
+                        .parse()
+                        .expect("validated UUID");
+                    let response = api
+                        .request(
+                            reqwest::Method::GET,
+                            &format!("/servers/{server}/members/{user}"),
+                            None,
+                        )
+                        .await;
+                    match response {
+                        Ok(value)
+                            if value["member"]["id"]
+                                .as_str()
+                                .and_then(|id| id.parse::<Uuid>().ok())
+                                == Some(user) => {}
+                        Ok(_) => {
+                            report.record(
+                                "audience_scope",
+                                Principal::Context,
+                                CheckResolution::unknown(
+                                    "member identity was not established in the host server",
+                                ),
+                                None,
+                            );
+                            return false;
+                        }
+                        Err(error) => {
+                            report.failure("audience_scope", Principal::Context, error);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
         if self.name() == "reorder_roles" {
             if let Some(ids) = self.args["body"]["ids"].as_array() {
                 roles.extend(ids.iter().filter_map(Value::as_str));
@@ -960,7 +1003,7 @@ impl ValidatedOperation {
                 );
             }
         }
-        if self.name() == "edit_channel" {
+        if matches!(self.name(), "create_channel" | "edit_channel") {
             for key in ["role_ids", "post_role_ids"] {
                 if let Some(ids) = self.args["body"][key].as_array() {
                     roles.extend(ids.iter().filter_map(Value::as_str));
@@ -1126,49 +1169,53 @@ impl ValidatedOperation {
             }
             report.record("event_destination_scope",Principal::Context,CheckResolution::allowed("event channel references are within the host scope; external locations have no channel reference"),None);
         }
-        if matches!(self.name(), "send_message" | "send_files") {
-            if let Some(reply) = self.writes.first().and_then(|v| v["reply_to"].as_str()) {
-                let reply: Uuid = reply.parse().expect("typed reply ID");
-                let channel = channel.expect("verified message channel");
-                match api
-                    .request(
-                        "GET".parse().unwrap(),
-                        &format!("/channels/{channel}/messages/{reply}"),
-                        None,
-                    )
-                    .await
-                {
-                    Ok(value) => {
-                        let row = &value["message"];
-                        if row["id"].as_str().and_then(|s| s.parse::<Uuid>().ok()) != Some(reply)
-                            || row["channel_id"]
-                                .as_str()
-                                .and_then(|s| s.parse::<Uuid>().ok())
-                                != Some(channel)
-                        {
-                            report.record(
-                                "reply_scope",
-                                Principal::Context,
-                                CheckResolution::denied(
-                                    "reply target is outside the requested channel",
-                                ),
-                                None,
-                            );
-                            return false;
-                        }
+        let message = match self.name() {
+            "send_message" | "send_files" | "send_with_nonce" => {
+                self.writes.first().and_then(|v| v["reply_to"].as_str())
+            }
+            "create_thread" => self.args["body"]["message_id"].as_str(),
+            "moderate_reactions" => self.args["message"].as_str(),
+            _ => None,
+        };
+        if let Some(message) = message {
+            let reply: Uuid = message.parse().expect("typed message ID");
+            let channel = channel.expect("verified message channel");
+            match api
+                .request(
+                    "GET".parse().unwrap(),
+                    &format!("/channels/{channel}/messages/{reply}"),
+                    None,
+                )
+                .await
+            {
+                Ok(value) => {
+                    let row = &value["message"];
+                    if row["id"].as_str().and_then(|s| s.parse::<Uuid>().ok()) != Some(reply)
+                        || row["channel_id"]
+                            .as_str()
+                            .and_then(|s| s.parse::<Uuid>().ok())
+                            != Some(channel)
+                    {
                         report.record(
                             "reply_scope",
                             Principal::Context,
-                            CheckResolution::allowed(
-                                "reply target belongs to the requested channel",
+                            CheckResolution::denied(
+                                "reply target is outside the requested channel",
                             ),
                             None,
                         );
-                    }
-                    Err(error) => {
-                        report.failure("reply_scope", Principal::Context, error);
                         return false;
                     }
+                    report.record(
+                        "reply_scope",
+                        Principal::Context,
+                        CheckResolution::allowed("reply target belongs to the requested channel"),
+                        None,
+                    );
+                }
+                Err(error) => {
+                    report.failure("reply_scope", Principal::Context, error);
+                    return false;
                 }
             }
         }

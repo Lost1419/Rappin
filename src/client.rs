@@ -76,6 +76,7 @@ pub struct ClientBuilder {
     max_read_retries: u32,
     max_write_retries: u32,
     read_availability: Option<crate::AvailabilityPolicy>,
+    structured_api_errors: bool,
     max_retry_wait: Duration,
     http_client: Option<reqwest::Client>,
     cache: Option<Arc<Cache>>,
@@ -100,12 +101,24 @@ impl ClientBuilder {
             max_read_retries: 3,
             max_write_retries: 3,
             read_availability: None,
+            structured_api_errors: false,
             max_retry_wait: Duration::from_secs(30),
             http_client: None,
             cache: None,
             lookup_backend: None,
             api_fallback: true,
         }
+    }
+
+    /// Preserve documented Yapin error fields in `RemoteError::details`.
+    /// Existing clients keep their legacy Rust error variants by default.
+    ///
+    /// ```
+    /// let client = rappin::Client::builder("example").structured_api_errors(true).build();
+    /// ```
+    pub fn structured_api_errors(mut self, enabled: bool) -> Self {
+        self.structured_api_errors = enabled;
+        self
     }
 
     /// Select the API base URL and remove trailing slashes. A custom base disables default-origin failover.
@@ -304,6 +317,7 @@ impl ClientBuilder {
                 max_read_retries: self.max_read_retries,
                 max_write_retries: self.max_write_retries,
                 read_availability: self.read_availability,
+                structured_api_errors: self.structured_api_errors,
                 availability_telemetry: Default::default(),
                 max_retry_wait: self.max_retry_wait,
                 cache,
@@ -345,6 +359,7 @@ struct ClientInner {
     max_read_retries: u32,
     max_write_retries: u32,
     read_availability: Option<crate::AvailabilityPolicy>,
+    structured_api_errors: bool,
     max_retry_wait: Duration,
     cache: Arc<Cache>,
     lookup_backend: Option<Arc<dyn crate::cache::LookupCache>>,
@@ -940,7 +955,7 @@ impl Client {
                 return Ok(res);
             }
 
-            if status == StatusCode::UNAUTHORIZED {
+            if status == StatusCode::UNAUTHORIZED && !self.inner.structured_api_errors {
                 return Err(YappinError::Unauthorized);
             }
 
@@ -963,6 +978,31 @@ impl Client {
                 .unwrap_or_else(|| status.canonical_reason().unwrap_or("Unknown error"))
                 .to_string();
 
+            let api_error = || {
+                let error = if status == StatusCode::UNAUTHORIZED {
+                    YappinError::Unauthorized
+                } else {
+                    YappinError::Api {
+                        status: status.as_u16(),
+                        message: crate::security::scrub(&msg, &[&self.inner.token]),
+                        retry_after: retry_header.map(|delay| delay.as_secs_f64()),
+                    }
+                };
+                if !self.inner.structured_api_errors || !err_json["code"].is_string() {
+                    return error;
+                }
+                let mut error = error.to_remote();
+                for key in ["code", "permission", "permissions", "allow"] {
+                    if let Some(value) = err_json.get(key) {
+                        error.details.insert(
+                            key.into(),
+                            crate::security::redact_json(value.clone(), &[&self.inner.token]),
+                        );
+                    }
+                }
+                YappinError::Remote(error)
+            };
+
             // A headerless 429 is a permanent limit (e.g. exhausted interaction).
             // 503 guarantees the request did not execute; don't retry other writes.
             if matches!(
@@ -977,11 +1017,7 @@ impl Client {
                         self.inner.rate_limits.delay(key, delay, global).await;
                     }
                     if retries > 0 && delay <= Duration::from_secs(60) {
-                        let source = YappinError::Api {
-                            status: status.as_u16(),
-                            message: crate::security::scrub(&msg, &[self.inner.token.as_str()]),
-                            retry_after: Some(delay.as_secs_f64()),
-                        };
+                        let source = api_error();
                         if delay > self.inner.max_retry_wait.saturating_sub(progress.wait) {
                             return Err(YappinError::RetryWaitExceeded {
                                 waited: progress.wait,
@@ -1000,11 +1036,7 @@ impl Client {
                     }
                 }
             }
-            return Err(YappinError::Api {
-                status: status.as_u16(),
-                message: crate::security::scrub(&msg, &[&self.inner.token]),
-                retry_after: retry_header.map(|d| d.as_secs_f64()),
-            });
+            return Err(api_error());
         }
     }
 
@@ -1143,6 +1175,13 @@ impl Client {
                 }
                 Err(error) if error.to_json()["outcome"] == "unknown" => (),
                 Err(YappinError::Api { .. } | YappinError::Unauthorized) => {
+                    if let Some(previous) = previous {
+                        entry.state = previous;
+                    }
+                }
+                Err(YappinError::Remote(error))
+                    if matches!(error.kind.as_str(), "api" | "unauthorized") =>
+                {
                     if let Some(previous) = previous {
                         entry.state = previous;
                     }

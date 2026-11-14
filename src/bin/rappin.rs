@@ -607,6 +607,14 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                         &request.files,
                     )
                     .await?
+            } else if operation == "send_with_nonce" {
+                rappin::Api::request_once(
+                    ctx.client()?,
+                    request.method,
+                    &request.path,
+                    request.body,
+                )
+                .await?
             } else {
                 ctx.request(request.method, &request.path, request.body)
                     .await?
@@ -773,25 +781,41 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                     .await
             }
             Channels::Create { server, body_file } => {
-                let body: rappin::CreateChannelRequest =
-                    serde_json::from_value(ctx.body(&body_file)?)?;
+                let mut body = ctx.body(&body_file)?;
+                if body.get("private").is_some()
+                    || body.get("role_ids").is_some()
+                    || body.get("user_ids").is_some()
+                {
+                    let operation = rappin::capabilities::capability("create_channel")
+                        .expect("channel creation capability")
+                        .validate(&json!({"server":server,"body":body}))?;
+                    body = operation.arguments()["body"].clone();
+                } else {
+                    body = serde_json::to_value(serde_json::from_value::<
+                        rappin::CreateChannelRequest,
+                    >(body)?)?;
+                }
                 ctx.request(
                     Method::POST,
                     &format!("/servers/{server}/channels"),
-                    Some(serde_json::to_value(body)?),
+                    Some(body),
                 )
                 .await
             }
             Channels::Edit { id, body_file } => {
-                let body: rappin::EditChannelRequest =
-                    serde_json::from_value(ctx.body(&body_file)?)?;
-                body.validate()?;
-                ctx.request(
-                    Method::PATCH,
-                    &format!("/channels/{id}"),
-                    Some(serde_json::to_value(body)?),
-                )
-                .await
+                let mut body = ctx.body(&body_file)?;
+                if body.get("user_ids").is_some() {
+                    let operation = rappin::capabilities::capability("edit_channel")
+                        .expect("channel edit capability")
+                        .validate(&json!({"id":id,"body":body}))?;
+                    body = operation.arguments()["body"].clone();
+                } else {
+                    let edit: rappin::EditChannelRequest = serde_json::from_value(body)?;
+                    edit.validate()?;
+                    body = serde_json::to_value(edit)?;
+                }
+                ctx.request(Method::PATCH, &format!("/channels/{id}"), Some(body))
+                    .await
             }
             Channels::Delete { id } => {
                 ctx.request(Method::DELETE, &format!("/channels/{id}"), None)

@@ -2,9 +2,9 @@
 
 The [Yapin developer guide](https://www.yapin.gg/developers), checked on
 31 October 2026, documents role management, permission overrides, live counts,
-invites and scheduled events. **These endpoints are currently available only on
-test servers.** Rappin exposes them without assuming that a bot has access.
-Permission errors from Yapin remain visible to the caller.
+invites and scheduled events. The OpenAPI marks these operations as subject to
+test-server rollout flags. Availability depends on the authenticated bot and
+server. Permission errors from Yapin remain visible to the caller.
 
 For independently evaluated requester/bot hierarchy checks, explicit owner/admin
 rules and single-attempt role deletion, see [availability and role hierarchy](https://github.com/Lost1419/Rappin/blob/main/docs/availability-and-hierarchy.md).

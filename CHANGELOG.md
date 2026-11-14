@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Refresh the bundled Yapin API 1.4.0 contract to build `f136961`. Add thread operations, reaction moderation, private channel allowlists, caller-supplied send nonces, typed slash options and form parsing, ephemeral reply buttons, and typed views of message/server change events.
+- Add opt-in preservation of Yapin error codes, permission fields and allowed methods. Decode unpublished official SDK package names while preserving the existing Rust field types.
+- Observed HTTP 403 with code `feature_off` on both official API hosts on 2026-11-14, using one bot credential and its one visible server:
+  - `GET /channels/{id}/permissions/{target}`
+  - `GET /servers/{id}/members/{uid}/permissions`
+  - `GET /channels/{id}/overrides`
+  - `GET /categories/{id}/overrides`
+  - `GET /servers/{id}/roles/{rid}`
+
+  These results apply to the tested bot and server. Thread listing returned 200 in the same test.
+
 ## 0.1.34 — 2026-11-14
 
 - Separate GET/HEAD and mutation retry budgets with `max_read_retries` and `max_write_retries` on ClientBuilder and BotBuilder. Existing ClientBuilder::max_retries sets both. Defaults and known-unapplied mutation rules stay compatible.

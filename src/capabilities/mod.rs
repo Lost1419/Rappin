@@ -472,6 +472,9 @@ fn metadata(
         | "get_channel_overrides"
         | "set_channel_override"
         | "delete_channel_override" => (S::Channel("channel"), D::Permissions),
+        "list_threads" | "create_thread" => (S::Channel("channel"), D::Channels),
+        "edit_thread" | "delete_thread" => (S::Channel("thread"), D::Channels),
+        "send_with_nonce" | "moderate_reactions" => (S::Channel("channel"), D::Messages),
         "send_sticker" => (S::Channel("channel"), D::Messages),
         "list_invites" => (S::Server("id"), D::Members),
         "list_server_events" | "create_server_event" => (S::Server("id"), D::Events),
@@ -489,6 +492,7 @@ fn metadata(
         "send_files" => (S::Channel("channel"), D::Messages),
         "get_api_version" | "get_api_changelog" => (S::Public, D::Diagnostics),
         "poll_events" => (S::GlobalEvents, D::Events),
+        "list_slash_commands" | "publish_slash_commands" => (S::CliRuntime, D::Messages),
         "ack_events" => (S::CliRuntime, D::Events),
         "doctor" => (S::CliRuntime, D::Diagnostics),
         "get_capabilities" => (S::Offline, D::Schema),
@@ -516,7 +520,7 @@ fn metadata(
                     .additional_checks
                     .push(ExternalCheck::CategoryPermissions);
             }
-            if name == "edit_channel" {
+            if matches!(name, "create_channel" | "edit_channel") {
                 permissions
                     .additional_checks
                     .push(ExternalCheck::OverrideAuthority);
@@ -563,7 +567,26 @@ fn metadata(
                 .additional_checks
                 .push(ExternalCheck::MessageContentRules);
         }
-        "send_message" | "send_sticker" => {
+        "list_threads" => {
+            permissions.requester_channel.push("read_history");
+            permissions.bot_channel.push("read_history");
+        }
+        "create_thread" => {
+            permissions
+                .requester_channel
+                .extend(["create_threads", "send_in_threads"]);
+            permissions
+                .bot_channel
+                .extend(["create_threads", "send_in_threads"]);
+            permissions
+                .additional_checks
+                .push(ExternalCheck::MessageContentRules);
+        }
+        "edit_thread" | "delete_thread" | "moderate_reactions" => {
+            permissions.requester_channel.push("manage_messages");
+            permissions.bot_channel.push("manage_messages");
+        }
+        "send_message" | "send_sticker" | "send_with_nonce" => {
             permissions.requester_channel.push("send_messages");
             permissions.bot_channel.push("send_messages");
             permissions
@@ -655,7 +678,13 @@ fn metadata(
     }
     let test_servers_only = matches!(
         name,
-        "resolve_id"
+        "list_threads"
+            | "create_thread"
+            | "edit_thread"
+            | "delete_thread"
+            | "moderate_reactions"
+            | "send_with_nonce"
+            | "resolve_id"
             | "get_member_permissions"
             | "get_channel_member_permissions"
             | "get_role"

@@ -297,6 +297,7 @@ pub(crate) struct BotState {
     availability_policy: std::sync::RwLock<Option<crate::AvailabilityPolicy>>,
     ui_events: bool,
     interaction_commands: bool,
+    slash_options: HashMap<String, Vec<crate::SlashOption>>,
     ui_handlers: HashMap<String, UiHandler>,
     handler_concurrency: usize,
     pending_batches: usize,
@@ -906,6 +907,30 @@ impl BotHandle {
     }
 
     async fn publish_commands(&self, commands: &[Command]) -> Result<Vec<Command>> {
+        if !self.inner.slash_options.is_empty() {
+            let metadata: Vec<_> = commands
+                .iter()
+                .map(|command| {
+                    let options = self
+                        .inner
+                        .slash_options
+                        .get(&command.name)
+                        .cloned()
+                        .unwrap_or_default();
+                    crate::SlashCommand::new(command.clone(), options)
+                })
+                .collect();
+            let interactions = self.inner.interaction_commands.then_some(true);
+            return Ok(crate::SlashCommandApiExt::publish_slash_commands(
+                self.client(),
+                &metadata,
+                interactions,
+            )
+            .await?
+            .into_iter()
+            .map(|slash| slash.command)
+            .collect());
+        }
         if self.inner.interaction_commands {
             crate::UiApiExt::set_interaction_commands(self.client(), commands, true).await
         } else {
@@ -984,6 +1009,7 @@ pub struct BotBuilder {
     availability_policy: Option<crate::AvailabilityPolicy>,
     ui_events: bool,
     interaction_commands: bool,
+    slash_options: HashMap<String, Vec<crate::SlashOption>>,
     ui_handlers: HashMap<String, UiHandler>,
     handler_concurrency: usize,
     pending_batches: usize,
@@ -999,6 +1025,7 @@ pub struct BotBuilder {
     max_read_retries: u32,
     max_write_retries: u32,
     read_availability: Option<crate::AvailabilityPolicy>,
+    structured_api_errors: bool,
     #[cfg(feature = "gateway")]
     gateway_url: Option<String>,
 }
@@ -1036,6 +1063,7 @@ impl BotBuilder {
             availability_policy: None,
             ui_events: false,
             interaction_commands: false,
+            slash_options: HashMap::new(),
             ui_handlers: HashMap::new(),
             handler_concurrency: 8,
             pending_batches: 4,
@@ -1051,6 +1079,7 @@ impl BotBuilder {
             max_read_retries: 3,
             max_write_retries: 3,
             read_availability: None,
+            structured_api_errors: false,
             #[cfg(feature = "gateway")]
             gateway_url: None,
         }
@@ -1344,6 +1373,32 @@ impl BotBuilder {
         self.ui_events = enabled;
         self
     }
+    /// Attach opt-in option metadata to a published command root.
+    /// Argument handling, authorization and cooldowns remain with the handler.
+    ///
+    /// ```
+    /// use rappin::{Bot, SlashOption, SlashOptionKind};
+    /// let builder = Bot::builder("example").slash_options("search", [
+    ///     SlashOption::new("query", SlashOptionKind::String),
+    /// ]);
+    /// ```
+    pub fn slash_options(
+        mut self,
+        root: impl Into<String>,
+        options: impl IntoIterator<Item = crate::SlashOption>,
+    ) -> Self {
+        let root = root.into();
+        let options = options.into_iter().collect::<Vec<_>>();
+        if let Err(error) = crate::validation::validate_commands(&[Command::new(&root, "")])
+            .and_then(|()| crate::slash_options::validate_options(&options))
+        {
+            self.definition_error
+                .get_or_insert_with(|| error.to_string());
+        }
+        self.slash_options.insert(root, options);
+        self
+    }
+
     /// Opt into slash command interaction events, leaving message commands unchanged.
     /// Register an on_command_interaction handler or cog UI hook to answer them.
     /// # Example
@@ -1889,6 +1944,16 @@ impl BotBuilder {
         self
     }
 
+    /// Opt in to retaining Yapin error codes, permissions and allowed methods.
+    ///
+    /// ```
+    /// let bot = rappin::Bot::builder("example").structured_api_errors(true).build();
+    /// ```
+    pub fn structured_api_errors(mut self, enabled: bool) -> Self {
+        self.structured_api_errors = enabled;
+        self
+    }
+
     /// Builds the configured [`Bot`].
     /// # Example
     ///
@@ -1906,6 +1971,7 @@ impl BotBuilder {
             .base_url(self.base_url)
             .lookup_cache(self.lookup_policy)
             .api_fallback(self.api_fallback)
+            .structured_api_errors(self.structured_api_errors)
             .max_retry_wait(self.max_retry_wait)
             .max_read_retries(self.max_read_retries)
             .max_write_retries(self.max_write_retries);
@@ -1942,6 +2008,7 @@ impl BotBuilder {
             availability_policy: std::sync::RwLock::new(self.availability_policy),
             ui_events: self.ui_events,
             interaction_commands: self.interaction_commands,
+            slash_options: self.slash_options,
             ui_handlers: self.ui_handlers,
             handler_concurrency: self.handler_concurrency,
             pending_batches: self.pending_batches,
