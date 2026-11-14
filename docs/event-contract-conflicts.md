@@ -2,7 +2,7 @@
 
 The [developer guide](https://www.yapin.gg/developers#gateway) says gateway `d` is
 exactly one `/events` item and `s` is its event ID. The
-[public OpenAPI](https://www.yapin.gg/openapi.json) 1.3.0 event schemas require outer
+[public OpenAPI](https://www.yapin.gg/openapi.json) 1.4.0 event schemas require outer
 `created_at` as a timestamp. Message data also has its own `created_at`; that does
 not document permission to omit, relocate or replace the envelope timestamp.
 

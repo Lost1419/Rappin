@@ -194,7 +194,7 @@ and [worker example](https://github.com/Lost1419/Rappin/blob/main/examples/share
 both requester and bot, required permissions, resource scope and rollout checks.
 An Allowed hierarchy assessment alone is not complete operation authorization.
 
-The bundled upstream OpenAPI 1.2 describes these public facts:
+The bundled upstream OpenAPI 1.4.0 describes these public facts:
 
 | Evidence | Endpoint/field | Meaning |
 | --- | --- | --- |

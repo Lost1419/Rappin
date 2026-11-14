@@ -46,6 +46,9 @@ Inline arguments are limited to 128 KiB.
 | Event delivery | `poll_events`, `ack_events` |
 | Diagnostics | `doctor`, `get_capabilities`, `get_schema`, `get_api_version`, `get_api_changelog` |
 | API 1.2 | File uploads, emoji management and bot-owned webhooks; see [API 1.2 workflows](api-1.2.md) |
+| [API 1.3](api-1.3.md#message-emoji-discovery) | `get_message_emojis` lists custom emojis used by a message |
+| [API 1.4](api-1.4.md#cli-mcp-and-permanent-commands) | `resolve_id`, computed server/channel member permissions, role lookup and reordering, explicit channel/category overrides and `send_sticker` |
+| [API 1.4 November update](api-1.4.md#november-13-contract-update) | `list_threads`, `create_thread`, `edit_thread`, `delete_thread`, `moderate_reactions`, `send_with_nonce`, `list_slash_commands` and `publish_slash_commands` |
 | Server management | Role/permission writes, invites, counts and scheduled events; see [server management](server-management.md) for the full catalog and test-server restrictions |
 
 Writes support `dry_run`. Destructive annotations identify edits, deletion,

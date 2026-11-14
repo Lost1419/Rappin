@@ -10,7 +10,7 @@ Available in `rappin-rs` 0.1.8.
 
 A connection failure or HTTP 502/504 from the dedicated host activates the
 website origin for ten minutes, shared across `Client` clones. GET/HEAD requests
-can retry there within `max_retries`. An ambiguous write returns its original
+can retry there within `max_read_retries`. An ambiguous write returns its original
 error; it is never automatically replayed on the other host. Later requests use
 the fallback. After ten minutes, requests try the primary again.
 
@@ -19,13 +19,14 @@ URL. Redirects remain disabled. To pin the dedicated host, use
 `.api_fallback(false)` on either `ClientBuilder` or `BotBuilder`.
 `Client::base_url()` returns the configured origin;
 `Client::active_base_url()` reports the current destination.
-Server-advised 429/503 retries retain their existing behavior.
+Server-advised 429/503 retries use the applicable read or write budget.
+`max_retries` sets both budgets on `ClientBuilder`.
 
 ```rust,no_run
 use rappin::Client;
 let client = Client::builder("yb_token")
     .base_url("https://your-api.example/api/bot/v1")
-    .max_retries(2)
+    .max_read_retries(2)
     .build();
 assert_eq!(client.base_url(), client.active_base_url());
 ```

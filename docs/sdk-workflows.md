@@ -39,8 +39,8 @@ Prefix resolution and database ownership are unchanged.
 ## One API interface for native and worker code
 
 `Api` is implemented by `Client`, `MessageContext`, `InteractionContext`,
-`WorkerContext` and `Arc<T: Api>`. It is object-safe; generic helpers can instead
-use `ApiExt::api_json` for typed decoding:
+`UiInteractionContext`, `WorkerContext` and `Arc<T: Api>`. It is object-safe.
+Generic helpers can use `ApiExt::api_json` for typed decoding:
 
 ```rust,no_run
 use rappin::{Api, ApiExt, Result};
