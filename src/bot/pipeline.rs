@@ -85,7 +85,7 @@ impl Bot {
         let max_age = self.handle.inner.max_age;
         let capacity = self.handle.inner.pending_batches;
         let auto_ack = self.handle.inner.auto_ack_after;
-        let availability = self.handle.inner.availability_policy.clone();
+        let availability = self.handle.read_availability_policy();
         let availability_handle = self.handle.clone();
         let (sender, mut receiver) =
             mpsc::channel::<std::result::Result<PreparedBatch, IntakeFailure>>(capacity);

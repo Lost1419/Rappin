@@ -136,7 +136,7 @@ impl Bot {
                     if poll_sender.is_closed() {
                         break;
                     }
-                    let mut episode = bot.inner.availability_policy.as_ref().map(|policy| {
+                    let mut episode = bot.read_availability_policy().map(|policy| {
                         crate::availability::Episode::new(
                             bot.clone(),
                             policy.clone(),

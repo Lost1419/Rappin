@@ -109,6 +109,11 @@ and polling fallback. Follow the [gateway quickstart](docs/rust-bots.md#gateway-
 for a complete runnable example. JSON API calls still use HTTPS by default;
 [gateway API requests](docs/gateway-requests.md) are a separate opt-in.
 
+For bounded startup/intake recovery, use `bot.run_supervised(policy)`. Handler
+reads can opt into `read_availability_policy`, with independent read/write retry
+budgets. See [availability and shared commands](docs/availability-and-hierarchy.md#handler-reads-and-independent-retry-budgets)
+and the [shared handler example](examples/shared_commands.rs).
+
 Configure `.cursor_file("./state/events.json")` for restart checkpoints and
 `.handler_concurrency(8)` to bound concurrent handlers. Checkpoints advance after
 ordered completion; incomplete work holds the checkpoint. Use the

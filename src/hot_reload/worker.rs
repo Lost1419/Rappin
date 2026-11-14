@@ -584,6 +584,7 @@ impl WorkerContext {
 pub struct WorkerCog {
     manifest: Manifest,
     commands: HashMap<String, Handler>,
+    shared_commands: std::collections::HashSet<String>,
     buttons: HashMap<String, Handler>,
     listeners: HashMap<Listener, Handler>,
     single_attempt_api: bool,
@@ -648,6 +649,7 @@ impl WorkerCog {
                 help: vec![],
             },
             commands: HashMap::new(),
+            shared_commands: Default::default(),
             buttons: HashMap::new(),
             listeners: HashMap::new(),
             single_attempt_api: false,
@@ -720,6 +722,7 @@ impl WorkerCog {
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         let name = name.into();
+        self.shared_commands.remove(&name);
         self.manifest
             .commands
             .push(Command::new(&name, description));
@@ -732,6 +735,36 @@ impl WorkerCog {
         );
         self
     }
+    /// Bind one shared handler to message and interaction command delivery.
+    /// Requires a protocol v7+ parent configured with `interaction_commands(true)`.
+    /// Unmatched interactions use the generic UI listener when registered, or
+    /// complete without running a command. Shared routes take precedence over it.
+    /// Existing parent failure callbacks and worker error envelopes still apply.
+    ///
+    /// # Example
+    /// ```rust
+    /// let worker = rappin::hot_reload::WorkerCog::new("utilities")
+    ///     .command_shared("ping", "Check connectivity", |ctx| async move {
+    ///         ctx.parse::<()>()?;
+    ///         ctx.reply("pong").await
+    ///     });
+    /// ```
+    pub fn command_shared<F, Fut>(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        handler: F,
+    ) -> Self
+    where
+        F: Fn(crate::CommandContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let name = name.into();
+        self = self.command(&name, description, move |ctx| handler(ctx.into()));
+        self.shared_commands.insert(name);
+        self
+    }
+
     /// Bind a custom-ID prefix to a fallible interaction handler.
     ///
     /// # Example
@@ -875,7 +908,12 @@ impl WorkerCog {
     ///     WorkerCog::new("utilities").command("ping", "Check connectivity", |ctx| async move { ctx.reply("pong").await }).run().await
     /// }
     /// ```
-    pub async fn run(self) -> Result<()> {
+    pub async fn run(mut self) -> Result<()> {
+        if !self.shared_commands.is_empty()
+            && !self.manifest.listeners.contains(&Listener::UiInteraction)
+        {
+            self.manifest.listeners.push(Listener::UiInteraction);
+        }
         self.manifest.validate()?;
         let connection = Arc::new(Mutex::new(Connection {
             input: BufReader::new(tokio::io::stdin()),
@@ -933,7 +971,13 @@ impl WorkerCog {
                 CogEvent::ReactionAdd { .. } => self.listeners.get(&Listener::ReactionAdd),
                 CogEvent::ReactionRemove { .. } => self.listeners.get(&Listener::ReactionRemove),
                 CogEvent::Interaction { .. } => self.listeners.get(&Listener::Interaction),
-                CogEvent::UiInteraction { .. } => self.listeners.get(&Listener::UiInteraction),
+                CogEvent::UiInteraction { event } => event
+                    .command
+                    .as_deref()
+                    .filter(|_| event.interaction.kind.as_deref() == Some("command"))
+                    .filter(|name| self.shared_commands.contains(*name))
+                    .and_then(|name| self.commands.get(name))
+                    .or_else(|| self.listeners.get(&Listener::UiInteraction)),
                 CogEvent::MemberJoin { .. } => self.listeners.get(&Listener::MemberJoin),
                 CogEvent::MemberLeave { .. } => self.listeners.get(&Listener::MemberLeave),
                 CogEvent::InviteCreate { .. } => self.listeners.get(&Listener::InviteCreate),
@@ -950,6 +994,11 @@ impl WorkerCog {
                         operation_id,
                     })
                     .await
+                }
+                None if matches!(&event, CogEvent::UiInteraction { .. })
+                    && !self.shared_commands.is_empty() =>
+                {
+                    Ok(crate::MessageDisposition::Continue)
                 }
                 None => Err(YappinError::Config(
                     "worker has no handler for this event".into(),

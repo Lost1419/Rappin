@@ -131,3 +131,7 @@ required-features = ["webhook-middleware"]
 [[bench]]
 name = "sdk"
 harness = false
+
+[[example]]
+name = "shared_command_worker"
+required-features = ["hot-reload"]

@@ -24,7 +24,7 @@ use crate::utils::DEFAULT_API_BASE;
 
 tokio::task_local! { static SINGLE_ATTEMPT: (); static SINGLE_ATTEMPT_STATUS: std::cell::Cell<Option<u16>>; }
 tokio::task_local! { static READ_WAIT_BUDGET: ReadWaitBudget; }
-/// Shared only by the attempts of one availability read, never by handlers.
+/// Shared only by the attempts of one availability read.
 #[derive(Clone)]
 pub(crate) struct ReadWaitBudget {
     limit: Duration,
@@ -73,7 +73,9 @@ mod server_features;
 pub struct ClientBuilder {
     token: String,
     base_url: String,
-    max_retries: u32,
+    max_read_retries: u32,
+    max_write_retries: u32,
+    read_availability: Option<crate::AvailabilityPolicy>,
     max_retry_wait: Duration,
     http_client: Option<reqwest::Client>,
     cache: Option<Arc<Cache>>,
@@ -95,7 +97,9 @@ impl ClientBuilder {
         Self {
             token: token.into(),
             base_url: DEFAULT_API_BASE.to_string(),
-            max_retries: 3,
+            max_read_retries: 3,
+            max_write_retries: 3,
+            read_availability: None,
             max_retry_wait: Duration::from_secs(30),
             http_client: None,
             cache: None,
@@ -130,7 +134,48 @@ impl ClientBuilder {
     /// }
     /// ```
     pub fn max_retries(mut self, retries: u32) -> Self {
-        self.max_retries = retries;
+        self.max_read_retries = retries;
+        self.max_write_retries = retries;
+        self
+    }
+
+    /// Set extra attempts for GET/HEAD requests independently of mutations.
+    /// Later `max_retries` calls reset both budgets. Default is three.
+    ///
+    /// # Example
+    /// ```rust
+    /// let client = rappin::Client::builder("token")
+    ///     .max_write_retries(0).max_read_retries(3).build();
+    /// ```
+    pub fn max_read_retries(mut self, retries: u32) -> Self {
+        self.max_read_retries = retries;
+        self
+    }
+
+    /// Set extra attempts for explicitly known-unapplied, server-advised writes.
+    /// Unknown write outcomes remain terminal at every setting. Default is three.
+    ///
+    /// # Example
+    /// ```rust
+    /// let client = rappin::Client::builder("token").max_write_retries(0).build();
+    /// ```
+    pub fn max_write_retries(mut self, retries: u32) -> Self {
+        self.max_write_retries = retries;
+        self
+    }
+
+    /// Recover GET/HEAD transport/status failures using one bounded availability
+    /// episode per request. This policy owns all retry attempts for those reads.
+    /// Explicit single-attempt requests and startup/intake episodes suppress it.
+    /// Dropping the request future cancels recovery. Defaults to disabled.
+    ///
+    /// # Example
+    /// ```rust
+    /// let client = rappin::Client::builder("token")
+    ///     .read_availability_policy(rappin::AvailabilityPolicy::default()).build();
+    /// ```
+    pub fn read_availability_policy(mut self, policy: crate::AvailabilityPolicy) -> Self {
+        self.read_availability = Some(policy);
         self
     }
 
@@ -256,7 +301,10 @@ impl ClientBuilder {
                 token: self.token,
                 failover: crate::failover::Failover::new(&self.base_url, self.api_fallback),
                 base_url: self.base_url,
-                max_retries: self.max_retries,
+                max_read_retries: self.max_read_retries,
+                max_write_retries: self.max_write_retries,
+                read_availability: self.read_availability,
+                availability_telemetry: Default::default(),
                 max_retry_wait: self.max_retry_wait,
                 cache,
                 lookup_backend: self.lookup_backend,
@@ -274,10 +322,17 @@ impl ClientBuilder {
     }
 }
 
+struct RequestProgress {
+    started: tokio::time::Instant,
+    attempts: u32,
+    wait: Duration,
+}
+
 struct ClientInner {
     #[cfg(feature = "gateway")]
     gateway_requests: crate::gateway::requests::RequestRouter,
     request_telemetry: crate::diagnostics::RequestTelemetry,
+    availability_telemetry: crate::availability::Telemetry,
     events: crate::collectors::EventHub,
     rate_limits: crate::rate_limits::RateLimits,
     requests: tokio::sync::watch::Sender<Option<crate::diagnostics::RequestObservation>>,
@@ -287,7 +342,9 @@ struct ClientInner {
     http: reqwest::Client,
     token: String,
     base_url: String,
-    max_retries: u32,
+    max_read_retries: u32,
+    max_write_retries: u32,
+    read_availability: Option<crate::AvailabilityPolicy>,
     max_retry_wait: Duration,
     cache: Arc<Cache>,
     lookup_backend: Option<Arc<dyn crate::cache::LookupCache>>,
@@ -346,6 +403,35 @@ impl Client {
     pub(crate) fn inner_gateway_router(&self) -> &crate::gateway::requests::RequestRouter {
         &self.inner.gateway_requests
     }
+    /// Latest handler/client read recovery state. Concurrent episodes share exact
+    /// cumulative counters and latest-only episode details. Intake has its own telemetry.
+    ///
+    /// # Example
+    /// ```rust
+    /// let client = rappin::Client::new("token");
+    /// assert_eq!(client.read_availability_status().total_attempts, 0);
+    /// ```
+    pub fn read_availability_status(&self) -> crate::AvailabilityStatus {
+        self.inner.availability_telemetry.status()
+    }
+
+    /// Subscribe to read recovery state. Notifications may coalesce.
+    ///
+    /// # Example
+    /// ```rust
+    /// let client = rappin::Client::new("token");
+    /// let updates = client.subscribe_read_availability();
+    /// ```
+    pub fn subscribe_read_availability(
+        &self,
+    ) -> tokio::sync::watch::Receiver<crate::AvailabilityStatus> {
+        self.inner.availability_telemetry.subscribe()
+    }
+
+    pub(crate) fn read_availability_telemetry(&self) -> crate::availability::Telemetry {
+        self.inner.availability_telemetry.clone()
+    }
+
     pub(crate) fn read_wait_budget(&self) -> ReadWaitBudget {
         ReadWaitBudget {
             limit: self.inner.max_retry_wait,
@@ -668,11 +754,59 @@ impl Client {
         E: Into<YappinError>,
     {
         let telemetry = self.inner.request_telemetry.start();
-        let result = self
-            .execute_attempts_with_retry(method, path, operation, &telemetry)
-            .await;
+        let mut progress = RequestProgress {
+            started: tokio::time::Instant::now(),
+            attempts: 0,
+            wait: Duration::ZERO,
+        };
+        let recover = matches!(*method, Method::GET | Method::HEAD) && !single_attempt_active();
+        let result = if let Some(policy) = self.inner.read_availability.as_ref().filter(|_| recover)
+        {
+            // Keep optional recovery state out of every caller's future. Large
+            // inline read futures can exhaust the stack during nested invocation.
+            Box::pin(self.execute_available(
+                method,
+                path,
+                operation,
+                &telemetry,
+                &mut progress,
+                policy,
+            ))
+            .await
+        } else {
+            self.execute_attempts_with_retry(method, path, operation, &telemetry, &mut progress)
+                .await
+        };
         telemetry.finish(result.is_ok());
         result
+    }
+
+    async fn execute_available<F, Fut, E>(
+        &self,
+        method: &Method,
+        path: &str,
+        mut operation: F,
+        telemetry: &crate::diagnostics::RequestGuard<'_>,
+        progress: &mut RequestProgress,
+        policy: &crate::AvailabilityPolicy,
+    ) -> Result<Response>
+    where
+        F: FnMut(url::Url) -> Fut,
+        Fut: std::future::Future<Output = std::result::Result<Response, E>>,
+        E: Into<YappinError>,
+    {
+        let mut episode = crate::availability::Episode::for_client(self.clone(), policy.clone());
+        loop {
+            let attempt =
+                self.execute_attempts_with_retry(method, path, &mut operation, telemetry, progress);
+            match episode.attempt(attempt).await {
+                Ok(response) => {
+                    episode.success();
+                    return Ok(response);
+                }
+                Err(error) => episode.retry(error).await?,
+            }
+        }
     }
 
     async fn execute_attempts_with_retry<F, Fut, E>(
@@ -681,6 +815,7 @@ impl Client {
         path: &str,
         mut operation: F,
         telemetry: &crate::diagnostics::RequestGuard<'_>,
+        progress: &mut RequestProgress,
     ) -> Result<Response>
     where
         F: FnMut(url::Url) -> Fut,
@@ -689,15 +824,14 @@ impl Client {
     {
         let mut retries = if single_attempt_active() {
             0
+        } else if matches!(*method, Method::GET | Method::HEAD) {
+            self.inner.max_read_retries
         } else {
-            self.inner.max_retries
+            self.inner.max_write_retries
         };
-        let started = tokio::time::Instant::now();
         let key = crate::rate_limits::key(method, path);
         let is_message = crate::rate_limits::message_send(method, path);
         let route = crate::rate_limits::route_template(path);
-        let mut wait = Duration::ZERO;
-        let mut attempts = 0;
         let mut last_advice: Option<YappinError> = None;
         // Pin each call to its initial origin. Only an explicit safe-read
         // failover below may move it; concurrent failures must not move writes.
@@ -705,7 +839,7 @@ impl Client {
 
         loop {
             let waiting_metric = telemetry.waiting();
-            let remaining = self.inner.max_retry_wait.saturating_sub(wait);
+            let remaining = self.inner.max_retry_wait.saturating_sub(progress.wait);
             let remaining = READ_WAIT_BUDGET
                 .try_with(|budget| budget.remaining().min(remaining))
                 .unwrap_or(remaining);
@@ -715,7 +849,7 @@ impl Client {
                 {
                     Ok(waited) => waited,
                     Err(_) => {
-                        wait += remaining;
+                        progress.wait += remaining;
                         let _ = READ_WAIT_BUDGET.try_with(|budget| budget.charge(remaining));
                         let source = match last_advice.take() {
                             Some(error) => error,
@@ -731,18 +865,18 @@ impl Client {
                         let error = READ_WAIT_BUDGET
                             .try_with(|budget| budget.exceeded(source.to_remote().into()));
                         return Err(error.unwrap_or_else(|_| YappinError::RetryWaitExceeded {
-                            waited: wait,
+                            waited: progress.wait,
                             budget: self.inner.max_retry_wait,
                             source: Box::new(source),
                         }));
                     }
                 };
             waiting_metric.finish(waited);
-            wait += waited;
+            progress.wait += waited;
             let _ = READ_WAIT_BUDGET.try_with(|budget| budget.charge(waited));
             let url = crate::security::api_url(&base, path)?;
-            telemetry.attempt(attempts > 0);
-            attempts += 1;
+            telemetry.attempt(progress.attempts > 0);
+            progress.attempts += 1;
             let attempt_started = tokio::time::Instant::now();
             let res = operation(url).await.map_err(Into::into);
             let status = res.as_ref().ok().map(|res| res.status().as_u16());
@@ -759,9 +893,9 @@ impl Client {
                 method: label.into(),
                 route: route.clone(),
                 status,
-                duration: started.elapsed(),
-                rate_limit_wait: wait,
-                attempts,
+                duration: progress.started.elapsed(),
+                rate_limit_wait: progress.wait,
+                attempts: progress.attempts,
                 api_version: res
                     .as_ref()
                     .ok()
@@ -779,7 +913,7 @@ impl Client {
             };
             telemetry.observe(&observation, attempt_started.elapsed());
             self.inner.requests.send_replace(Some(observation));
-            tracing::debug!(method=label,route=%route,status,elapsed_ms=started.elapsed().as_millis() as u64,attempts,"REST response headers");
+            tracing::debug!(method=label,route=%route,status,elapsed_ms=progress.started.elapsed().as_millis() as u64,attempts=progress.attempts,"REST response headers");
             let unavailable = match &res {
                 Ok(response) => matches!(
                     response.status(),
@@ -848,9 +982,9 @@ impl Client {
                             message: crate::security::scrub(&msg, &[self.inner.token.as_str()]),
                             retry_after: Some(delay.as_secs_f64()),
                         };
-                        if delay > self.inner.max_retry_wait.saturating_sub(wait) {
+                        if delay > self.inner.max_retry_wait.saturating_sub(progress.wait) {
                             return Err(YappinError::RetryWaitExceeded {
-                                waited: wait,
+                                waited: progress.wait,
                                 budget: self.inner.max_retry_wait,
                                 source: Box::new(source),
                             });

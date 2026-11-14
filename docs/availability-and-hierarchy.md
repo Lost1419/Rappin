@@ -82,6 +82,110 @@ work. In-flight reads are cancelled without inventing a response status. Existin
 handler/storage failures stay distinct; unfinished events are never implicitly
 completed. Cancellation or exhaustion never restarts a process or replays a write.
 
+## Handler reads and independent retry budgets
+
+`ClientBuilder::max_read_retries` and `max_write_retries` independently control
+extra transport attempts. Both default to three. Existing `max_retries(n)` sets
+both budgets, and later settings override earlier ones. `BotBuilder` exposes the
+two independent setters. A zero write budget preserves useful read recovery.
+Mutation retries remain restricted to explicit known-unapplied server advice.
+Unknown mutation outcomes return the original error for reconciliation.
+
+`read_availability_policy` on either builder enables bounded recovery for ordinary
+GET/HEAD requests, including reads issued inside native handlers and through a
+worker's parent proxy. It uses the same `AvailabilityPolicy` settings and takes
+ownership of those reads' attempts. `max_read_retries` supplies the ordinary
+transport budget when read availability is disabled. Existing startup/intake
+availability attempts and `Api::request_once` suppress the ordinary read policy,
+so the budgets do not multiply. Mutation requests never enter read recovery.
+Recovery covers transport failures and HTTP status failures while acquiring the
+response. JSON decoding and subsequent response-body consumption retain their
+existing terminal behavior.
+
+```rust,no_run
+use rappin::{AvailabilityPolicy, Bot, Result};
+
+async fn run(token: String) -> Result<()> {
+    let recovery = AvailabilityPolicy::default();
+    let bot = Bot::builder(token)
+        .max_read_retries(3)
+        .max_write_retries(0)
+        .read_availability_policy(recovery.clone())
+        .build();
+    let handle = bot.handle();
+    // Retain this handle for stop(), worker management and availability telemetry.
+    bot.run_supervised(recovery).await
+}
+```
+
+`run_supervised` selects the existing startup/intake availability supervisor.
+Each read reconnects within its budget while the same bot instance, installed
+cogs, collectors and ordered checkpoint pipeline remain active. Lifecycle hooks,
+command publication and handlers execute under their existing contracts. Exhausted
+recovery, authentication/configuration, storage and incomplete handler failures
+return structured errors. Applications should reconcile incomplete work before
+starting a new run. Calling `BotHandle::stop()` interrupts startup/intake recovery
+and drains accepted work using the configured drain deadline. Dropping a run or
+request future cancels its outstanding read recovery.
+
+Client clones expose `read_availability_status()` and
+`subscribe_read_availability()`. Their phase is `AvailabilityPhase::Request`.
+Concurrent requests contribute to exact cumulative counters. Episode fields always
+refer to the most recently started episode, even if an older request finishes
+later. Bot startup/intake telemetry remains on `BotHandle::availability_status()`.
+Each episode owns one `max_retry_wait` allowance for advised/shared waits, plus
+its bounded availability deadline for outage backoff. No command is replayed by
+these policies.
+
+## Shared message and interaction commands
+
+`BotBuilder::command_shared(name, description, handler)` registers one
+`Fn(CommandContext) -> Future<Output = Result<()>>` for message and
+interaction-based slash commands. It enables interaction command publication and
+UI delivery. `CommandContext::parse` uses `FromArgs` and rejects extra tokens.
+`reply` uses the original message reply target or interaction acknowledgement
+coordinator. `api()` borrows the existing credential-confined `Api` transport.
+
+```rust,no_run
+use rappin::{Bot, CommandContext, Result};
+
+async fn ping(ctx: CommandContext) -> Result<()> {
+    ctx.parse::<()>()?;
+    ctx.reply("pong").await
+}
+let bot = Bot::builder("token")
+    .command_shared("ping", "Check connectivity", ping)
+    .build();
+```
+
+`author_id`, `channel_id` and `server_id` preserve original scope and missing
+facts. `message()`, `interaction()` and feature-gated `worker()` expose the
+original contexts. `operation_id()` retains consumer labels for identified
+message invocations. Interaction commands supply no invented message identity
+or operation label, and converting contexts establishes no invocation authority.
+
+Use handler-owned authorization and cooldowns for rules shared by both delivery
+forms. The opt-in shared registration accepts a raw argument string, so parse
+before performing effects. Existing `CommandSpec`, cog checks and checked message
+invocation retain their own APIs. A server-message gate applies to messages.
+Interaction commands use the original authenticated interaction instead of
+entering the message gate or acquiring message-only grants. Message failures use
+`on_command_failure`, interaction failures use `on_button_failure`. Expected typed
+rejections complete only after a successful error reply or explicit `Handled`.
+Failed replies, partial writes and unknown outcomes retain normal checkpoint
+barriers. Registered shared routes take precedence over the generic
+`on_command_interaction` fallback. Cog UI listeners retain their existing dispatch.
+
+With `hot-reload`, `WorkerCog::command_shared` accepts the same handler signature.
+Configure the parent with `interaction_commands(true)` before loading the worker.
+Shared worker routes use the existing protocol v7 UI capability, or v8/v9 when
+other opted-in capabilities require them. No wire protocol change is needed.
+Parent-proxied reads use the parent's read policy. Worker command errors retain
+structured remote causes through the existing callbacks. Unmatched UI events use
+an explicitly registered generic UI listener, or complete without a command.
+See the standalone [native example](https://github.com/Lost1419/Rappin/blob/main/examples/shared_commands.rs)
+and [worker example](https://github.com/Lost1419/Rappin/blob/main/examples/shared_command_worker.rs).
+
 ## Fresh role hierarchy evidence
 
 `RoleHierarchyPolicy` supplies `ExternalCheck::RoleHierarchy` for `delete_role`.

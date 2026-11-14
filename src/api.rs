@@ -209,6 +209,22 @@ pub trait Api: Send + Sync {
 /// }
 /// ```
 pub trait ApiExt: Api {
+    /// Fetch the authenticated bot profile through the native or worker transport.
+    /// Always requests fresh data. The Client inherent method also updates its cache.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use rappin::ApiExt;
+    /// async fn identify(api: &(impl rappin::Api + ?Sized)) -> rappin::Result<rappin::BotProfile> {
+    ///     api.get_me().await
+    /// }
+    /// ```
+    async fn get_me(&self) -> Result<crate::BotProfile> {
+        Ok(serde_json::from_value(
+            self.request(Method::GET, "/me", None).await?,
+        )?)
+    }
+
     /// Read unauthenticated API/build and official SDK version metadata. Client omits Authorization; custom adapters define their public-read handling.
     ///
     /// # Example

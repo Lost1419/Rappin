@@ -8,7 +8,7 @@
 //!     .jitter_percent(20)?;
 //! # Ok::<(), rappin::YappinError>(())
 //! ```
-//! Opt-in availability budgets for startup and event-intake reads.
+//! Opt-in availability budgets for startup, event intake and client reads.
 use crate::{RemoteError, Result, YappinError};
 use serde::{Deserialize, Serialize};
 use std::{future::Future, time::Duration};
@@ -16,7 +16,7 @@ use tokio::{sync::watch, time::Instant};
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-/// Opt-in retry budget for read-only startup and event intake. It does not retry handlers or mutations and is separate from the client's server-advised wait budget.
+/// Opt-in retry budget for read-only startup, event intake and client requests. It does not retry handlers or mutations and is separate from the client's server-advised wait budget.
 ///
 /// # Example
 ///
@@ -138,7 +138,7 @@ impl AvailabilityPolicy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
-/// Identifies the startup or intake read being recovered.
+/// Identifies the startup, intake or client read being recovered.
 ///
 /// # Example
 ///
@@ -152,6 +152,8 @@ pub enum AvailabilityPhase {
     StartupCursor,
     /// Subsequent polling or gateway intake reads.
     Intake,
+    /// A client or handler GET/HEAD request, including worker proxy reads.
+    Request,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -302,6 +304,26 @@ pub(crate) fn retryable_read(error: &YappinError) -> bool {
         // Exhausting the client's shared/advised wait budget is terminal here.
         YappinError::RetryWaitExceeded { .. } => false,
         YappinError::Remote(e) if e.kind == "gateway_transport" => true,
+        YappinError::Remote(e) if e.kind == "gateway_request" && e.status.is_none() => {
+            matches!(
+                e.details.get("reason").and_then(serde_json::Value::as_str),
+                Some(
+                    "capacity"
+                        | "admission_closed"
+                        | "queue_timeout"
+                        | "response_timeout"
+                        | "request_timeout"
+                        | "peer_closed"
+                        | "peer_disconnected"
+                        | "connection_reset"
+                        | "io_error"
+                        | "heartbeat_timeout"
+                        | "send_timeout"
+                        | "response_channel_closed"
+                        | "request_channel_closed"
+                )
+            )
+        }
         _ => {
             matches!(
                 error.status_code(),
@@ -328,11 +350,13 @@ pub(crate) fn retryable_read(error: &YappinError) -> bool {
 pub(crate) struct Episode {
     policy: AvailabilityPolicy,
     phase: AvailabilityPhase,
-    handle: crate::BotHandle,
+    handle: Option<crate::BotHandle>,
+    client: crate::Client,
     telemetry: Telemetry,
     started: Instant,
     deadline: Instant,
     attempts: u32,
+    id: u64,
     waited: Duration,
     waiting: Option<Instant>,
     advised_wait: Duration,
@@ -347,9 +371,29 @@ impl Episode {
         phase: AvailabilityPhase,
     ) -> Self {
         let telemetry = handle.inner.availability_telemetry.clone();
-        let wait_budget = handle.client().read_wait_budget();
+        Self::start(
+            handle.client().clone(),
+            Some(handle),
+            telemetry,
+            policy,
+            phase,
+        )
+    }
+    pub(crate) fn for_client(client: crate::Client, policy: AvailabilityPolicy) -> Self {
+        let telemetry = client.read_availability_telemetry();
+        Self::start(client, None, telemetry, policy, AvailabilityPhase::Request)
+    }
+    fn start(
+        client: crate::Client,
+        handle: Option<crate::BotHandle>,
+        telemetry: Telemetry,
+        policy: AvailabilityPolicy,
+        phase: AvailabilityPhase,
+    ) -> Self {
+        let wait_budget = client.read_wait_budget();
         let started = Instant::now();
         let deadline = started.checked_add(policy.max_elapsed).unwrap_or(started);
+        let mut id = 0;
         telemetry.update(|s| {
             s.phase = Some(phase);
             s.state = AvailabilityState::Reading;
@@ -361,15 +405,18 @@ impl Episode {
             s.next_delay = None;
             s.last_error = None;
             s.episodes += 1;
+            id = s.episodes;
         });
         Self {
             policy,
             phase,
             handle,
+            client,
             telemetry,
             started,
             deadline,
             attempts: 0,
+            id,
             waited: Duration::ZERO,
             waiting: None,
             advised_wait: Duration::ZERO,
@@ -378,7 +425,17 @@ impl Episode {
             finished: false,
         }
     }
-    async fn cancelled(handle: &crate::BotHandle) {
+    fn update(&self, change: impl FnOnce(&mut AvailabilityStatus)) {
+        self.telemetry.update(|status| {
+            if status.episodes == self.id {
+                change(status);
+            }
+        });
+    }
+    async fn cancelled(handle: &Option<crate::BotHandle>) {
+        let Some(handle) = handle else {
+            return std::future::pending().await;
+        };
         loop {
             let notified = handle.inner.stopped.notified();
             tokio::pin!(notified);
@@ -397,23 +454,25 @@ impl Episode {
         &mut self,
         operation: impl Future<Output = Result<T>>,
     ) -> Result<T> {
-        if !self
-            .handle
-            .inner
-            .running
-            .load(std::sync::atomic::Ordering::SeqCst)
-        {
+        if self.handle.as_ref().is_some_and(|handle| {
+            !handle
+                .inner
+                .running
+                .load(std::sync::atomic::Ordering::SeqCst)
+        }) {
             return Err(self.end(AvailabilityEnd::Cancelled));
         }
         if Instant::now() >= self.deadline {
             return Err(self.end(AvailabilityEnd::ElapsedLimit));
         }
         self.attempts += 1;
-        self.telemetry.update(|s| {
+        self.update(|s| {
             s.state = AvailabilityState::Reading;
             s.attempts = self.attempts;
             s.elapsed = self.started.elapsed();
             s.next_delay = None;
+        });
+        self.telemetry.update(|s| {
             s.total_attempts += 1;
             if self.attempts > 1 {
                 s.total_retries += 1;
@@ -441,17 +500,16 @@ impl Episode {
             error = self.wait_budget.exceeded(error);
         }
         self.last_error = Some(
-            serde_json::from_value(self.handle.client().redact_credentials(error.to_json()))
+            serde_json::from_value(self.client.redact_credentials(error.to_json()))
                 .expect("structured cause"),
         );
-        self.telemetry.update(|s| {
+        self.update(|s| {
             s.last_error = self.last_error.clone();
             s.elapsed = self.started.elapsed();
         });
         if !retryable_read(&error) {
             self.finished = true;
-            self.telemetry
-                .update(|s| s.state = AvailabilityState::Terminal);
+            self.update(|s| s.state = AvailabilityState::Terminal);
             return Err(error);
         }
         if self.attempts >= self.policy.max_attempts {
@@ -461,7 +519,7 @@ impl Episode {
         if delay >= self.deadline.saturating_duration_since(Instant::now()) {
             return Err(self.end(AvailabilityEnd::BackoffExceedsDeadline));
         }
-        self.telemetry.update(|s| {
+        self.update(|s| {
             s.state = AvailabilityState::Waiting;
             s.next_delay = Some(delay);
         });
@@ -480,14 +538,14 @@ impl Episode {
     }
     pub(crate) fn success(&mut self) {
         self.finished = true;
-        self.telemetry.update(|s| {
+        self.update(|s| {
             s.state = AvailabilityState::Recovered;
             s.elapsed = self.started.elapsed();
             s.next_delay = None;
-            if self.attempts > 1 {
-                s.recoveries += 1;
-            }
         });
+        if self.attempts > 1 {
+            self.telemetry.update(|s| s.recoveries += 1);
+        }
     }
     fn end_wait(&mut self) {
         if let Some(started) = self.waiting.take() {
@@ -495,26 +553,31 @@ impl Episode {
             self.wait_budget.charge(elapsed.min(self.advised_wait));
             self.advised_wait = Duration::ZERO;
             self.waited += elapsed;
-            self.telemetry.update(|s| {
+            self.update(|s| {
                 s.backoff_wait = self.waited;
-                s.total_backoff_wait += elapsed;
                 s.next_delay = None;
             });
+            self.telemetry.update(|s| s.total_backoff_wait += elapsed);
         }
     }
     fn end(&mut self, reason: AvailabilityEnd) -> YappinError {
         self.end_wait();
         self.finished = true;
-        self.telemetry.update(|s| {
+        self.update(|s| {
             s.state = if reason == AvailabilityEnd::Cancelled {
-                s.cancellations += 1;
                 AvailabilityState::Cancelled
             } else {
-                s.exhaustions += 1;
                 AvailabilityState::Exhausted
             };
             s.elapsed = self.started.elapsed();
             s.next_delay = None;
+        });
+        self.telemetry.update(|s| {
+            if reason == AvailabilityEnd::Cancelled {
+                s.cancellations += 1;
+            } else {
+                s.exhaustions += 1;
+            }
         });
         let failure = AvailabilityFailure {
             phase: self.phase,
@@ -557,6 +620,28 @@ impl Drop for Episode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gateway_read_recovery_distinguishes_transport_from_local_shutdown_and_bad_frames() {
+        for (reason, retryable) in [
+            ("peer_closed", true),
+            ("response_timeout", true),
+            ("capacity", true),
+            ("invalid_response", false),
+            ("pipeline_shutdown", false),
+            ("run_cancelled", false),
+            ("drain_timeout", false),
+        ] {
+            let error = YappinError::Remote(RemoteError {
+                kind: "gateway_request".into(),
+                message: "request failed".into(),
+                status: None,
+                retry_after: None,
+                details: [("reason".into(), reason.into())].into(),
+            });
+            assert_eq!(retryable_read(&error), retryable, "{reason}");
+        }
+    }
 
     #[test]
     fn bounds_and_jitter_respect_backoff_and_retry_hints() {

@@ -545,3 +545,68 @@ async fn unknown_gateway_mutation_is_not_replayed_by_the_outer_client_retry_loop
     assert_eq!(https.load(Ordering::SeqCst), 0);
     assert_eq!(count.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn handler_read_availability_recovers_on_gateway_without_replaying_mutations() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, done) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = accept_async(stream).await.unwrap();
+        ready(&mut ws, true).await;
+        for status in [520, 522, 200] {
+            let request = text(&mut ws).await;
+            assert_eq!(request["method"], "GET");
+            reply(
+                &mut ws,
+                request["id"].clone(),
+                status,
+                json!({"status":status}),
+            )
+            .await;
+        }
+        let request = text(&mut ws).await;
+        assert_eq!(request["method"], "POST");
+        reply(
+            &mut ws,
+            request["id"].clone(),
+            502,
+            json!({"error":"unknown write"}),
+        )
+        .await;
+        let _ = done.await;
+    });
+    let (base, calls, http) = no_http().await;
+    let client = Client::builder("fixture")
+        .base_url(base)
+        .max_retries(100)
+        .read_availability_policy(
+            rappin::AvailabilityPolicy::new(3, Duration::from_secs(3))
+                .unwrap()
+                .backoff(Duration::from_millis(2), Duration::from_millis(2))
+                .unwrap(),
+        )
+        .build();
+    client
+        .configure_gateway_requests(Some(GatewayRequestConfig::default()))
+        .unwrap();
+    let mut gateway = Gateway::new(client.clone()).url(format!("ws://{address}"));
+    gateway.poll(0).await.unwrap();
+    assert_eq!(
+        client.request(Method::GET, "/read", None).await.unwrap()["status"],
+        200
+    );
+    let error = client
+        .request(Method::POST, "/mutate", Some(json!({})))
+        .await
+        .unwrap_err();
+    assert_eq!(error.status_code(), Some(502));
+    assert_eq!(client.gateway_request_status().submitted, 4);
+    assert_eq!(client.request_metrics().retries, 2);
+    assert_eq!(client.read_availability_status().recoveries, 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    stop.send(()).unwrap();
+    server.await.unwrap();
+    http.abort();
+}

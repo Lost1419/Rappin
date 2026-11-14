@@ -56,6 +56,7 @@ struct CommandDef {
     description: String,
     cog_name: Option<String>,
     handler: CommandHandlerFn,
+    shared_handler: Option<SharedCommandHandler>,
     info: Option<crate::commands::CommandInfo>,
     preparation: Option<crate::commands::CommandPreparation>,
     operation_identity_supported: bool,
@@ -182,6 +183,7 @@ fn insert_registered(
                 description: command.info.description.clone(),
                 cog_name: cog_name.clone(),
                 handler: command.handler.clone(),
+                shared_handler: None,
                 info: Some(command.info.clone()),
                 preparation: command.preparation.clone(),
                 operation_identity_supported: true,
@@ -256,6 +258,12 @@ pub type MessageFailureHandlerFn = Arc<
         + Sync,
 >;
 
+type SharedCommandHandler = Arc<
+    dyn Fn(crate::CommandContext) -> std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send>>
+        + Send
+        + Sync,
+>;
+
 type UiHandler = Arc<
     dyn Fn(
             crate::UiInteractionContext,
@@ -286,7 +294,7 @@ pub(crate) struct BotState {
     log: bool,
     cursor: Option<EventCursor>,
     max_age: Option<u32>,
-    availability_policy: Option<crate::AvailabilityPolicy>,
+    availability_policy: std::sync::RwLock<Option<crate::AvailabilityPolicy>>,
     ui_events: bool,
     interaction_commands: bool,
     ui_handlers: HashMap<String, UiHandler>,
@@ -333,6 +341,14 @@ impl WeakBotHandle {
 }
 
 impl BotHandle {
+    fn read_availability_policy(&self) -> Option<crate::AvailabilityPolicy> {
+        self.inner
+            .availability_policy
+            .read()
+            .expect("availability policy")
+            .clone()
+    }
+
     /// # Example
     ///
     /// ```rust
@@ -674,6 +690,7 @@ impl BotHandle {
                         description: command.description,
                         cog_name: Some(name.clone()),
                         handler: command.handler,
+                        shared_handler: None,
                         info: None,
                         preparation: None,
                         operation_identity_supported: true,
@@ -979,6 +996,9 @@ pub struct BotBuilder {
     lookup_backend: Option<Arc<dyn crate::cache::LookupCache>>,
     api_fallback: bool,
     max_retry_wait: Duration,
+    max_read_retries: u32,
+    max_write_retries: u32,
+    read_availability: Option<crate::AvailabilityPolicy>,
     #[cfg(feature = "gateway")]
     gateway_url: Option<String>,
 }
@@ -1028,6 +1048,9 @@ impl BotBuilder {
             lookup_backend: None,
             api_fallback: true,
             max_retry_wait: Duration::from_secs(30),
+            max_read_retries: 3,
+            max_write_retries: 3,
+            read_availability: None,
             #[cfg(feature = "gateway")]
             gateway_url: None,
         }
@@ -1188,12 +1211,66 @@ impl BotBuilder {
                 description: desc_str,
                 cog_name: None,
                 handler: wrapped_handler,
+                shared_handler: None,
                 info: None,
                 preparation: None,
                 operation_identity_supported: true,
             },
         );
         self
+    }
+
+    /// Register one handler for message and interaction-based slash commands.
+    /// Enables interaction command publication/UI delivery. Existing explicit
+    /// command APIs retain their behavior. Parse with `CommandContext::parse` and
+    /// authorize the original requester in the shared handler. Message gates
+    /// apply to messages; interactions retain their own authenticated context.
+    /// Interaction failures use `on_button_failure`, message failures use
+    /// `on_command_failure`. Registered shared routes precede the generic
+    /// `on_command_interaction` fallback. Handler failures retain the existing
+    /// completion policy and structured causes.
+    ///
+    /// # Example
+    /// ```rust
+    /// let bot = rappin::Bot::builder("token")
+    ///     .command_shared("ping", "Check connectivity", |ctx| async move {
+    ///         ctx.parse::<()>()?;
+    ///         ctx.reply("pong").await
+    ///     }).build();
+    /// ```
+    pub fn command_shared<F, Fut>(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        handler: F,
+    ) -> Self
+    where
+        F: Fn(crate::CommandContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        let name = name.into().to_lowercase();
+        let description = description.into();
+        if let Err(error) =
+            crate::validation::validate_commands(&[Command::new(&name, &description)])
+        {
+            self.definition_error = Some(error.to_string());
+            return self;
+        }
+        if self.commands.contains_key(&name) {
+            self.definition_error =
+                Some("shared command conflicts with an installed command".into());
+            return self;
+        }
+        let shared: SharedCommandHandler = Arc::new(move |ctx| Box::pin(handler(ctx)));
+        let message = shared.clone();
+        self = self.command(&name, description, move |ctx| {
+            message(crate::CommandContext::from(ctx))
+        });
+        self.commands
+            .get_mut(&name)
+            .expect("inserted command")
+            .shared_handler = Some(shared);
+        self.interaction_commands(true)
     }
 
     /// Registers a command with an automatic rate limit cooldown.
@@ -1247,6 +1324,7 @@ impl BotBuilder {
                 description: desc_str,
                 cog_name: None,
                 handler: wrapped_handler,
+                shared_handler: None,
                 info: None,
                 preparation: None,
                 operation_identity_supported: true,
@@ -1778,6 +1856,39 @@ impl BotBuilder {
         self
     }
 
+    /// Configure extra GET/HEAD attempts independently of mutation attempts.
+    /// # Example
+    /// ```rust
+    /// let bot = rappin::Bot::builder("token").max_read_retries(3).build();
+    /// ```
+    pub fn max_read_retries(mut self, retries: u32) -> Self {
+        self.max_read_retries = retries;
+        self
+    }
+
+    /// Configure extra known-unapplied server-advised mutation attempts.
+    /// Zero disables mutation retries without reducing read recovery.
+    /// # Example
+    /// ```rust
+    /// let bot = rappin::Bot::builder("token").max_write_retries(0).build();
+    /// ```
+    pub fn max_write_retries(mut self, retries: u32) -> Self {
+        self.max_write_retries = retries;
+        self
+    }
+
+    /// Enable bounded recovery for client/handler GET/HEAD requests, including
+    /// parent-proxied worker reads. Startup/intake retain their independent policy.
+    /// # Example
+    /// ```rust
+    /// let bot = rappin::Bot::builder("token")
+    ///     .read_availability_policy(rappin::AvailabilityPolicy::default()).build();
+    /// ```
+    pub fn read_availability_policy(mut self, policy: crate::AvailabilityPolicy) -> Self {
+        self.read_availability = Some(policy);
+        self
+    }
+
     /// Builds the configured [`Bot`].
     /// # Example
     ///
@@ -1795,7 +1906,12 @@ impl BotBuilder {
             .base_url(self.base_url)
             .lookup_cache(self.lookup_policy)
             .api_fallback(self.api_fallback)
-            .max_retry_wait(self.max_retry_wait);
+            .max_retry_wait(self.max_retry_wait)
+            .max_read_retries(self.max_read_retries)
+            .max_write_retries(self.max_write_retries);
+        if let Some(policy) = self.read_availability {
+            client = client.read_availability_policy(policy);
+        }
         if let Some(backend) = self.lookup_backend {
             client = client.lookup_cache_backend(backend);
         }
@@ -1823,7 +1939,7 @@ impl BotBuilder {
             log: self.log,
             cursor: self.cursor,
             max_age: self.max_age,
-            availability_policy: self.availability_policy,
+            availability_policy: std::sync::RwLock::new(self.availability_policy),
             ui_events: self.ui_events,
             interaction_commands: self.interaction_commands,
             ui_handlers: self.ui_handlers,
@@ -1906,7 +2022,7 @@ impl Bot {
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T>>,
     {
-        let Some(policy) = &self.handle.inner.availability_policy else {
+        let Some(policy) = self.handle.read_availability_policy() else {
             return read().await;
         };
         let mut episode =
@@ -2089,6 +2205,31 @@ impl Bot {
     /// ```
     pub fn stop(&self) {
         self.handle.stop();
+    }
+
+    /// Run with bounded in-place supervision of startup and event-intake reads.
+    /// Reconnects preserve installed cogs and the running pipeline/checkpoint.
+    /// Exhaustion, authentication/configuration, handlers and storage failures
+    /// return normally through the existing structured failure contract.
+    /// Stop through `handle.stop()` or cancel by dropping the run future.
+    /// This selects the same read supervisor as `BotBuilder::availability_policy`.
+    /// It never restarts the bot or retries handlers/publication/mutations.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # async fn example() -> rappin::Result<()> {
+    /// rappin::Bot::builder("token").build()
+    ///     .run_supervised(rappin::AvailabilityPolicy::default()).await
+    /// # }
+    /// ```
+    pub async fn run_supervised(self, policy: crate::AvailabilityPolicy) -> Result<()> {
+        *self
+            .handle
+            .inner
+            .availability_policy
+            .write()
+            .expect("availability policy") = Some(policy);
+        self.run().await
     }
 
     /// Runs the bot until stopped or Ctrl+C is received.
@@ -2629,7 +2770,29 @@ impl Bot {
             data,
             Some(self.handle.clone()),
         );
-        if let Some(handler) = self.handle.inner.ui_handlers.get(&kind) {
+        let shared = if kind == "command" {
+            let name = ctx.data.command.as_deref().unwrap_or("").to_lowercase();
+            self.handle
+                .inner
+                .commands
+                .read()
+                .await
+                .get(&name)
+                .and_then(|command| command.shared_handler.clone())
+        } else {
+            None
+        };
+        if let Some(handler) = shared {
+            if let Err(error) = failure::catch(handler(ctx.clone().into())).await {
+                self.button_failed(
+                    ctx.context.clone(),
+                    event_id,
+                    ctx.data.command.as_deref().unwrap_or("shared_command"),
+                    error,
+                )
+                .await?;
+            }
+        } else if let Some(handler) = self.handle.inner.ui_handlers.get(&kind) {
             if let Err(error) = failure::catch(handler(ctx.clone())).await {
                 self.button_failed(ctx.context.clone(), event_id, &format!("ui:{kind}"), error)
                     .await?;

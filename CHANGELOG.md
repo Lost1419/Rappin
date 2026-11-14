@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Separate GET/HEAD and mutation retry budgets with `max_read_retries` and `max_write_retries` on ClientBuilder and BotBuilder. Existing ClientBuilder::max_retries sets both. Defaults and known-unapplied mutation rules stay compatible.
+- Add opt-in handler/client read availability recovery, including parent-proxied worker requests. Share the existing bounded backoff, structured exhaustion and server-wait budget. Suppress nested retry loops and preserve single-attempt requests. Keep exact attempt/retry counters and coherent latest-episode telemetry under concurrent reads.
+- Expose `Bot::run_supervised` for in-place startup/intake recovery with existing cogs, checkpoints and cancellation. Handler, publication, storage and uncertain mutation failures retain their existing terminal dispositions.
+- Add `CommandContext` and native/worker `command_shared` registration for one handler across message and interaction commands. Preserve original event scope, typed argument parsing, reply coordination and structured failure callbacks. Existing command registrations and worker wire protocols stay compatible.
+
 ## 0.1.33 — 2026-11-13
 
 - Raise the declared minimum Rust version to 1.89 to match UUID 1.29.2. Test locked builds and fresh consumer dependency resolution on that compiler.

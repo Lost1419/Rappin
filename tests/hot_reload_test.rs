@@ -1247,9 +1247,19 @@ async fn ui_worker_preserves_values_callbacks_and_failure_causes() {
     }
     let source = r#"
 use rappin::*;
+async fn shared(ctx: CommandContext) -> Result<()> {
+    ctx.parse::<()>()?;
+    assert_eq!(ctx.author_id().unwrap().as_u128(), 0);
+    assert_eq!(ctx.channel_id().unwrap().as_u128(), 0);
+    let me = ctx.api().get_me().await?;
+    assert_eq!(me.username, "bot");
+    ctx.reply("Command received").await
+}
 #[tokio::main]
 async fn main()->Result<()> {
-    WorkerCog::new("ui-worker").on_ui_interaction(|ctx|async move {
+    WorkerCog::new("ui-worker")
+    .command_shared("apply", "Shared handler", shared)
+    .on_ui_interaction(|ctx|async move {
         let data=ctx.ui_interaction().expect("extended event");
         match data.interaction.kind.as_deref() {
             Some("select")=>{
@@ -1261,8 +1271,7 @@ async fn main()->Result<()> {
                 Err(YappinError::Api{status:503,message:"structured worker failure".into(),retry_after:Some(2.0)})
             },
             Some("command")=>{
-                assert_eq!(data.command.as_deref(),Some("apply"));
-                ctx.respond_ui(&data.interaction,InteractionCallbackType::Reply,&UiMessageBody::new("Command received")).await
+                panic!("generic UI listener duplicated shared command")
             },
             _=>panic!("unexpected event"),
         }
@@ -1274,7 +1283,12 @@ async fn main()->Result<()> {
         .unwrap();
     let (base, mut requests, http) = support::mock(vec![
         support::response(200, json!({"ok":true})),
+        support::response(520, json!({"error":"edge"})),
+        support::response(200, support::profile()),
         support::response(200, json!({"ok":true})),
+        support::response(522, json!({"error":"edge"})),
+        support::response(200, support::profile()),
+        support::response(200, json!({"message":{"id":uuid::Uuid::nil(),"channel_id":uuid::Uuid::nil(),"author_id":uuid::Uuid::nil(),"created_at":chrono::Utc::now()}})),
     ])
     .await;
     let callbacks = Arc::new(AtomicUsize::new(0));
@@ -1284,6 +1298,13 @@ async fn main()->Result<()> {
         .sync_commands(false)
         .log(false)
         .interactive_events(true)
+        .max_write_retries(0)
+        .read_availability_policy(
+            rappin::AvailabilityPolicy::new(2, Duration::from_secs(3))
+                .unwrap()
+                .backoff(Duration::from_millis(2), Duration::from_millis(2))
+                .unwrap(),
+        )
         .on_button_failure(move |_, failure| {
             let c = c.clone();
             async move {
@@ -1316,14 +1337,23 @@ async fn main()->Result<()> {
         }
         bot.process_event(serde_json::from_value(json!({"id":1,"type":if kind=="command" {"command"}else{"interaction"},"data":data})).unwrap()).await.unwrap();
     }
+    bot.process_event(event("apply")).await.unwrap();
+    assert_eq!(bot.client().read_availability_status().recoveries, 2);
     assert_eq!(callbacks.load(Ordering::SeqCst), 1);
     let first = requests.recv().await.unwrap();
     assert!(first.contains("\"type\":\"modal\""));
     assert!(first
         .to_lowercase()
         .contains("authorization: bot private_parent_token"));
+    for _ in 0..2 {
+        assert!(requests.recv().await.unwrap().starts_with("GET /me "));
+    }
     let second = requests.recv().await.unwrap();
     assert!(second.contains("Command received"));
+    for _ in 0..2 {
+        assert!(requests.recv().await.unwrap().starts_with("GET /me "));
+    }
+    assert!(requests.recv().await.unwrap().contains("Command received"));
     assert!(!second.contains("private_interaction_token"));
     http.await.unwrap();
 }

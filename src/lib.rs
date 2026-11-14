@@ -228,11 +228,11 @@ pub mod prelude {
     };
     pub use crate::{
         check_fn, Api, ApiExt, ArgumentInfo, ArgumentSchema, ArgumentType, Arguments, BoundedU32,
-        Cache, CachePolicy, Cached, ChannelId, Check, Collector, CommandCheck, CommandError,
-        CommandSchema, CommandSpec, CommandValues, DynamicCommandSpec, EventFilter, EventHub,
-        EventTransport, Freshness, FromArgs, HumanDuration, InteractionState, LookupCache,
-        Permission, PermissionEvaluation, PermissionSnapshot, ResponsePhase, TransportMode,
-        TransportStatus, UiApiExt, UiInteractionContext, UserId, WaitError,
+        Cache, CachePolicy, Cached, ChannelId, Check, Collector, CommandCheck, CommandContext,
+        CommandError, CommandSchema, CommandSpec, CommandValues, DynamicCommandSpec, EventFilter,
+        EventHub, EventTransport, Freshness, FromArgs, HumanDuration, InteractionState,
+        LookupCache, Permission, PermissionEvaluation, PermissionSnapshot, ResponsePhase,
+        TransportMode, TransportStatus, UiApiExt, UiInteractionContext, UserId, WaitError,
     };
     pub use crate::{
         ApiObject, CategoryId, EmojiId, MemberPermissions, MessageId, ResolvedObject,
@@ -281,3 +281,6 @@ pub mod api_1_3_guide {}
 
 #[doc = include_str!("../docs/api-1.4.md")]
 pub mod api_1_4_guide {}
+
+mod command_context;
+pub use command_context::CommandContext;

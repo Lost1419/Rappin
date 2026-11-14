@@ -109,7 +109,7 @@ async fn startup_probe_and_intake_recover_without_restarting_startup_or_handlers
         .sync_commands(false)
         .log(false)
         .cursor_file(&cursor.0)
-        .availability_policy(policy(5))
+        .read_availability_policy(policy(100))
         .command("finish", "finish", move |ctx| {
             let c = c.clone();
             async move {
@@ -121,7 +121,10 @@ async fn startup_probe_and_intake_recover_without_restarting_startup_or_handlers
         .build();
     bot.handle().add_cog(Loads(loads.clone())).await.unwrap();
     let handle = bot.handle();
-    run(bot).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), bot.run_supervised(policy(5)))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(loads.load(Ordering::SeqCst), 1);
     assert_eq!(cursor.last().await, Some(2));
@@ -137,6 +140,7 @@ async fn startup_probe_and_intake_recover_without_restarting_startup_or_handlers
     assert!(all.iter().all(|r| r.starts_with("GET ")));
     assert_eq!(handle.availability_status().total_retries, 4);
     assert_eq!(handle.availability_status().recoveries, 3);
+    assert_eq!(handle.client().read_availability_status().episodes, 0);
     http.await.unwrap();
 }
 
