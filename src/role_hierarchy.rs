@@ -450,7 +450,7 @@ impl<'a, A: Api + ?Sized> RoleHierarchyPolicy<'a, A> {
 
     /// Reassess immediately, force fresh SDK permission reads, then issue one
     /// DELETE attempt. Custom Api implementations must support request_once;
-    /// workers use the protocol 11 single-attempt transport.
+    /// workers use the protocol 12 single-attempt transport.
     /// # Example
     ///
     /// ```no_run

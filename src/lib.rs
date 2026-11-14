@@ -7,7 +7,7 @@
 //! The `rappin` crate provides:
 //! - **Yapin API client**: Typed methods for common operations and a low-level request API for platform endpoints.
 //! - **Rich Message & Layout Builders**: Type-safe builders for `Embed` cards, `Button` rows, and Components V2 layouts (`Container`, `Section`, `TextDisplay`, etc.).
-//! - **Bot Framework & Event Dispatcher**: Command routing, configurable prefixes, interaction handlers, ordered checkpoints, and polling or optional gateway intake. Bounded availability retries are opt-in; incomplete handler work is never retried automatically.
+//! - **Bot Framework & Event Dispatcher**: Command routing, configurable prefixes, interaction handlers, ordered checkpoints, and polling or optional gateway intake. Bounded read availability recovery is enabled by default; incomplete handler work is never retried automatically.
 //! - **Modular Cogs System**: Add and replace cog instances at runtime. Optional `hot-reload` compiles and swaps edited Rust worker cogs while the main bot keeps running.
 //! - **Custom Lookup Caches**: Optional asynchronous member/role storage through `LookupCache`, including application-owned databases.
 //! - **In-Memory Cache Layer**: Thread-safe caching of bot profile, servers, and channels with zero network calls for repetitive lookups.
@@ -183,8 +183,8 @@ pub use webhook_middleware::{
 /// Commonly used types for building bots and interacting with Yapin'.
 pub mod prelude {
     pub use crate::{
-        ActionRow, ApiExt, Bot, BotBuilder, BotHandle, Button, ChannelId, Check, CommandError,
-        CommandSpec, Component, CreateMessage, EditMessage, Embed, Error, FromArgs,
+        ActionRow, ApiExt, Bot, BotBuilder, BotHandle, Button, ChannelId, Check, CommandContext,
+        CommandError, CommandSpec, Component, CreateMessage, EditMessage, Embed, Error, FromArgs,
         InteractionContext, InteractionValues, Message, MessageContext, MessageId, Modal,
         ModalValue, Permission, Result, RoleId, SelectMenu, SelectOption, ServerId, TextInput,
         UserId,
@@ -227,3 +227,6 @@ pub mod interactions_guide {}
 
 #[doc = include_str!("../docs/resources.md")]
 pub mod resources_guide {}
+
+mod command_context;
+pub use command_context::CommandContext;

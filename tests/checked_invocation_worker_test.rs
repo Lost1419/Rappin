@@ -58,12 +58,12 @@ impl FromArgs for Roll {
  cog
  .command("wid","identified record",move |ctx|{let journal=journal.clone();async move{
     let key=ctx.operation_id().expect("identified call").as_str().to_owned();
-    let m=ctx.event.message().unwrap();assert_eq!(m.id.to_string(),"00000000-0000-0000-0000-000000000004");assert_eq!(m.author_id.to_string(),"00000000-0000-0000-0000-00000000002a");assert_eq!(m.channel_id.to_string(),"00000000-0000-0000-0000-000000000000");assert!(m.server_id.is_some());
+    let m=ctx.worker().expect("worker command").event.message().unwrap();assert_eq!(m.id.to_string(),"00000000-0000-0000-0000-000000000004");assert_eq!(m.author_id.to_string(),"00000000-0000-0000-0000-00000000002a");assert_eq!(m.channel_id.to_string(),"00000000-0000-0000-0000-000000000000");assert!(m.server_id.is_some());
     {let mut journal=journal.lock().unwrap();if let Some(previous)=journal.get(&key){if previous!=ctx.args(){return Err(CommandError::Denied("conflicting operation arguments".into()).into());}return Ok(());}journal.insert(key.clone(),ctx.args().into());}
     ctx.say(format!("{}:{}",key,ctx.args())).await?;Ok(())
  }})
  .command_typed::<Roll,_,_>("wroll","roll",|ctx,roll|async move {
-    assert_eq!(roll.0.0,20);assert_eq!(ctx.event.message().unwrap().author_id.to_string(),"00000000-0000-0000-0000-00000000002a");
+    assert_eq!(roll.0.0,20);assert_eq!(ctx.worker().expect("worker command").event.message().unwrap().author_id.to_string(),"00000000-0000-0000-0000-00000000002a");
     ctx.reply("worker reply").await?;Ok(())
  })
  .command("wdeny","deny",|_|async {Err(CommandError::Denied("worker policy denied".into()).into())})
@@ -107,23 +107,28 @@ impl FromArgs for Roll {
         .command("outer", "invoke", move |ctx| {
             let a = allowed.clone();
             async move {
-                let bot = ctx.bot.as_ref().unwrap();
-                let plan = if ctx.args == "denied" {
+                let bot = ctx.bot().unwrap();
+                let plan = if ctx.args() == "denied" {
                     bot.prepare_invocation_with_operation_id(
-                        &ctx,
+                        ctx.message().expect("message-origin invocation"),
                         "wroll",
                         "20",
                         OperationId::new("denied-step")?,
                     )
                     .await?
                 } else {
-                    bot.prepare_invocation(&ctx, "wroll", "20").await?
+                    bot.prepare_invocation(
+                        ctx.message().expect("message-origin invocation"),
+                        "wroll",
+                        "20",
+                    )
+                    .await?
                 };
                 assert!(plan.report().deferred.iter().any(|s| s.contains("worker")));
-                if ctx.args == "identity" {
+                if ctx.args() == "identity" {
                     let one = bot
                         .prepare_invocation_with_operation_id(
-                            &ctx,
+                            ctx.message().expect("message-origin invocation"),
                             "wid",
                             "alice",
                             OperationId::new("step/1")?,
@@ -131,7 +136,7 @@ impl FromArgs for Roll {
                         .await?;
                     let two = bot
                         .prepare_invocation_with_operation_id(
-                            &ctx,
+                            ctx.message().expect("message-origin invocation"),
                             "wid",
                             "bob",
                             OperationId::new("step/2")?,
@@ -144,7 +149,7 @@ impl FromArgs for Roll {
                         out.into_result()?;
                     }
                     bot.invoke_command_with_operation_id(
-                        &ctx,
+                        ctx.message().expect("message-origin invocation"),
                         "wid",
                         "alice",
                         OperationId::new("step/1")?,
@@ -153,7 +158,7 @@ impl FromArgs for Roll {
                     .into_result()?;
                     let conflict = bot
                         .invoke_command_with_operation_id(
-                            &ctx,
+                            ctx.message().expect("message-origin invocation"),
                             "wid",
                             "other",
                             OperationId::new("step/1")?,
@@ -164,17 +169,17 @@ impl FromArgs for Roll {
                         conflict.into_result().unwrap_err().to_remote().to_json()["operation_id"],
                         "step/1"
                     );
-                } else if ctx.args == "denied" {
+                } else if ctx.args() == "denied" {
                     a.store(false, Ordering::SeqCst);
                     assert_eq!(
                         bot.invoke_prepared(plan).await.status,
                         InvocationStatus::Denied
                     );
                     a.store(true, Ordering::SeqCst);
-                } else if ctx.args == "partial" {
+                } else if ctx.args() == "partial" {
                     let error = bot
                         .invoke_command_with_operation_id(
-                            &ctx,
+                            ctx.message().expect("message-origin invocation"),
                             "wpartial",
                             "",
                             OperationId::new("partial/step")?,
@@ -198,7 +203,7 @@ impl FromArgs for Roll {
                     bot.invoke_prepared(plan).await.into_result()?;
                     assert_eq!(
                         bot.invoke_command_with_operation_id(
-                            &ctx,
+                            ctx.message().expect("message-origin invocation"),
                             "wroll",
                             "101",
                             OperationId::new("invalid-step")?
@@ -208,7 +213,13 @@ impl FromArgs for Roll {
                         InvocationStatus::Denied
                     );
                     assert_eq!(
-                        bot.invoke_command(&ctx, "wdeny", "").await.status,
+                        bot.invoke_command(
+                            ctx.message().expect("message-origin invocation"),
+                            "wdeny",
+                            ""
+                        )
+                        .await
+                        .status,
                         InvocationStatus::Denied
                     );
                 }

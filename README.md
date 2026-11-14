@@ -21,7 +21,9 @@ rappin init my-bot --human
 Set `YAPPER_BOT_TOKEN` in the new bot's process environment and run `cargo run`
 inside the generated directory. Send `!ping` for `pong`, or `!help` to see commands.
 The starter includes logging, a local restart checkpoint, and gateway events with
-polling fallback. Edit `src/main.rs` to add commands.
+polling fallback. Edit `src/main.rs` to add commands. Commands use the same context
+for prefix messages and slash interactions, with bounded read recovery enabled
+by default.
 
 A minimal bot looks like this.
 

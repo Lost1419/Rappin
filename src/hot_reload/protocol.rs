@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub(super) const VERSION: u32 = 11;
+pub(super) const VERSION: u32 = 12;
 const MAX_FRAME: u64 = 1024 * 1024;
 
 /// Optional listeners implemented by a worker in addition to commands and buttons.
@@ -137,6 +137,17 @@ pub enum CogEvent {
         /// Parent-validated resource identity and kind.
         event: crate::ResourceEvent,
     },
+    /// An installed shared command with resolved arguments and original interaction.
+    InteractionCommand {
+        /// Canonical installed route, separate from the original slash command text.
+        command: String,
+        /// Raw arguments after resolving local groups and aliases.
+        args: String,
+        /// Parent-decoded resolved argument tokens.
+        argv: Vec<String>,
+        /// Original authenticated interaction identity, values and command text.
+        event: crate::UiInteraction,
+    },
 }
 impl CogEvent {
     /// Borrow the original command/message/DM event, when present.
@@ -182,7 +193,9 @@ impl CogEvent {
             Self::Button { interaction, .. } | Self::Interaction { interaction } => {
                 Some(interaction)
             }
-            Self::UiInteraction { event } => Some(&event.interaction),
+            Self::UiInteraction { event } | Self::InteractionCommand { event, .. } => {
+                Some(&event.interaction)
+            }
             _ => None,
         }
     }
@@ -203,7 +216,7 @@ impl CogEvent {
     /// ```
     pub fn args(&self) -> &str {
         match self {
-            Self::Command { args, .. } => args,
+            Self::Command { args, .. } | Self::InteractionCommand { args, .. } => args,
             Self::UiInteraction { event } => event.args.as_deref().unwrap_or(""),
             _ => "",
         }
@@ -225,7 +238,7 @@ impl CogEvent {
     /// ```
     pub fn argv(&self) -> &[String] {
         match self {
-            Self::Command { argv, .. } => argv,
+            Self::Command { argv, .. } | Self::InteractionCommand { argv, .. } => argv,
             _ => &[],
         }
     }

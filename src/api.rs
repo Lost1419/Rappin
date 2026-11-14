@@ -246,6 +246,22 @@ pub trait ApiExt: Api {
         .await?;
         Ok(())
     }
+    /// Fetch the authenticated bot profile through the native or worker transport.
+    /// Always requests fresh data. The Client inherent method also updates its cache.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use rappin::ApiExt;
+    /// async fn identify(api: &(impl rappin::Api + ?Sized)) -> rappin::Result<rappin::BotProfile> {
+    ///     api.get_me().await
+    /// }
+    /// ```
+    async fn get_me(&self) -> Result<crate::BotProfile> {
+        Ok(serde_json::from_value(
+            self.request(Method::GET, "/me", None).await?,
+        )?)
+    }
+
     /// Read unauthenticated API/build and official SDK version metadata. Client omits Authorization; custom adapters define their public-read handling.
     ///
     /// # Example
@@ -1515,5 +1531,37 @@ impl Api for crate::WorkerContext {
         freshness: Freshness,
     ) -> Result<crate::PermissionSnapshot> {
         self.proxy_permissions(server, actor, freshness).await
+    }
+}
+
+#[async_trait]
+impl Api for crate::CommandContext {
+    fn sanitize(&self, value: Value) -> Value {
+        self.api().sanitize(value)
+    }
+    async fn track_interaction(&self, event: &crate::InteractionEvent) -> Result<()> {
+        self.api().track_interaction(event).await
+    }
+    async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
+        self.api().request(method, path, body).await
+    }
+    async fn request_once(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
+        self.api().request_once(method, path, body).await
+    }
+    async fn public_request(&self, path: &str) -> Result<Value> {
+        self.api().public_request(path).await
+    }
+    async fn upload(&self, path: &str, body: Value, files: &[crate::UploadFile]) -> Result<Value> {
+        self.api().upload(path, body, files).await
+    }
+    async fn permission_snapshot(
+        &self,
+        server: Uuid,
+        actor: Uuid,
+        freshness: Freshness,
+    ) -> Result<crate::PermissionSnapshot> {
+        self.api()
+            .permission_snapshot(server, actor, freshness)
+            .await
     }
 }

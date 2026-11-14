@@ -39,7 +39,14 @@ pub async fn install_permanent_roles_command(handle: &BotHandle, server: Uuid) -
             .server_id()
             .ok_or_else(|| Error::validation("server", "server command required"))?;
         let result = call
-            .execute(&ctx, &OperationContext::server(server, ctx.author_id()))
+            .execute(
+                &ctx,
+                &OperationContext::server(
+                    server,
+                    ctx.author_id()
+                        .ok_or_else(|| Error::validation("requester", "requester required"))?,
+                ),
+            )
             .await?;
         let count = result.data["roles"].as_array().map_or(0, Vec::len);
         ctx.reply(format!("{count} roles in this server")).await?;

@@ -43,29 +43,53 @@ async fn aliases_groups_typed_checks_and_original_identity_share_dispatch() {
                 let c = c.clone();
                 async move {
                     assert_eq!(value.0 .0, 20);
-                    assert_eq!(ctx.author_id(), Uuid::from_u128(42));
-                    assert_eq!(ctx.channel_id(), Uuid::nil());
+                    assert_eq!(ctx.author_id(), Some(Uuid::from_u128(42)));
+                    assert_eq!(ctx.channel_id(), Some(Uuid::nil()));
                     assert_eq!(ctx.server_id(), Some(Uuid::nil()));
-                    assert_eq!(ctx.event.id, Uuid::from_u128(7));
-                    assert_eq!(ctx.content(), "original content");
+                    assert_eq!(
+                        ctx.message().expect("message identity").event.id,
+                        Uuid::from_u128(7)
+                    );
+                    assert_eq!(
+                        ctx.message().expect("message content").content(),
+                        "original content"
+                    );
                     c.fetch_add(1, Ordering::SeqCst);
                     Ok(())
                 }
             },
         )
         .command("outer", "invoke", |ctx| async move {
-            let bot = ctx.bot.as_ref().unwrap();
+            let bot = ctx.bot().unwrap();
             for (name, args) in [("dice", "roll 20"), ("ROLL", "20")] {
-                let plan = bot.prepare_invocation(&ctx, name, args).await?;
+                let plan = bot
+                    .prepare_invocation(
+                        ctx.message().expect("message-origin invocation"),
+                        name,
+                        args,
+                    )
+                    .await?;
                 assert!(plan.report().deferred.iter().any(|s| s.contains("typed")));
                 bot.invoke_prepared(plan).await.into_result()?;
             }
             assert_eq!(
-                bot.invoke_command(&ctx, "roll", "101").await.status,
+                bot.invoke_command(
+                    ctx.message().expect("message-origin invocation"),
+                    "roll",
+                    "101"
+                )
+                .await
+                .status,
                 InvocationStatus::Denied
             );
             assert_eq!(
-                bot.invoke_command(&ctx, "absent", "").await.status,
+                bot.invoke_command(
+                    ctx.message().expect("message-origin invocation"),
+                    "absent",
+                    ""
+                )
+                .await
+                .status,
                 InvocationStatus::NotFound
             );
             Ok(())
@@ -79,7 +103,7 @@ async fn aliases_groups_typed_checks_and_original_identity_share_dispatch() {
 
 struct Access(Arc<AtomicBool>);
 impl CommandCheck for Access {
-    fn check<'a>(&'a self, _: &'a MessageContext) -> commands::CheckFuture<'a> {
+    fn check<'a>(&'a self, _: &'a rappin::CommandContext) -> commands::CheckFuture<'a> {
         Box::pin(async {
             if self.0.load(Ordering::SeqCst) {
                 Ok(())
@@ -88,7 +112,7 @@ impl CommandCheck for Access {
             }
         })
     }
-    fn prepare<'a>(&'a self, ctx: &'a MessageContext) -> Option<commands::CheckFuture<'a>> {
+    fn prepare<'a>(&'a self, ctx: &'a rappin::CommandContext) -> Option<commands::CheckFuture<'a>> {
         Some(self.check(ctx))
     }
 }
@@ -106,10 +130,10 @@ async fn preparation_never_grants_access_and_revocation_runs_zero_handlers() {
         .command("outer", "invoke", move |ctx| {
             let a = a.clone();
             async move {
-                let bot = ctx.bot.as_ref().unwrap();
+                let bot = ctx.bot().unwrap();
                 let plan = bot
                     .prepare_invocation_with_operation_id(
-                        &ctx,
+                        ctx.message().expect("message-origin invocation"),
                         "private",
                         "",
                         OperationId::new("assessed-step")?,
@@ -123,7 +147,7 @@ async fn preparation_never_grants_access_and_revocation_runs_zero_handlers() {
                 );
                 assert!(bot
                     .prepare_invocation_with_operation_id(
-                        &ctx,
+                        ctx.message().expect("message-origin invocation"),
                         "private",
                         "",
                         OperationId::new("assessed-step")?
@@ -133,7 +157,7 @@ async fn preparation_never_grants_access_and_revocation_runs_zero_handlers() {
                     .is_command_rejection());
                 assert_eq!(
                     bot.invoke_command_with_operation_id(
-                        &ctx,
+                        ctx.message().expect("message-origin invocation"),
                         "private",
                         "",
                         OperationId::new("denied-step")?
@@ -177,7 +201,7 @@ async fn preparation_defers_arbitrary_parsers_checks_and_cooldowns() {
                 let cd = cd.clone();
                 async move {
                     checks.fetch_add(1, Ordering::SeqCst);
-                    if cd.check(&ctx).await.is_some() {
+                    if ctx.check_cooldown(&cd).await?.is_some() {
                         Err(deny())
                     } else {
                         Ok(())
@@ -190,15 +214,21 @@ async fn preparation_defers_arbitrary_parsers_checks_and_cooldowns() {
             let checked = checked.clone();
             let cool = cool.clone();
             async move {
-                let bot = ctx.bot.as_ref().unwrap();
+                let bot = ctx.bot().unwrap();
                 for _ in 0..2 {
-                    let plan = bot.prepare_invocation(&ctx, "opaque", "").await?;
+                    let plan = bot
+                        .prepare_invocation(
+                            ctx.message().expect("message-origin invocation"),
+                            "opaque",
+                            "",
+                        )
+                        .await?;
                     assert!(plan.report().deferred.iter().any(|s| s.contains("check")));
                 }
                 assert_eq!(PARSED.load(Ordering::SeqCst), 0);
                 assert_eq!(checked.load(Ordering::SeqCst), 0);
                 bot.invoke_command_with_operation_id(
-                    &ctx,
+                    ctx.message().expect("message-origin invocation"),
                     "opaque",
                     "",
                     OperationId::new("distinct-step")?,
@@ -207,7 +237,7 @@ async fn preparation_defers_arbitrary_parsers_checks_and_cooldowns() {
                 .into_result()?;
                 assert_eq!(
                     bot.invoke_command_with_operation_id(
-                        &ctx,
+                        ctx.message().expect("message-origin invocation"),
                         "opaque",
                         "",
                         OperationId::new("another-step")?
@@ -216,7 +246,7 @@ async fn preparation_defers_arbitrary_parsers_checks_and_cooldowns() {
                     .status,
                     InvocationStatus::Denied
                 );
-                assert!(cool.check(&ctx).await.is_some());
+                assert!(ctx.check_cooldown(&cool).await?.is_some());
                 Ok(())
             }
         })
@@ -233,10 +263,10 @@ async fn plans_reject_replacement_and_unload_without_registry_locking_handlers()
         .sync_commands(false)
         .log(false)
         .command("outer", "invoke", |ctx| async move {
-            let bot = ctx.bot.as_ref().unwrap();
+            let bot = ctx.bot().unwrap();
             let plan = bot
                 .prepare_invocation_with_operation_id(
-                    &ctx,
+                    ctx.message().expect("message-origin invocation"),
                     "target",
                     "",
                     OperationId::new("planned-step")?,
@@ -253,12 +283,18 @@ async fn plans_reject_replacement_and_unload_without_registry_locking_handlers()
             assert_eq!(stale.status, InvocationStatus::Failed);
             assert!(!stale.effects_possible);
             assert_eq!(
-                bot.invoke_command(&ctx, "target", "").await.status,
+                bot.invoke_command(
+                    ctx.message().expect("message-origin invocation"),
+                    "target",
+                    ""
+                )
+                .await
+                .status,
                 InvocationStatus::Denied
             );
             let plan = bot
                 .prepare_invocation_with_operation_id(
-                    &ctx,
+                    ctx.message().expect("message-origin invocation"),
                     "target",
                     "",
                     OperationId::new("planned-step")?,
@@ -299,24 +335,27 @@ async fn identity_replacement_detached_tasks_and_depth_are_rejected() {
             let s = s.clone();
             async move {
                 s.fetch_add(1, Ordering::SeqCst);
-                ctx.bot
-                    .as_ref()
+                ctx.bot()
                     .unwrap()
-                    .invoke_command(&ctx, "loop", "")
+                    .invoke_command(
+                        ctx.message().expect("message-origin invocation"),
+                        "loop",
+                        "",
+                    )
                     .await
                     .into_result()
             }
         })
         .command("outer", "invoke", |ctx| async move {
-            let bot = ctx.bot.as_ref().unwrap();
-            let mut forged = ctx.clone();
+            let bot = ctx.bot().unwrap();
+            let mut forged = ctx.message().unwrap().clone();
             forged.event.author_id = Uuid::nil();
             assert!(
                 !bot.invoke_command(&forged, "loop", "")
                     .await
                     .effects_possible
             );
-            forged = ctx.clone();
+            forged = ctx.message().unwrap().clone();
             forged.event.channel_id = Uuid::from_u128(99);
             assert!(
                 !bot.invoke_command(&forged, "loop", "")
@@ -326,17 +365,22 @@ async fn identity_replacement_detached_tasks_and_depth_are_rejected() {
             let detached = ctx.clone();
             let outcome = tokio::spawn(async move {
                 detached
-                    .bot
-                    .as_ref()
+                    .bot()
                     .unwrap()
-                    .invoke_command(&detached, "loop", "")
+                    .invoke_command(detached.message().unwrap(), "loop", "")
                     .await
             })
             .await
             .unwrap();
             assert_eq!(outcome.status, InvocationStatus::Failed);
             assert!(!outcome.effects_possible);
-            let nested = bot.invoke_command(&ctx, "loop", "").await;
+            let nested = bot
+                .invoke_command(
+                    ctx.message().expect("message-origin invocation"),
+                    "loop",
+                    "",
+                )
+                .await;
             assert_eq!(nested.status, InvocationStatus::Failed);
             let error = nested.into_result().unwrap_err();
             assert!(!error.is_command_rejection());
@@ -378,8 +422,14 @@ async fn gate_rechecks_and_cog_checks_deny_without_target_execution() {
         .command("outer", "invoke", move |ctx| {
             let allowed = allowed.clone();
             async move {
-                let bot = ctx.bot.as_ref().unwrap();
-                let plan = bot.prepare_invocation(&ctx, "target", "").await?;
+                let bot = ctx.bot().unwrap();
+                let plan = bot
+                    .prepare_invocation(
+                        ctx.message().expect("message-origin invocation"),
+                        "target",
+                        "",
+                    )
+                    .await?;
                 allowed.store(false, Ordering::SeqCst);
                 assert_eq!(
                     bot.invoke_prepared(plan).await.status,
@@ -435,15 +485,14 @@ async fn partial_and_failed_reply_causes_reach_one_outer_callback_without_automa
             })
         })
         .command("outer", "invoke", |ctx| async move {
-            let name = if ctx.event.id == Uuid::from_u128(8) {
+            let name = if ctx.message().expect("message identity").event.id == Uuid::from_u128(8) {
                 "reply"
             } else {
                 "partial"
             };
-            ctx.bot
-                .as_ref()
+            ctx.bot()
                 .unwrap()
-                .invoke_command(&ctx, name, "")
+                .invoke_command(ctx.message().expect("message-origin invocation"), name, "")
                 .await
                 .into_result()
         })
@@ -507,15 +556,32 @@ async fn dynamic_schema_preparation_validates_bounds_and_builtin_scope_without_e
         .log(false)
         .registered_command(command)
         .command("outer", "prepare", |ctx| async move {
-            let bot = ctx.bot.as_ref().unwrap();
-            let plan = bot.prepare_invocation(&ctx, "dyn", "4").await?;
+            let bot = ctx.bot().unwrap();
+            let plan = bot
+                .prepare_invocation(
+                    ctx.message().expect("message-origin invocation"),
+                    "dyn",
+                    "4",
+                )
+                .await?;
             assert_eq!(
                 plan.report().assessed,
                 ["dynamic argument schema", "registered check 0"]
             );
-            assert!(bot.prepare_invocation(&ctx, "dynamic", "11").await.is_err());
             assert!(bot
-                .prepare_invocation(&ctx, "dynamic", "'unterminated")
+                .prepare_invocation(
+                    ctx.message().expect("message-origin invocation"),
+                    "dynamic",
+                    "11"
+                )
+                .await
+                .is_err());
+            assert!(bot
+                .prepare_invocation(
+                    ctx.message().expect("message-origin invocation"),
+                    "dynamic",
+                    "'unterminated"
+                )
                 .await
                 .is_err());
             Ok(())
@@ -566,10 +632,13 @@ async fn nested_uncertain_effect_stops_polling_with_duplicate_and_cursor_barrier
             }
         })
         .command("outer", "invoke", |ctx| async move {
-            ctx.bot
-                .as_ref()
+            ctx.bot()
                 .unwrap()
-                .invoke_command(&ctx, "effect", "")
+                .invoke_command(
+                    ctx.message().expect("message-origin invocation"),
+                    "effect",
+                    "",
+                )
                 .await
                 .into_result()
         })

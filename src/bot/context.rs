@@ -13,7 +13,7 @@ use crate::models::{InteractionEvent, MessageEvent};
 // Forward declaration of BotHandle
 use super::BotHandle;
 
-/// Context provided to command and message handlers.
+/// Original message context provided to message listeners and borrowed from message commands.
 #[derive(Clone)]
 /// # Example
 ///
@@ -417,7 +417,7 @@ impl MessageContext {
     }
 }
 
-/// Context provided to button click / interaction handlers.
+/// Original interaction context provided to component/form handlers and borrowed from interaction commands.
 #[derive(Clone)]
 /// # Example
 ///

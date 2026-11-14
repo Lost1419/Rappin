@@ -252,7 +252,13 @@ async fn permission_checks_use_new_dictionary_and_preserve_explicit_false() {
         let message =
             serde_json::from_value(json!({"id":id,"channel_id":id,"server_id":id,"author_id":id}))
                 .unwrap();
-        let ctx = MessageContext::new(client, message, None, String::new(), None);
+        let ctx = CommandContext::from(MessageContext::new(
+            client,
+            message,
+            None,
+            String::new(),
+            None,
+        ));
         assert_eq!(
             Check::permissions([Permission::manage_messages()])
                 .check(&ctx)

@@ -2,8 +2,12 @@
 
 ## Startup and intake availability
 
-Availability recovery is opt-in. Existing client retry settings and bot startup
-behavior stay unchanged when no policy is configured.
+`Bot::run` recovers transient startup and intake read failures by default, within
+an `AvailabilityPolicy` budget. The same bot, installed cogs and checkpoint
+pipeline stay active while reads reconnect. Customize this policy through
+`settings.transport.availability`, or set it to `None` to disable that supervisor.
+Its reads then use ordinary advised transport retries
+without inheriting the handler read-recovery policy.
 
 ```rust,no_run
 use rappin::{AvailabilityPolicy, Bot, Result};
@@ -32,7 +36,7 @@ async fn main() -> Result<()> {
 }
 ```
 
-The policy applies only to startup `GET /me`, the initial `GET /events` cursor
+The transport's `availability` policy applies to startup `GET /me`, the initial `GET /events` cursor
 probe when there is no saved cursor, and subsequent polling/gateway reads. It
 does not retry cog loading, command synchronization, handlers, cursor writes or
 mutations. Successfully read batches still use the ordered completion/checkpoint
@@ -56,8 +60,8 @@ available in automatic mode; gateway-only mode reconnects within this policy.
 **Retry ownership:** client response/network replays are disabled inside each
 availability attempt. The policy owns the attempt count, avoiding multiplied
 client/pipeline retries. Client failover may select a healthy origin for the next
-policy attempt but cannot add an inner replay. Ordinary API calls retain their
-existing retry configuration. Attempts in one episode share a single
+policy attempt but cannot add an inner replay. Ordinary client/handler reads
+use the separate `read_availability` policy described below. Attempts in one episode share a single
 `max_retry_wait` allowance for server-advised/shared rate-limit waits; it does not
 reset on availability retry. Only the advised portion of backoff charges that
 allowance; additional outage backoff is bounded by the availability deadline.
@@ -81,6 +85,93 @@ stopping intake gracefully drains accepted handlers and checkpoints only complet
 work. In-flight reads are cancelled without inventing a response status. Existing
 handler/storage failures stay distinct; unfinished events are never implicitly
 completed. Cancellation or exhaustion never restarts a process or replays a write.
+
+## Handler and client reads
+
+GET/HEAD transport and HTTP-status recovery is enabled by default on `Client`
+and the bot's native/worker API. `TransportConfig::read_availability` selects
+its bounded policy. `availability` separately controls startup/intake. Each
+read episode owns its attempts and elapsed deadline, avoiding client/pipeline
+retry multiplication. The default is five attempts within 120 seconds, with
+bounded exponential backoff and downward jitter.
+
+```rust
+use rappin::{AvailabilityPolicy, Bot};
+let bot = Bot::builder("token").configure(|settings| {
+    settings.transport.read_availability = Some(AvailabilityPolicy::default());
+    settings.transport.max_write_retries = 0;
+}).build()?;
+# Ok::<(), rappin::Error>(())
+```
+
+For a standalone client, `read_availability_policy(policy)` customizes recovery
+and `without_read_recovery()` disables it. The bot equivalent is
+`settings.transport.read_availability = None`. `max_read_retries` controls
+ordinary GET/HEAD transport retries when read availability is disabled.
+`max_write_retries` independently controls extra known-unapplied server-advised
+mutation attempts. Both numeric limits default to three. `max_retries(n)` on
+ClientBuilder sets both numeric budgets. `Api::request_once` bypasses every
+retry policy for that request.
+
+Client clones expose `read_availability_status()` and
+`subscribe_read_availability()`, with phase `AvailabilityPhase::Request`.
+Cumulative counters include every concurrent episode. Episode details refer to
+the most recently started read, so older completions cannot overwrite them.
+Bot startup/intake telemetry stays on `BotHandle::availability_status()`.
+Recovery covers acquiring a response. JSON decoding and subsequent response-body
+consumption retain their terminal error classification. Dropping a request future
+cancels its recovery. Stopping the bot interrupts startup/intake recovery and
+drains accepted handlers under the configured drain deadline.
+
+Each episode shares one `max_retry_wait` allowance for advised/shared rate-limit
+waits. Additional outage backoff uses its availability deadline. Exhaustion keeps
+the original structured cause and never restarts a process, reruns a handler,
+retries storage/publication or replays an uncertain mutation.
+
+## One command context
+
+Ordinary `command`, `command_spec`, `DynamicCommandSpec::bind` and capability
+command bindings use `CommandContext` across native and worker message/interaction
+delivery. Interaction command publication is enabled by default. A registered
+command consumes its interaction before generic interaction listeners. Unknown
+command interactions can still reach `on_command_interaction`.
+
+```rust
+use rappin::{Bot, Check, CommandSpec};
+let bot = Bot::builder("token")
+    .command_spec(CommandSpec::<()>::new("status", "Show status")
+        .alias("health").check(Check::server_only()),
+        |ctx, ()| async move { ctx.reply("Ready").await })
+    .build()?;
+# Ok::<(), rappin::Error>(())
+```
+
+Parsing, schemas, aliases, groups, help and registered checks use the same spec.
+`CommandCheck::check` and `Cog::check` receive `CommandContext` for either delivery.
+Custom checks have one implementation across native and worker commands.
+Read-only preparation defers arbitrary checks and cooldowns, then execution checks
+authority again. Shared cooldowns use the original requester/channel/server key.
+Requester and bot authorization remain independent application/operation policies.
+
+Use `ctx.args()` and `ctx.command_name()` for resolved invocation metadata.
+`message()`, `interaction()` and `worker()` retain the original event separately.
+`author_id()`, `channel_id()` and `server_id()` preserve missing facts as `None`.
+`Api`/`ApiExt` methods, `state`, `reply`, `reply_with`, `prompt_for_reply`, paginators
+and confirmation helpers work from the common context. Prompt collection registers
+before sending through the original reply route, including worker interactions.
+Reply helpers return completion. `say` returns the sent message receipt.
+
+Command failures use `on_command_failure` for both delivery forms. Button/form
+failures use `on_button_failure`. Expected typed rejections complete after a
+successful rejection reply or explicit `Handled`. Failed replies retain both
+structured causes. Partial receipts and unknown outcomes retain checkpoint
+barriers. A message gate and checked nested invocation require original message
+provenance. An interaction never acquires a synthetic message or permission grant.
+
+Workers require protocol 12, with resolved `InteractionCommand` metadata separate
+from the original interaction. Rebuild the parent and workers together. Consumer
+state, databases, cache backends, prefixes, approvals and replay decisions remain
+application-owned.
 
 ## Fresh role hierarchy evidence
 
@@ -161,8 +252,8 @@ cargo build --example role_hierarchy_worker --features hot-reload
 Load it using `WorkerProject::example("Cargo.toml", "role_hierarchy_worker")`
 with `.features(["hot-reload"])` and `HotReload::load`, as in the hot-reload guide.
 It deliberately leaves rollout evidence Unknown and performs no deletion.
-Protocol 11 workers support single-attempt requests on every route.
-Existing workers retain v4/v5 behavior. `Api` works with Client, Arc, native
+Protocol 12 workers support single-attempt requests on every route.
+Rebuild the parent and every worker together. `Api` works with Client, Arc, native
 contexts and WorkerContext; custom adapters must explicitly implement
 `request_once` or execution fails closed. The parent retains the token, endpoint
 confinement, proxy request bounds and structured error sanitization. Trusted

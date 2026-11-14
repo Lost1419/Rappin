@@ -29,7 +29,10 @@ async fn upload_and_json_retries_preserve_payloads_and_custom_origins() {
         response(502, json!({"error":"bad gateway"})),
     ])
     .await;
-    let client = Client::builder("secret").base_url(&base).build();
+    let client = Client::builder("secret")
+        .base_url(&base)
+        .without_read_recovery()
+        .build();
     client
         .request_binary::<serde_json::Value>(
             reqwest::Method::PUT,

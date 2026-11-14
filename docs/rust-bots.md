@@ -54,8 +54,8 @@ The same specs can be registered with `CogBuilder::command_spec` or returned by
 or executes a shell. `HumanDuration` accepts `1h30m`, `UserId` accepts UUIDs or
 `<@uuid>`, and `ChannelId` accepts UUIDs or `<#uuid>`. Resolve names explicitly with
 Client methods. `describe()` is manually maintained help metadata; keep it aligned
-with `parse()`. Existing `ctx.args` stays raw; `ctx.argv` now respects quotes and
-falls back to whitespace splitting for malformed quotes in legacy handlers.
+with `parse()`. `ctx.args()` retains the resolved raw argument string. Typed
+parsers report malformed quotes before running the handler.
 
 `prefixes_with(|message| async move { Ok(vec![...]) })` replaces static prefixes
 for each message. `mention_prefix(true)` additionally enables `<@bot-id> command`
@@ -276,7 +276,7 @@ also subject to WorkerProject's handler timeout, which includes queueing and API
 work. Waits count toward the 128 requests per invocation budget. In-flight old
 workers can finish their existing waits during reload; subscriptions do not migrate
 into the new process. Structured errors and parent-owned permission lookups are
-available in protocol 11. Rebuild the parent and all workers together when migrating
+available in protocol 12. Rebuild the parent and all workers together when migrating
 from 0.1 or an earlier 2.0 preview. Other versions fail during candidate startup.
 All worker routes support structured errors, operation identities, UI callbacks
 and single-attempt API requests. The old capability-switch methods are removed.
@@ -284,7 +284,7 @@ and single-attempt API requests. The old capability-switch methods are removed.
 Typed `command_spec` and `command_typed` routes share registration with runtime
 `dynamic_command` schemas. Each supports aliases, grouped names, help and pure
 preparation schemas when available. Worker checks are deferred during preparation
-and run again before the handler. Custom checks implement `check_worker`.
+and run again before the handler. Custom checks implement one `CommandCheck::check` over `CommandContext`.
 
 See [hot-reloading](https://github.com/Lost1419/Rappin/blob/dev/docs/hot-reloading.md) and `examples/hot_cog_worker.rs`. There is no
 JavaScript-style manager hierarchy, hidden resource fetching, general middleware

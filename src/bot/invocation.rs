@@ -385,7 +385,7 @@ impl PreparedInvocation {
 
 pub(super) struct InvocationSnapshot {
     pub(super) def: CommandDef,
-    cog: Option<Arc<dyn Cog>>,
+    pub(super) cog: Option<Arc<dyn Cog>>,
 }
 impl InvocationSnapshot {
     fn same_binding(&self, other: &Self) -> bool {
@@ -548,8 +548,16 @@ impl BotHandle {
                     } else {
                         report.deferred.push("typed argument parser".into());
                     }
+                    let canonical = snapshot
+                        .def
+                        .info
+                        .as_ref()
+                        .map(|info| info.name.clone())
+                        .unwrap_or_else(|| context.command.clone().unwrap_or_default());
+                    let command_context =
+                        crate::CommandContext::for_message(context.clone(), canonical);
                     for (index, check) in recipe.checks.iter().enumerate() {
-                        if let Some(future) = check.prepare(&context) {
+                        if let Some(future) = check.prepare(&command_context) {
                             failure::catch(future).await?;
                             report.assessed.push(format!("registered check {index}"));
                         } else {
@@ -816,12 +824,19 @@ impl BotHandle {
         ORIGIN
             .scope(origin, async {
                 let result = failure::catch(async {
+                    let canonical = snapshot
+                        .def
+                        .info
+                        .as_ref()
+                        .map(|info| info.name.clone())
+                        .unwrap_or_else(|| name.clone());
+                    let command = crate::CommandContext::for_message(ctx, canonical);
                     if let Some(cog) = snapshot.cog {
-                        if !cog.check(&ctx).await {
+                        if !cog.check(&command).await? {
                             return Ok(false);
                         }
                     }
-                    (snapshot.def.handler)(ctx).await?;
+                    (snapshot.def.handler)(command).await?;
                     Ok(true)
                 })
                 .await;

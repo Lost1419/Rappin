@@ -126,6 +126,7 @@ impl Bot {
         }
         let (supervised, mut intake_failures) = mpsc::unbounded_channel();
         let bot = self.handle.clone();
+        let availability = self.availability_policy.clone();
         let intake = ingress.clone();
         let poll_sender = sender.clone();
         guard.tasks.push(supervise(
@@ -136,7 +137,7 @@ impl Bot {
                     if poll_sender.is_closed() {
                         break;
                     }
-                    let mut episode = bot.inner.availability_policy.as_ref().map(|policy| {
+                    let mut episode = availability.as_ref().map(|policy| {
                         crate::availability::Episode::new(
                             bot.clone(),
                             policy.clone(),
@@ -150,7 +151,7 @@ impl Bot {
                                 .get_events(Some(after), Some(25), bot.inner.max_age);
                         let result = match &mut episode {
                             Some(e) => e.attempt(read).await,
-                            None => read.await,
+                            None => crate::client::transport_read(read).await,
                         };
                         match result {
                             Err(error) => {
@@ -392,7 +393,12 @@ impl Bot {
                     match batch {
                         Some(Ok(batch))=>batches.push_back(Box::pin(self.dispatch_shared_batch(batch,me,gate.clone(),ingress.clone()))),
                         Some(Err(error))=>{report.intake_error=Some(self.failure_cause(&error));gate.halt();stopping=true;},
-                        None=>{report.intake_error=Some(Error::Config("shared ingress intake stopped".into()).to_remote());gate.halt();stopping=true;},
+                        None=>{
+                            if self.handle.inner.running.load(Ordering::SeqCst) {
+                                report.intake_error=Some(Error::Config("shared ingress intake stopped".into()).to_remote());gate.halt();
+                            }
+                            stopping=true;
+                        },
                     }
                 },
                 completed=batches.next(),if !batches.is_empty()=>{if let Some(batch)=completed{stopping|=self.checkpoint_shared(batch,&ingress,&mut report,&mut barrier,&mut polling_prefix,&gate).await;}}

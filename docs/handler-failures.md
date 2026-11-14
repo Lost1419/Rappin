@@ -130,7 +130,7 @@ additional secrets before logging receipts.
 - Structured command errors include `command_kind`. Definition errors and
   legacy remote command errors without a subtype are not assumed to be user
   rejections. Rebuild workers for current classification. This metadata uses
-  protocol 11 structured fields.
+  protocol 12 structured fields.
 
 Typed worker parse errors now reach the parent policy. No worker-side callback
 or credential is required. A source error's outcome describes that operation,

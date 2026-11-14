@@ -11,8 +11,9 @@ use crate::error::Result;
 use crate::models::{MemberJoinEvent, MemberLeaveEvent};
 
 /// Shared Send asynchronous native command handler returning explicit completion or a structured failure.
-pub type CommandHandlerFn =
-    Arc<dyn Fn(MessageContext) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync>;
+pub type CommandHandlerFn = Arc<
+    dyn Fn(crate::CommandContext) -> Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync,
+>;
 
 /// Shared Send asynchronous native interaction handler returning explicit completion or a structured failure.
 pub type ButtonHandlerFn = Arc<
@@ -53,7 +54,7 @@ impl CogCommand {
     /// ```
     pub fn new<F, Fut>(name: impl Into<String>, description: impl Into<String>, handler: F) -> Self
     where
-        F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::CommandContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         Self {
@@ -78,15 +79,15 @@ impl CogCommand {
         handler: F,
     ) -> Self
     where
-        F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::CommandContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         let handler = Arc::new(handler);
-        let wrapped = move |ctx: MessageContext| {
+        let wrapped = move |ctx: crate::CommandContext| {
             let cd = cooldown.clone();
             let handler = handler.clone();
             async move {
-                if let Some(remaining) = cd.check(&ctx).await {
+                if let Some(remaining) = ctx.check_cooldown(&cd).await? {
                     let secs = remaining.as_secs_f32();
                     return Err(crate::CommandError::Denied(format!(
                         "You are on cooldown; wait {secs:.1}s"
@@ -267,11 +268,11 @@ pub trait Cog: Send + Sync + 'static {
     /// #[async_trait]
     /// impl Cog for Module {
     ///     fn name(&self) -> &str { "module" }
-    ///     async fn check(&self, ctx: &rappin::MessageContext) -> bool { ctx.server_id().is_some() }
+    ///     async fn check(&self, ctx: &rappin::CommandContext) -> rappin::Result<bool> { Ok(ctx.server_id().is_some()) }
     /// }
     /// ```
-    async fn check(&self, _ctx: &MessageContext) -> bool {
-        true
+    async fn check(&self, _ctx: &crate::CommandContext) -> Result<bool> {
+        Ok(true)
     }
 
     /// Hook executed when the cog is loaded into the bot.
@@ -557,7 +558,7 @@ impl CogBuilder {
         handler: F,
     ) -> Self
     where
-        F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::CommandContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         self.commands
@@ -586,7 +587,7 @@ impl CogBuilder {
     ) -> Self
     where
         A: crate::commands::FromArgs,
-        F: Fn(MessageContext, A) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::CommandContext, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = crate::Result<()>> + Send + 'static,
     {
         self.registered.push(spec.bind(handler));
@@ -638,7 +639,7 @@ impl CogBuilder {
         handler: F,
     ) -> Self
     where
-        F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::CommandContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         self.commands.push(CogCommand::with_cooldown(

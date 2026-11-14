@@ -111,7 +111,10 @@ async fn startup_probe_and_intake_recover_without_restarting_startup_or_handlers
         .configure(|settings| {
             settings.persistence.cursor = Some(rappin::EventCursor::new(&cursor.0))
         })
-        .configure(|settings| settings.transport.availability = Some(policy(5)))
+        .configure(|settings| {
+            settings.transport.availability = Some(policy(5));
+            settings.transport.read_availability = Some(policy(100));
+        })
         .command("finish", "finish", move |ctx| {
             let c = c.clone();
             async move {
@@ -140,6 +143,7 @@ async fn startup_probe_and_intake_recover_without_restarting_startup_or_handlers
     assert!(all.iter().all(|r| r.starts_with("GET ")));
     assert_eq!(handle.availability_status().total_retries, 4);
     assert_eq!(handle.availability_status().recoveries, 3);
+    assert_eq!(handle.client().read_availability_status().episodes, 0);
     http.await.unwrap();
 }
 

@@ -105,17 +105,17 @@ Use `collect::<DmMessageEvent>()` for DM-only collectors. MessageEvent collector
 can receive both server messages and DMs; channel/server filters remain available.
 Reaction events retain `dm`, `is_dm`, `dm_channel_id` and nullable `server_id`.
 Native cogs also have fallible reaction hooks. Existing EventHandler reaction
-callbacks keep their `()` observer contract. DM events go to `on_dm`, replacing
+callbacks return `Result<()>`. DM events go to `on_dm`, replacing
 raw unknown-event delivery for that newly supported event type.
 
 With `hot-reload`, workers use `Listener::DmMessage`, `ReactionAdd` and
 `ReactionRemove`, with corresponding `CogEvent` variants. `WorkerContext` keeps
-its parent proxy and gains the same `ApiExt` helpers. Protocol v4 adds public
-reads and uploads: files cross fixed 64 KiB chunks, bounded to the same 12 MiB
+its parent proxy and gains the same `ApiExt` helpers. Protocol 12 supports public
+reads and uploads. Files cross fixed 64 KiB chunks, bounded to the same 12 MiB
 total; ordinary frames remain limited to 1 MiB. Incomplete/invalid transfers do
 not start the HTTP upload. Cancelled exchanges remain unusable and require
 reconciliation before an explicit replacement. Rebuild parent and workers
-together; the new parent continues accepting older v1–v3 workers.
+together. Older worker protocols are rejected before routes are published.
 
 ## API metadata, retry budgets and image proxies
 

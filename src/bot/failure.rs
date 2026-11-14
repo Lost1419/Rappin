@@ -250,7 +250,7 @@ impl super::Bot {
     }
     pub(super) async fn command_failed(
         &self,
-        ctx: super::MessageContext,
+        ctx: crate::CommandContext,
         event_id: u64,
         name: &str,
         usage: Option<String>,
@@ -271,9 +271,25 @@ impl super::Bot {
             }
         }
         if info.class == FailureClass::Rejected {
-            let result = self
-                .reply_rejection(&ctx, &info.error, usage.as_deref())
-                .await;
+            let result = if let Some(message) = ctx.message() {
+                self.reply_rejection(message, &info.error, usage.as_deref())
+                    .await
+            } else if let Some(interaction) = ctx.interaction() {
+                let text = format!(
+                    "{}{}",
+                    info.error,
+                    usage
+                        .as_deref()
+                        .map(|usage| format!("\nUsage: {usage}"))
+                        .unwrap_or_default()
+                );
+                catch(interaction.ephemeral(text)).await
+            } else {
+                Err(Error::validation(
+                    "command.context",
+                    "failure reply requires an original native context",
+                ))
+            };
             return result.map_err(|handling_error| Error::FailureHandling {
                 source: Box::new(error),
                 handling_error: Box::new(handling_error),

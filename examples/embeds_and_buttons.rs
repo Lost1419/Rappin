@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
                 Button::link("Dashboard", "https://www.yapin.gg"),
             ]);
 
-            let msg = CreateMessage::reply("📊 Here are your stats:", ctx.message_id())
+            let msg = CreateMessage::new("📊 Here are your stats:")
                 .embed(embed)
                 .action_row(row);
 
@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
                             .accessory(Button::success("Verify Identity", "verify:now")),
                     );
 
-                ctx.send_layout(vec![layout]).await?;
+                ctx.reply_with(CreateMessage::layout([layout])).await?;
                 Ok(())
             },
         )

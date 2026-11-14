@@ -206,7 +206,9 @@ impl WorkerContext {
     /// ```
     pub fn ui_interaction(&self) -> Option<&crate::UiInteraction> {
         match &self.event {
-            CogEvent::UiInteraction { event } => Some(event),
+            CogEvent::UiInteraction { event } | CogEvent::InteractionCommand { event, .. } => {
+                Some(event)
+            }
             _ => None,
         }
     }
@@ -580,7 +582,7 @@ pub struct WorkerCog {
 }
 impl WorkerCog {
     /// Register the same command metadata, parser and built-in checks used by
-    /// native cogs. Supports aliases and command groups. Requires host protocol 11.
+    /// native cogs. Supports aliases and command groups. Requires host protocol 12.
     ///
     /// ```rust
     /// use rappin::{WorkerCog, CommandSpec, Check};
@@ -591,7 +593,7 @@ impl WorkerCog {
     pub fn command_spec<A, F, Fut>(self, spec: crate::CommandSpec<A>, handler: F) -> Self
     where
         A: crate::FromArgs,
-        F: Fn(WorkerContext, A) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::CommandContext, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         let info = spec.info;
@@ -610,9 +612,10 @@ impl WorkerCog {
                 let handler = handler.clone();
                 let checks = checks.clone();
                 Box::pin(async move {
+                    let ctx = crate::CommandContext::from(ctx);
                     let args = ctx.parse::<A>()?;
                     for check in checks.iter() {
-                        check.check_worker(&ctx).await?;
+                        check.check(&ctx).await?;
                     }
                     handler(ctx, args).await?;
                     Ok(crate::MessageDisposition::Continue)
@@ -646,7 +649,7 @@ impl WorkerCog {
     ) -> Self
     where
         A: crate::commands::FromArgs,
-        F: Fn(WorkerContext, A) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::CommandContext, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         self.command_spec(crate::CommandSpec::<A>::new(name, description), handler)
@@ -692,7 +695,7 @@ impl WorkerCog {
     /// ```
     pub fn dynamic_command<F, Fut>(self, schema: crate::CommandSchema, handler: F) -> Result<Self>
     where
-        F: Fn(WorkerContext, crate::CommandValues) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::CommandContext, crate::CommandValues) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         schema.validate()?;
@@ -708,7 +711,7 @@ impl WorkerCog {
                 let handler = handler.clone();
                 Box::pin(async move {
                     let values = schema.parse(ctx.args())?;
-                    handler(ctx, values).await?;
+                    handler(ctx.into(), values).await?;
                     Ok(crate::MessageDisposition::Continue)
                 })
             }),
@@ -732,7 +735,7 @@ impl WorkerCog {
         handler: F,
     ) -> Self
     where
-        F: Fn(WorkerContext) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::CommandContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         let info = crate::CommandInfo {
@@ -745,7 +748,7 @@ impl WorkerCog {
             info,
             None,
             Arc::new(move |ctx| {
-                let future = handler(ctx);
+                let future = handler(ctx.into());
                 Box::pin(async move {
                     future.await?;
                     Ok(crate::MessageDisposition::Continue)
@@ -909,6 +912,10 @@ impl WorkerCog {
             }
             let handler = match &event {
                 CogEvent::Command { command, .. } => self.commands.get(command),
+                CogEvent::InteractionCommand { command, event, .. } => self
+                    .commands
+                    .get(command)
+                    .filter(|_| event.interaction.kind.as_deref() == Some("command")),
                 CogEvent::Button { prefix, .. } => self.buttons.get(prefix),
                 CogEvent::Message { .. } => self
                     .listeners

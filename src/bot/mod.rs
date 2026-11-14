@@ -207,7 +207,7 @@ type CogFactoryFn = Arc<dyn Fn() -> Box<dyn Cog> + Send + Sync>;
 /// Fallible command callback returning an explicit completion disposition.
 pub type CommandFailureHandlerFn = Arc<
     dyn Fn(
-            MessageContext,
+            crate::CommandContext,
             HandlerFailure,
         ) -> std::pin::Pin<Box<dyn Future<Output = Result<FailureDisposition>> + Send>>
         + Send
@@ -267,7 +267,6 @@ pub(crate) struct BotState {
     log: bool,
     cursor: Option<EventCursor>,
     max_age: Option<u32>,
-    availability_policy: Option<crate::AvailabilityPolicy>,
     ui_events: bool,
     interaction_commands: bool,
     ui_handlers: HashMap<String, UiHandler>,
@@ -1003,8 +1002,8 @@ impl BotBuilder {
             ignore_bots: true,
             sync_commands: true,
             log: true,
-            ui_events: false,
-            interaction_commands: false,
+            ui_events: true,
+            interaction_commands: true,
             ui_handlers: HashMap::new(),
         }
     }
@@ -1092,7 +1091,7 @@ impl BotBuilder {
     ) -> Self
     where
         A: crate::commands::FromArgs,
-        F: Fn(MessageContext, A) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::CommandContext, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         if let Err(error) = insert_registered(&mut self.commands, spec.bind(handler), None) {
@@ -1111,7 +1110,7 @@ impl BotBuilder {
             let text = ctx
                 .bot()
                 .ok_or_else(|| Error::Config("help requires a bot handle".into()))?
-                .help(ctx.args.trim())
+                .help(ctx.args().trim())
                 .await;
             for part in crate::split_message(if text.is_empty() {
                 "No matching command"
@@ -1157,22 +1156,16 @@ impl BotBuilder {
         handler: F,
     ) -> Self
     where
-        F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::CommandContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         let name_str = name.into().to_lowercase();
         let desc_str = description.into();
         let wrapped_handler: CommandHandlerFn = Arc::new(move |ctx| Box::pin(handler(ctx)));
-        if self
-            .commands
-            .get(&name_str)
-            .is_some_and(|command| command.info.is_some())
-        {
+        if self.commands.contains_key(&name_str) {
             self.definition_error = Some(
-                crate::CommandError::Definition(
-                    "command conflicts with a typed command or alias".into(),
-                )
-                .into(),
+                crate::CommandError::Definition("command or alias already registered".into())
+                    .into(),
             );
             return self;
         }
@@ -1206,7 +1199,7 @@ impl BotBuilder {
         handler: F,
     ) -> Self
     where
-        F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::CommandContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         let name_str = name.into().to_lowercase();
@@ -1216,7 +1209,7 @@ impl BotBuilder {
             let cd = cooldown.clone();
             let handler = handler.clone();
             Box::pin(async move {
-                if let Some(remaining) = cd.check(&ctx).await {
+                if let Some(remaining) = ctx.check_cooldown(&cd).await? {
                     let secs = remaining.as_secs_f32();
                     return Err(crate::CommandError::Denied(format!(
                         "You are on cooldown; wait {secs:.1}s"
@@ -1226,16 +1219,10 @@ impl BotBuilder {
                 handler(ctx).await
             })
         });
-        if self
-            .commands
-            .get(&name_str)
-            .is_some_and(|command| command.info.is_some())
-        {
+        if self.commands.contains_key(&name_str) {
             self.definition_error = Some(
-                crate::CommandError::Definition(
-                    "command conflicts with a typed command or alias".into(),
-                )
-                .into(),
+                crate::CommandError::Definition("command or alias already registered".into())
+                    .into(),
             );
             return self;
         }
@@ -1394,7 +1381,7 @@ impl BotBuilder {
     /// ```
     pub fn on_command_failure<F, Fut>(mut self, handler: F) -> Self
     where
-        F: Fn(MessageContext, HandlerFailure) -> Fut + Send + Sync + 'static,
+        F: Fn(crate::CommandContext, HandlerFailure) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<FailureDisposition>> + Send + 'static,
     {
         self.command_failure_handler = Some(Arc::new(move |ctx, failure| {
@@ -1608,7 +1595,13 @@ impl BotBuilder {
             .base_url(self.config.transport.api_base)
             .lookup_cache(self.config.cache.policy)
             .api_fallback(self.config.transport.api_fallback)
-            .max_retry_wait(self.config.transport.max_retry_wait);
+            .max_retry_wait(self.config.transport.max_retry_wait)
+            .max_read_retries(self.config.transport.max_read_retries)
+            .max_write_retries(self.config.transport.max_write_retries);
+        client = match self.config.transport.read_availability {
+            Some(policy) => client.read_availability_policy(policy),
+            None => client.without_read_recovery(),
+        };
         if let Some(backend) = self.config.cache.backend {
             client = client.lookup_cache_backend(backend);
         }
@@ -1634,7 +1627,6 @@ impl BotBuilder {
             log: self.log,
             cursor: self.config.persistence.cursor,
             max_age: self.config.execution.max_event_age,
-            availability_policy: self.config.transport.availability,
             ui_events: self.ui_events,
             interaction_commands: self.interaction_commands,
             ui_handlers: self.ui_handlers,
@@ -1656,6 +1648,7 @@ impl BotBuilder {
         Ok(Bot {
             handle: BotHandle { inner: state },
             initial_cogs: self.cogs,
+            availability_policy: self.config.transport.availability,
         })
     }
 }
@@ -1674,6 +1667,7 @@ impl BotBuilder {
 pub struct Bot {
     handle: BotHandle,
     initial_cogs: Vec<Box<dyn Cog>>,
+    availability_policy: Option<crate::AvailabilityPolicy>,
 }
 
 impl Bot {
@@ -1732,8 +1726,8 @@ impl Bot {
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T>>,
     {
-        let Some(policy) = &self.handle.inner.availability_policy else {
-            return read().await;
+        let Some(policy) = &self.availability_policy else {
+            return crate::client::transport_read(read()).await;
         };
         let mut episode =
             crate::availability::Episode::new(self.handle.clone(), policy.clone(), phase);
@@ -2380,14 +2374,26 @@ impl Bot {
             let snapshot = self.handle.invocation_snapshot(&cmd_name).await;
             if let Some(snapshot) = snapshot {
                 let usage = snapshot.def.info.as_ref().map(|info| info.usage());
+                let canonical = snapshot
+                    .def
+                    .info
+                    .as_ref()
+                    .map(|info| info.name.clone())
+                    .unwrap_or_else(|| cmd_name.clone());
                 if let Some(error) = self
                     .handle
                     .dispatch_invocation(ctx.clone(), snapshot)
                     .await
                     .error
                 {
-                    self.command_failed(ctx.clone(), event_id, &cmd_name, usage, error)
-                        .await?;
+                    self.command_failed(
+                        crate::CommandContext::for_message(ctx.clone(), canonical),
+                        event_id,
+                        &cmd_name,
+                        usage,
+                        error,
+                    )
+                    .await?;
                 }
             }
         }
@@ -2435,6 +2441,51 @@ impl Bot {
             data,
             Some(self.handle.clone()),
         );
+        if kind == "command" {
+            if let Some((path, args)) = self
+                .handle
+                .resolve_invocation(
+                    ctx.command.as_deref().unwrap_or(""),
+                    ctx.args.as_deref().unwrap_or(""),
+                )
+                .await
+            {
+                if let Some(snapshot) = self.handle.invocation_snapshot(&path).await {
+                    let canonical = snapshot
+                        .def
+                        .info
+                        .as_ref()
+                        .map(|info| info.name.clone())
+                        .unwrap_or_else(|| path.clone());
+                    let command = crate::CommandContext::resolved(ctx.clone(), canonical, args);
+                    let result = failure::catch(async {
+                        if let Some(cog) = snapshot.cog {
+                            if !cog.check(&command).await? {
+                                return Err(crate::CommandError::Denied(
+                                    "cog check denied the command".into(),
+                                )
+                                .into());
+                            }
+                        }
+                        (snapshot.def.handler)(command.clone()).await
+                    })
+                    .await;
+                    return match result {
+                        Ok(()) => Ok(()),
+                        Err(error) => {
+                            self.command_failed(
+                                command,
+                                event_id,
+                                &path,
+                                snapshot.def.info.as_ref().map(|info| info.usage()),
+                                error,
+                            )
+                            .await
+                        }
+                    };
+                }
+            }
+        }
         if let Some(handler) = self.handle.inner.ui_handlers.get(&kind) {
             if let Err(error) = failure::catch(handler(ctx.clone())).await {
                 self.button_failed(ctx.clone(), event_id, &format!("ui:{kind}"), error)

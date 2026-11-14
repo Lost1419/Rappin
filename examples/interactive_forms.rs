@@ -10,9 +10,8 @@ async fn main() -> Result<()> {
             let menu = SelectMenu::new("form:topic")
                 .option(SelectOption::new("Rust", "rust"))
                 .option(SelectOption::new("Other", "other"));
-            let mut body = CreateMessage::new("Choose a topic").component(menu.row());
-            body.reply_to = Some(ctx.event.id);
-            ctx.send_message(ctx.channel_id(), &body).await?;
+            let body = CreateMessage::new("Choose a topic").component(menu.row());
+            ctx.reply_with(body).await?;
             Ok(())
         })
         .on_select(|ctx| async move {

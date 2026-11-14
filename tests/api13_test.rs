@@ -274,6 +274,7 @@ async fn opt_in_ui_routing_keeps_values_separate_from_legacy_buttons_and_failure
     let legacy = Arc::new(AtomicUsize::new(0));
     let c = legacy.clone();
     let bot = Bot::builder("fixture")
+        .interactive_events(false)
         .sync_commands(false)
         .log(false)
         .button("choice", move |_| {

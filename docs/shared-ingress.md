@@ -129,8 +129,9 @@ Set `YAPPER_BOT_TOKEN`, `YAPIN_BOT_ID`, `YAPIN_WEBHOOK_SECRET` and optionally
 volatile acceptance. For production restart protection, supply your own durable
 store. DNS/tunnels, hosting, storage engines and application command/approval
 policies are outside the SDK. Native ingress needs no optional feature; gateway
-delivery adds `gateway`, workers add `hot-reload`. Existing worker protocol versions
-and failure contracts remain compatible.
+delivery adds `gateway`, workers add `hot-reload`. Workers require protocol 12;
+rebuild the parent and workers together. Explicit failure dispositions still
+control handler completion and checkpoint advancement.
 
 ## Payload conflicts and bounded recovery
 
@@ -262,8 +263,8 @@ cargo run --features webhook-middleware --example shared_webhook_polling -- \
 It still advertises volatile admission. Supply an application-owned durable store
 with the hook/load contract above for persistent recovery. The core APIs require
 no optional feature; the Axum receiver uses `webhook-middleware`, gateway delivery
-uses `gateway`, and worker handlers use `hot-reload`. Worker protocols remain
-unchanged. Storage engines, hosting and application reconciliation decisions
+uses `gateway`, and worker handlers use `hot-reload` with protocol 12.
+Storage engines, hosting and application reconciliation decisions
 remain consumer-owned.
 
 See [the event contract reproduction](event-contract-conflicts.md) for the exact

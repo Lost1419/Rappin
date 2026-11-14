@@ -54,7 +54,7 @@ when those trace targets are active.
 
 ## Workers and example
 
-Protocol 11 workers route requests through the parent's selected transport.
+Protocol 12 workers route requests through the parent's selected transport.
 `WorkerContext::api_once` uses a single submission. Structured remote errors,
 typed validation and the original message identity propagate through that transport.
 

@@ -10,14 +10,13 @@ async fn main() -> Result<()> {
             "role-check",
             "Assess a role UUID without deleting it",
             |ctx| async move {
-                let message = ctx
-                    .event
-                    .message()
-                    .ok_or_else(|| CommandError::Denied("server message required".into()))?;
-                let server = message
-                    .server_id
-                    .ok_or_else(|| CommandError::Denied("server message required".into()))?;
-                let context = OperationContext::server(server, message.author_id);
+                let server = ctx
+                    .server_id()
+                    .ok_or_else(|| CommandError::Denied("server required".into()))?;
+                let requester = ctx
+                    .author_id()
+                    .ok_or_else(|| CommandError::Denied("requester required".into()))?;
+                let context = OperationContext::server(server, requester);
                 let role =
                     ctx.args()
                         .trim()

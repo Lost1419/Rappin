@@ -249,6 +249,8 @@ async fn bot_gateway_keeps_heartbeating_while_a_single_handler_waits_for_a_reply
                 let registered = registered.clone();
                 async move {
                     let answer = ctx
+                        .message()
+                        .expect("message collector")
                         .client
                         .events()
                         .collect::<MessageEvent>()

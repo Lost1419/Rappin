@@ -91,9 +91,9 @@ impl Cog for Probe {
             }
         })]
     }
-    async fn check(&self, _: &MessageContext) -> bool {
+    async fn check(&self, _: &rappin::CommandContext) -> rappin::Result<bool> {
         record(&self.0, "check");
-        true
+        Ok(true)
     }
     async fn on_message(&self, _: &MessageContext) -> rappin::Result<rappin::MessageDisposition> {
         record(&self.0, "cog");

@@ -112,7 +112,8 @@ explains failed replies, structured causes and cursor barriers.
 
 `ApiExt::set_interaction_commands(commands, true)` requests platform slash
 interactions. `BotBuilder::interaction_commands(true)` uses that mode during
-startup and transactional cog publication. Register `on_command_interaction`
+startup and transactional cog publication. Registered commands use `CommandContext` automatically. For unregistered command
+interaction handling, register `on_command_interaction`
 or a cog listener and parse `ctx.args` with `ctx.parse::<A>()`.
 
 These events have their own interaction identity. A server-message gate covers
@@ -144,7 +145,7 @@ WorkerCog::new("forms").on_interaction(|ctx| async move {
 Legacy `Listener::Interaction` retains button-only routing. Use
 `WorkerCog::on_interaction` for the unified typed interaction listener.
 
-Protocol 11 supplies UI callbacks, single-attempt requests and operation identities
+Protocol 12 supplies UI callbacks, single-attempt requests and operation identities
 on every worker route. Rebuild parent and workers together when migrating. Workers
 and build scripts execute trusted code. Keep stdout for IPC.
 

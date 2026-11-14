@@ -113,7 +113,11 @@ pub(crate) struct RequestGuard<'a> {
 }
 impl RequestGuard<'_> {
     pub(crate) fn waiting(&self) -> RequestWait<'_> {
+        self.waiting_for(Duration::MAX)
+    }
+    pub(crate) fn waiting_for(&self, limit: Duration) -> RequestWait<'_> {
         RequestWait {
+            limit,
             telemetry: self.telemetry,
             started: std::time::Instant::now(),
             done: false,
@@ -160,20 +164,21 @@ impl RequestGuard<'_> {
     }
 }
 pub(crate) struct RequestWait<'a> {
+    limit: Duration,
     telemetry: &'a RequestTelemetry,
     started: std::time::Instant,
     done: bool,
 }
 impl RequestWait<'_> {
     pub(crate) fn finish(mut self, duration: Duration) {
-        self.telemetry.lock().total_rate_limit_wait += duration;
+        self.telemetry.lock().total_rate_limit_wait += duration.min(self.limit);
         self.done = true;
     }
 }
 impl Drop for RequestWait<'_> {
     fn drop(&mut self) {
         if !self.done {
-            self.telemetry.lock().total_rate_limit_wait += self.started.elapsed();
+            self.telemetry.lock().total_rate_limit_wait += self.started.elapsed().min(self.limit);
         }
     }
 }

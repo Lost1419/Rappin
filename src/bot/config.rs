@@ -18,6 +18,15 @@ pub struct TransportConfig {
     pub api_base: String,
     /// Optional bounded policy for read-only startup and intake outages.
     pub availability: Option<crate::AvailabilityPolicy>,
+    /// Extra GET/HEAD transport attempts when ordinary read recovery is disabled.
+    /// Defaults to three and remains separate from startup/intake availability.
+    pub max_read_retries: u32,
+    /// Extra attempts for explicitly known-unapplied, server-advised mutations.
+    /// Defaults to three. Unknown writes are never replayed automatically.
+    pub max_write_retries: u32,
+    /// Bounded recovery for handler/client GET/HEAD requests, including workers.
+    /// Enabled with the default policy. Each episode owns its read-attempt budget.
+    pub read_availability: Option<crate::AvailabilityPolicy>,
     /// Shared/server-advised rate-limit waiting budget, separate from outages.
     pub max_retry_wait: Duration,
     /// Known-host HTTP fallback. Custom origins stay confined to their origin.
@@ -40,7 +49,10 @@ impl TransportConfig {
             mode: crate::TransportMode::Polling,
             gateway_url: None,
             api_base: crate::DEFAULT_API_BASE.into(),
-            availability: None,
+            availability: Some(crate::AvailabilityPolicy::default()),
+            max_read_retries: 3,
+            max_write_retries: 3,
+            read_availability: Some(crate::AvailabilityPolicy::default()),
             max_retry_wait: Duration::from_secs(30),
             api_fallback: true,
         }

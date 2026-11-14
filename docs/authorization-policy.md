@@ -173,7 +173,7 @@ not mean the outer unknown decision is a requester-denied result.
 The [policy module](../examples/access_policy/policy.rs) includes compiled helpers:
 
 - `execute(api, context, call)` works with any public `Api` implementation.
-- `native(ctx, call)` derives the server/requester from `MessageContext`.
+- `command(ctx, call)` derives the server/requester from `CommandContext` for native and worker delivery.
 - `native_command(binding)` binds a serializable permanent command without
   modifying its metadata. Use the binding's existing `preflight` and the ordinary
   cog install/reload path; native aliases remain part of the binding.

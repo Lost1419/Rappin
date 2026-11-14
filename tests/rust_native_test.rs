@@ -96,7 +96,7 @@ async fn typed_routing_aliases_subcommands_prefixes_help_and_denials() {
                 async move {
                     assert_eq!(roll.sides.0, 20);
                     assert_eq!(roll.label.as_deref(), Some("two words"));
-                    assert!(ctx.argv.len() <= 2);
+                    assert!(ctx.message().expect("message tokens").argv.len() <= 2);
                     called.fetch_add(1, Ordering::SeqCst);
                     Ok(())
                 }
@@ -365,7 +365,13 @@ async fn checks_refresh_membership_and_fail_closed_on_unassigned_roles() {
     );
     let mut message: MessageEvent = serde_json::from_value(raw(1, "hello").data).unwrap();
     message.server_id = Some(server);
-    let ctx = MessageContext::new(client, message, None, String::new(), None);
+    let ctx = CommandContext::from(MessageContext::new(
+        client,
+        message,
+        None,
+        String::new(),
+        None,
+    ));
     assert!(Check::permissions([Permission::manage_messages()])
         .check(&ctx)
         .await
@@ -450,7 +456,12 @@ async fn pipeline_keeps_receiving_for_waiting_handler_and_commits_in_order() {
             let registered = registered.clone();
             let path = p.clone();
             async move {
-                let reply = ctx.replies().timeout(Duration::from_secs(2)).subscribe()?;
+                let reply = ctx
+                    .message()
+                    .expect("message collector")
+                    .replies()
+                    .timeout(Duration::from_secs(2))
+                    .subscribe()?;
                 registered.notify_one();
                 let answer = reply.wait().await?;
                 assert_eq!(answer.content.as_deref(), Some("answer"));
@@ -583,6 +594,7 @@ async fn server_retry_advice_is_shared_between_client_clones_and_observed() {
     .await;
     let client = Client::builder("secret")
         .base_url(base)
+        .without_read_recovery()
         .max_retries(0)
         .build();
     let result: Result<serde_json::Value> = client
@@ -700,7 +712,7 @@ async fn concurrency_one_orders_handlers_across_batch_boundaries() {
             async move {
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 let mut ids = seen.lock().await;
-                ids.push(ctx.message_id());
+                ids.push(ctx.message().expect("message identity").message_id());
                 if ids.len() == 3 {
                     ctx.bot().unwrap().stop();
                 }

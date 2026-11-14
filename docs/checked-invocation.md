@@ -80,11 +80,11 @@ composition preserves this bound; detached execution is rejected.
 
 The API requires no optional feature for native commands. Targets installed with
 `hot-reload` use the existing parent-owned worker proxy, authorization context and
-structured error protocol; gateway event intake remains optional. There is no
-protocol bump and existing workers remain compatible. Worker metadata does not
-claim to expose an executable read-only parser/check chain: those checks are
-reported as deferred and run inside the worker at execution. Existing worker
-restrictions on group/alias registration still apply. This API is on `BotHandle`
+structured error protocol 12; gateway event intake remains optional. Rebuild the
+parent and workers together. Worker metadata can supply a pure argument schema
+for preparation. Worker checks and unavailable parsers are reported as deferred
+and run inside the worker at execution. Command specs support aliases and groups.
+This API is on `BotHandle`
 in the parent, not a worker-to-parent nested invocation RPC.
 
 See [the runnable example](../examples/checked_invocation.rs):
@@ -155,7 +155,7 @@ makes no API request idempotent and does not make a payment safe to resend.
 
 ### Workers and compatibility
 
-Workers require `hot-reload` and protocol 11. Every worker supports operation
+Workers require `hot-reload` and protocol 12. Every worker supports operation
 identities, single-attempt API requests and UI callbacks. Rebuild the parent and
 workers together. The old `operation_identity`, `single_attempt_api` and `ui_api`
 capability switches are removed. Consumer operation IDs retain their separate
@@ -166,8 +166,10 @@ use rappin::{hot_reload::WorkerCog, Result};
 async fn worker() -> Result<()> {
     WorkerCog::new("records")
         .command("record", "Record a recipient", |ctx| async move {
-            let operation = ctx.operation_id(); // Option<&OperationId>
-            let message = ctx.event.message().expect("command message");
+            let operation = ctx.operation_id(); // Option<OperationId>
+            let worker = ctx.worker().expect("worker command");
+            let message = worker.event.message().ok_or_else(||
+                rappin::CommandError::Denied("A message command is required".into()))?;
             // Apply consumer authorization and durable journal policy here.
             // operation is metadata; message still carries the original identity.
             let _ = (operation, message, ctx.args());
@@ -178,10 +180,10 @@ async fn worker() -> Result<()> {
 
 The ID travels in the private parent invocation envelope; the public
 `CogEvent::Command` layout is unchanged. `WorkerContext::operation_id()` reads an
-invocation snapshot. A v8 worker accepts it only on command frames. Preparation
-and direct invocation reject identified calls to older workers before executing
-a worker handler; IDs are never silently dropped. Prepared plans cannot bypass
-this check by reloading to an older worker. Parent-side checked invocation can
+invocation snapshot. Protocol 12 accepts it only on message-command frames.
+Older workers are rejected at candidate startup before routes are published;
+IDs are never silently dropped. Prepared plans cannot bypass installed binding
+and execution checks after reload. Parent-side checked invocation can
 target workers; there is still no worker-to-parent nested invocation RPC.
 
 Run the standalone native consumer example with:

@@ -37,7 +37,7 @@ impl Project {
         marker: Option<&Path>,
         listeners: &[&str],
     ) {
-        let ready = json!({"op":"ready","protocol":11,"manifest":{"name":"fixture","commands":commands.iter().map(|n|Command::new(*n,version)).collect::<Vec<_>>(),"buttons":[format!("{version}:")],"listeners":listeners}});
+        let ready = json!({"op":"ready","protocol":12,"manifest":{"name":"fixture","commands":commands.iter().map(|n|Command::new(*n,version)).collect::<Vec<_>>(),"buttons":[format!("{version}:")],"listeners":listeners}});
         let api = json!({"op":"api","method":"POST","path":"/channels/00000000-0000-0000-0000-000000000000/messages","body":{"content":version}});
         let source=r#"
 use std::io::{BufRead, Write};
@@ -669,8 +669,21 @@ async fn main()->Result<()> {
         .log(false)
         .command("prepare", "Prepare runtime schema", |ctx| async move {
             let bot = ctx.bot().unwrap();
-            assert!(bot.prepare_invocation(&ctx, "dynamic", "11").await.is_err());
-            let plan = bot.prepare_invocation(&ctx, "dynamic", "3").await?;
+            assert!(bot
+                .prepare_invocation(
+                    ctx.message().expect("message-origin invocation"),
+                    "dynamic",
+                    "11"
+                )
+                .await
+                .is_err());
+            let plan = bot
+                .prepare_invocation(
+                    ctx.message().expect("message-origin invocation"),
+                    "dynamic",
+                    "3",
+                )
+                .await?;
             assert!(plan
                 .report()
                 .assessed
@@ -1038,6 +1051,11 @@ async fn candidate_timeout_exit_and_protocol_phases_are_explicit() {
         ),
         (
             11,
+            vec![Command::new("ping", "test")],
+            rappin::ReloadPhase::Protocol,
+        ),
+        (
+            12,
             vec![Command::new("INVALID!", "test")],
             rappin::ReloadPhase::Registration,
         ),
@@ -1075,7 +1093,7 @@ async fn structured_candidate_failure_crosses_worker_and_callback_without_implic
     let original = Error::HotReload {
         failure: Box::new(failure.clone()),
     };
-    let ready = json!({"op":"ready","protocol":11,"manifest":{"name":"fixture","commands":[Command::new("proposal","test")],"buttons":[],"listeners":[]}}).to_string();
+    let ready = json!({"op":"ready","protocol":12,"manifest":{"name":"fixture","commands":[Command::new("proposal","test")],"buttons":[],"listeners":[]}}).to_string();
     let done = json!({"op":"done","error":original.to_remote()}).to_string();
     let source = format!(
         r#"use std::io::{{BufRead,Write}};fn main() {{ println!("{{}}",{ready:?});std::io::stdout().flush().unwrap();for line in std::io::stdin().lock().lines() {{ if line.unwrap().contains("shutdown") {{break;}} println!("{{}}",{done:?}); std::io::stdout().flush().unwrap(); }} }}"#
@@ -1353,7 +1371,8 @@ async fn main() -> Result<()> {
  .state(Arc::new(AtomicU32::new(0)))
  .command_spec(CommandSpec::<Roll>::new("math roll","Roll").alias("roll").check(Check::server_only()), |ctx,args|async move {
     let count = ctx.state::<AtomicU32>()?.fetch_add(1,Ordering::SeqCst)+1;
-    let id = ctx.operation_id().unwrap().as_str();
+    let operation = ctx.operation_id().unwrap();
+    let id = operation.as_str();
     ctx.reply(format!("{id}:d{}:count{count}",args.sides)).await
  })
  .command_spec(CommandSpec::<()>::new("member","Role check").check(Check::roles(["00000000-0000-0000-0000-000000000000".parse().unwrap()])), |ctx,()|async move {
@@ -1390,10 +1409,17 @@ async fn main() -> Result<()> {
         .message_gate(|_| async { Ok(MessageDisposition::Continue) })
         .command("plan", "Prepare the full plan", |ctx| async move {
             let bot = ctx.bot().unwrap();
-            assert!(bot.prepare_invocation(&ctx, "roll", "101").await.is_err());
+            assert!(bot
+                .prepare_invocation(
+                    ctx.message().expect("message-origin invocation"),
+                    "roll",
+                    "101"
+                )
+                .await
+                .is_err());
             let a = bot
                 .prepare_invocation_with_operation_id(
-                    &ctx,
+                    ctx.message().expect("message-origin invocation"),
                     "roll",
                     "20",
                     OperationId::new("step/a")?,
@@ -1401,7 +1427,7 @@ async fn main() -> Result<()> {
                 .await?;
             let b = bot
                 .prepare_invocation_with_operation_id(
-                    &ctx,
+                    ctx.message().expect("message-origin invocation"),
                     "math roll",
                     "30",
                     OperationId::new("step/b")?,
@@ -1419,9 +1445,14 @@ async fn main() -> Result<()> {
                 .any(|check| check.contains("argument schema")));
             bot.invoke_prepared(a).await.into_result()?;
             bot.invoke_prepared(b).await.into_result()?;
-            bot.invoke_command_with_operation_id(&ctx, "roll", "20", OperationId::new("step/a")?)
-                .await
-                .into_result()
+            bot.invoke_command_with_operation_id(
+                ctx.message().expect("message-origin invocation"),
+                "roll",
+                "20",
+                OperationId::new("step/a")?,
+            )
+            .await
+            .into_result()
         })
         .build()
         .unwrap();

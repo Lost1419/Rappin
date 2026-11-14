@@ -127,7 +127,9 @@ async fn simultaneous_webhooks_polling_sparse_ids_conflicts_and_identity_are_sha
         .command("ping", "record", move |ctx| {
             let c = c.clone();
             async move {
-                c.lock().unwrap().push(ctx.event.id);
+                c.lock()
+                    .unwrap()
+                    .push(ctx.message().expect("message identity").event.id);
                 Ok(())
             }
         })
@@ -534,6 +536,8 @@ async fn collectors_keep_receiving_with_one_handler_and_duplicate_buttons_ack_on
             let r = r.clone();
             async move {
                 let collector = ctx
+                    .message()
+                    .expect("message collector")
                     .replies()
                     .filter(|message| message.content.as_deref() == Some("answer"))
                     .timeout(Duration::from_secs(2))

@@ -38,7 +38,7 @@ Prefix resolution and database ownership are unchanged.
 
 ## One API interface for native and worker code
 
-`Api` is implemented by `Client`, `MessageContext`, `InteractionContext`,
+`Api` is implemented by `Client`, `CommandContext`, `MessageContext`, `InteractionContext`,
 `WorkerContext` and `Arc<T: Api>`. It is object-safe; generic helpers can instead
 use `ApiExt::api_json` for typed decoding:
 
@@ -55,7 +55,7 @@ Requests retain the configured origin/path restrictions. Workers proxy through
 the parent and receive no credential getter. Custom implementations remain an
 application trust boundary.
 
-Protocol 11 carries `RemoteError` with kind, message, HTTP status, retry hints,
+Protocol 12 carries `RemoteError` with kind, message, HTTP status, retry hints,
 partial receipts and uncertain outcomes. Error JSON is redacted before crossing
 the parent/worker boundary. Rebuild both executables together. Unsupported
 protocol versions fail at candidate startup. The explicit

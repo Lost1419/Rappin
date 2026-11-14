@@ -1,7 +1,7 @@
 # Event completion, recovery and reload
 
 These instructions target the 2.0 development branch. Use version-matched docs
-for an existing 0.1 dependency. Availability recovery is opt-in. Do not change transport,
+for an existing 0.1 dependency. Bounded read availability recovery is enabled by default. Do not change transport,
 retry settings or failure completion policy as an unrelated implementation choice.
 
 ## Choose features and transport
@@ -49,23 +49,27 @@ application-owned durable receipts for at-least-once delivery across restarts.
 
 ## Read availability
 
-Set `settings.transport.availability = Some(AvailabilityPolicy::default())` in
-`BotBuilder::configure` when
-bounded startup/intake recovery is wanted. Customize attempts, elapsed deadline,
-backoff and jitter. Allow more than the normal 25-second poll duration in the
-elapsed budget. `BotHandle::stop()` cancels reads/backoff.
+Startup/intake recovery and ordinary GET/HEAD recovery are enabled by default.
+Customize `settings.transport.availability` and `read_availability` independently.
+Each owns bounded attempts, elapsed time, backoff and jitter. Set the relevant
+policy to `None` to disable it. Authentication/configuration/JSON decode failures
+remain terminal. Ordinary read recovery covers response acquisition.
 
-Only identity/cursor startup reads and event intake are covered, including
-transient edge 520/521/522 errors. Authentication/configuration/decode and exhausted
-client wait budgets stay terminal. The policy owns attempts and suppresses nested
-client replays. One episode shares `max_retry_wait` for advised/shared waits;
-additional outage backoff uses the separate elapsed budget. Successful reads end
-an episode. Never wrap handlers or mutations in an availability retry loop.
+One episode shares `max_retry_wait` for advised/shared waits. Additional outage
+backoff has its own elapsed budget. Explicit `request_once` bypasses recovery.
+Known-unapplied write retries use `max_write_retries`, independently of reads.
+Never retry handlers, publication, storage or uncertain mutations as recovery.
 
-Observe `availability_status()` / `subscribe_availability()` and recover
-`AvailabilityFailure` via `availability_failure()`. Snapshot notifications can
-coalesce; cumulative counters retain attempts/retries. Normal API retries and
-existing defaults remain unchanged outside those opt-in reads.
+Inspect bot `availability_status()` for startup/intake, or client
+`read_availability_status()` for ordinary native/worker reads. Watch notifications
+can coalesce while cumulative counters retain every attempt. `stop()` interrupts
+startup/intake reads and drains accepted handlers. Dropping a request cancels its
+read episode. Preserve structured exhaustion, failed replies and checkpoint barriers.
+
+Commands and command checks use `CommandContext` across native/worker message
+and interaction delivery. Reuse one CommandSpec for parsing/checks/help and call
+Api/ApiExt directly. Preserve optional actor/channel/server facts. Use original
+message context only for message-specific behavior or checked invocation.
 
 ## Reload Rust sources
 
@@ -75,7 +79,7 @@ restarting the parent, put a cog in a separate `WorkerCog` executable and use
 `WorkerProject` / `HotReload`. Parent credentials stay in the parent. Worker state
 resets; preserve durable state in the application's storage.
 
-Protocol 11 is required by the parent and every worker. Rebuild both together.
+Protocol 12 is required by the parent and every worker. Rebuild both together.
 All routes support UI callbacks, operation identities and single-attempt requests.
 Keep worker stdout for IPC and sanitized diagnostics on stderr.
 
@@ -98,7 +102,7 @@ a checkout also includes `examples/message_gate.rs` and hot-reload examples.
 Use `CreateMessage`, `EditMessage` and `ApiExt` for messages, nullable updates,
 select menus and modal forms. Native `on_select`, `on_modal` and
 `on_command_interaction` receive the shared `InteractionContext`. Cog and worker
-listeners use `on_interaction`. Protocol 11 provides UI, single-attempt API and operation-identity support
+listeners use `on_interaction`. Protocol 12 provides UI, single-attempt API and operation-identity support
 on every worker route. Rebuild parent and workers together. The parent must enable `interactive_events(true)`.
 Slash interactions have their own authorization boundary. A modal must precede
 acknowledgement or another response. Propagate incomplete work through the

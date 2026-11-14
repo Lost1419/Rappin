@@ -14,7 +14,11 @@ async fn main() -> Result<()> {
             "Reply through the selected API transport",
             |ctx| async move {
                 ctx.reply("pong").await?;
-                let status = ctx.client.gateway_request_status();
+                let status = ctx
+                    .bot()
+                    .expect("native command controller")
+                    .client()
+                    .gateway_request_status();
                 eprintln!(
                     "JSON transport: {:?}; gateway requests enabled: {}",
                     status.selected, status.capability

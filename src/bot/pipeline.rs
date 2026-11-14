@@ -83,7 +83,7 @@ impl Bot {
         let max_age = self.handle.inner.max_age;
         let capacity = self.handle.inner.pending_batches;
         let auto_ack = self.handle.inner.auto_ack_after;
-        let availability = self.handle.inner.availability_policy.clone();
+        let availability = self.availability_policy.clone();
         let availability_handle = self.handle.clone();
         let (sender, mut receiver) =
             mpsc::channel::<std::result::Result<PreparedBatch, IntakeFailure>>(capacity);
@@ -156,7 +156,7 @@ impl Bot {
                         };
                         let result = match &mut episode {
                             Some(episode) => episode.attempt(read).await,
-                            None => read.await,
+                            None => crate::client::transport_read(read).await,
                         };
                         match result {
                             Err(error) => match &mut episode {

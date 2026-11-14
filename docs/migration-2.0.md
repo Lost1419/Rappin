@@ -129,12 +129,13 @@ retain the event barrier. Logging an error alone cannot establish completion.
 
 ## Rebuild workers
 
-All workers require protocol 11. Rebuild the parent and every worker together.
-Protocols 1–10 are rejected during startup before candidate routes are published.
+All workers require protocol 12. Rebuild the parent and every worker together.
+Protocols 1–11 are rejected during startup before candidate routes are published.
 UI callbacks, operation identities and single-attempt requests are available on
 every route. Remove `.ui_api()`, `.operation_identity()` and `.single_attempt_api()`.
 Typed and runtime worker commands share registration, aliases, groups and schemas.
-Custom `CommandCheck` implementations provide `check_worker`. Preparation reports
+Custom `CommandCheck` implementations use one `check(&CommandContext)` for native
+and worker commands. Preparation reports
 worker checks as deferred and execution evaluates them before the handler.
 
 `InteractionCallback` now stores its payload in `message: EditMessage`. Existing
@@ -148,3 +149,41 @@ Initialize worker state with `WorkerCog::state`. Process-local values are create
 by each generation. Your application owns database state and durable receipts.
 Consumer operation IDs, authenticated message provenance and uncertain-write
 outcomes retain their separate meanings across command execution and callbacks.
+
+## Default read recovery and command contexts
+
+`Bot::run` now supervises startup/intake reads by default. Ordinary Client and
+handler GET/HEAD requests also have bounded recovery. Configure the two policies
+under `TransportConfig::{availability, read_availability}`. Set either to `None`
+to disable that policy. Configure known-unapplied write attempts independently
+with `max_write_retries`. Explicit `request_once` still requests one attempt.
+
+Command handlers, command checks and capability bindings now use `CommandContext`.
+`CommandSpec::bind`, native/cog `command_spec` and worker `command_spec` share the
+same handler/check signatures. Slash interaction publication is enabled by default.
+There is one command registration path across message and interaction delivery.
+
+| Previous command code | Current command code |
+| --- | --- |
+| `ctx.args` | `ctx.args()` |
+| `ctx.command` | `ctx.command_name()` |
+| `ctx.client` / worker `api(...)` | Direct `Api`/`ApiExt` methods on `ctx` |
+| `ctx.event` | `ctx.message()`, `ctx.interaction()` or `ctx.worker()` |
+| Infallible `Cog::check(&MessageContext)` | `Cog::check(&CommandContext) -> Result<bool>` |
+| Separate `check_worker` | One `CommandCheck::check(&CommandContext)` |
+| Message-only command failure callback | `on_command_failure(CommandContext, HandlerFailure)` |
+
+Actor/channel/server getters return `Option<Uuid>` when the original delivery
+can omit that fact. Handle missing identity before authorizing or selecting a
+mutation target. `reply` and `reply_with` return completion for either reply route.
+Use `say` for a sent-message receipt, or borrow the original message context for
+message-specific APIs. Paginator/confirmation replies return their helper.
+`prompt_for_reply` supports native and worker commands with registration before
+prompt publication. Process-local `state(Arc<T>)` works in every command context.
+
+Checked invocation still requires an authenticated message. Pass
+`ctx.message().ok_or_else(...)` from a command, or the original `MessageContext`
+from a listener. Operation IDs and message identity retain their existing scope.
+Duplicate command/alias definitions fail at build/registration before network I/O.
+Worker protocol 12 separates resolved interaction command metadata from its raw
+source. Upgrade and rebuild parent and all workers together.

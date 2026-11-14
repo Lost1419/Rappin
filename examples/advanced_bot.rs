@@ -71,11 +71,22 @@ async fn main() -> Result<()> {
             "servers",
             "List cached servers without HTTP overhead",
             |ctx| async move {
-                let cached = ctx.cache().get_servers().await;
+                let cached = ctx
+                    .bot()
+                    .expect("native command controller")
+                    .client()
+                    .cache()
+                    .get_servers()
+                    .await;
                 if cached.is_empty() {
                     ctx.reply("No servers cached yet. Fetching from API...")
                         .await?;
-                    let servers = ctx.client.get_servers().await?;
+                    let servers = ctx
+                        .bot()
+                        .expect("native command controller")
+                        .client()
+                        .get_servers()
+                        .await?;
                     ctx.reply(format!("Fetched & cached {} server(s)!", servers.len()))
                         .await?;
                 } else {

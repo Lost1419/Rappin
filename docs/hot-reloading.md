@@ -260,7 +260,7 @@ protocol compatibility. The worker example includes `roll` and `question`.
 
 ### Worker transport and command definitions
 
-Protocol 11 carries structured errors, message completion, operation identities,
+Protocol 12 carries structured errors, message completion, operation identities,
 permission lookups, UI callbacks, public reads and bounded uploads. Upload chunks
 are 64 KiB, total upload data is bounded to 12 MiB and ordinary frames to 1 MiB.
 Rebuild the parent and every worker together when migrating from 0.1 or an earlier
@@ -270,7 +270,7 @@ Use `command_spec` for typed definitions, `command_typed` for its single-call
 convenience form, or `dynamic_command` for a runtime schema. They share registration,
 alias/group routing and help metadata. Preparation validates available pure
 argument schemas and reports worker checks as deferred. Execution parses again
-and runs checks before the handler. Custom checks implement `check_worker`.
+and runs checks before the handler. Custom checks implement one `CommandCheck::check` over `CommandContext`.
 
 Single-attempt requests, UI callbacks and operation identities are always available
 in the worker transport. The parent opts into extended event intake using

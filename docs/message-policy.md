@@ -130,7 +130,7 @@ async fn worker() -> Result<()> {
 ```
 
 This registers `Listener::ServerMessage` with explicit completion outcomes under
-protocol 11. `listen(Listener::Message, ...)` completes after its fallible handler
+protocol 12. `listen(Listener::Message, ...)` completes after its fallible handler
 returns successfully. A worker chooses one message listener contract. Missing or
 invalid completion frames retain an uncertain barrier and poison the exchange.
 Reconcile unfinished effects before replacing a failed worker. Workers and build

@@ -528,7 +528,7 @@ impl DynamicCommandSpec {
     /// ```
     pub fn bind<F, Fut>(self, handler: F) -> Result<RegisteredCommand>
     where
-        F: Fn(MessageContext, CommandValues) -> Fut + Send + Sync + 'static,
+        F: Fn(CommandContext, CommandValues) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         self.schema.validate()?;
@@ -548,7 +548,7 @@ impl DynamicCommandSpec {
                 let checks = checks.clone();
                 let handler = handler.clone();
                 Box::pin(async move {
-                    let values = schema.parse(&ctx.args)?;
+                    let values = schema.parse(ctx.args())?;
                     for check in checks.iter() {
                         check.check(&ctx).await?;
                     }

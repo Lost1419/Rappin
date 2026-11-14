@@ -27,7 +27,8 @@ async fn seed(bot: &Bot) {
         .set_me(serde_json::from_value(support::profile()).unwrap())
         .await;
 }
-fn scope(ctx: &MessageContext) {
+fn scope(command: &CommandContext) {
+    let ctx = command.message().expect("authenticated message");
     assert_eq!(ctx.message_id(), Uuid::from_u128(1));
     assert_eq!(ctx.channel_id(), Uuid::from_u128(2));
     assert_eq!(ctx.server_id(), Some(Uuid::from_u128(3)));
@@ -58,7 +59,7 @@ fn bounded_opaque_ids_validate_on_construction_and_deserialization() {
 async fn complete_plan_keys_reach_preparation_checks_execution_and_consumer_journal() {
     struct Audit(Arc<Mutex<Vec<(String, bool)>>>);
     impl CommandCheck for Audit {
-        fn check<'a>(&'a self, ctx: &'a MessageContext) -> commands::CheckFuture<'a> {
+        fn check<'a>(&'a self, ctx: &'a rappin::CommandContext) -> commands::CheckFuture<'a> {
             Box::pin(async move {
                 scope(ctx);
                 self.0
@@ -68,7 +69,10 @@ async fn complete_plan_keys_reach_preparation_checks_execution_and_consumer_jour
                 Ok(())
             })
         }
-        fn prepare<'a>(&'a self, ctx: &'a MessageContext) -> Option<commands::CheckFuture<'a>> {
+        fn prepare<'a>(
+            &'a self,
+            ctx: &'a rappin::CommandContext,
+        ) -> Option<commands::CheckFuture<'a>> {
             Some(Box::pin(async move {
                 scope(ctx);
                 self.0
@@ -120,10 +124,20 @@ async fn complete_plan_keys_reach_preparation_checks_execution_and_consumer_jour
                 assert_eq!(ctx.operation_id(), None);
                 let bot = ctx.bot().unwrap();
                 let first = bot
-                    .prepare_invocation_with_operation_id(&ctx, "rec", "alice", id("step/1"))
+                    .prepare_invocation_with_operation_id(
+                        ctx.message().expect("message-origin invocation"),
+                        "rec",
+                        "alice",
+                        id("step/1"),
+                    )
                     .await?;
                 let second = bot
-                    .prepare_invocation_with_operation_id(&ctx, "record", "bob", id("step/2"))
+                    .prepare_invocation_with_operation_id(
+                        ctx.message().expect("message-origin invocation"),
+                        "record",
+                        "bob",
+                        id("step/2"),
+                    )
                     .await?;
                 assert_eq!(first.operation_id(), Some(&id("step/1")));
                 assert_eq!(second.operation_id(), Some(&id("step/2")));
@@ -136,11 +150,21 @@ async fn complete_plan_keys_reach_preparation_checks_execution_and_consumer_jour
                     result.into_result()?;
                 }
                 // Stable replay/conflict behavior belongs to the consumer journal, not the SDK.
-                bot.invoke_command_with_operation_id(&ctx, "record", "alice", id("step/1"))
-                    .await
-                    .into_result()?;
+                bot.invoke_command_with_operation_id(
+                    ctx.message().expect("message-origin invocation"),
+                    "record",
+                    "alice",
+                    id("step/1"),
+                )
+                .await
+                .into_result()?;
                 let conflict = bot
-                    .invoke_command_with_operation_id(&ctx, "record", "charlie", id("step/1"))
+                    .invoke_command_with_operation_id(
+                        ctx.message().expect("message-origin invocation"),
+                        "record",
+                        "charlie",
+                        id("step/1"),
+                    )
                     .await;
                 assert_eq!(conflict.status, InvocationStatus::Denied);
                 assert_eq!(count.load(Ordering::SeqCst), 2);
@@ -179,27 +203,60 @@ async fn nesting_inherits_or_overrides_and_restores_scope_without_deduplicating(
         .command("middle", "middle", |ctx| async move {
             let bot = ctx.bot().unwrap();
             assert_eq!(ctx.operation_id(), Some(id("parent")));
-            let inherited = bot.prepare_invocation(&ctx, "leaf", "").await?;
+            let inherited = bot
+                .prepare_invocation(
+                    ctx.message().expect("message-origin invocation"),
+                    "leaf",
+                    "",
+                )
+                .await?;
             assert_eq!(inherited.operation_id(), Some(&id("parent")));
             bot.invoke_prepared(inherited).await.into_result()?;
-            bot.invoke_command_with_operation_id(&ctx, "leaf", "", id("child"))
-                .await
-                .into_result()?;
+            bot.invoke_command_with_operation_id(
+                ctx.message().expect("message-origin invocation"),
+                "leaf",
+                "",
+                id("child"),
+            )
+            .await
+            .into_result()?;
             assert_eq!(ctx.operation_id(), Some(id("parent")));
-            bot.invoke_command(&ctx, "leaf", "").await.into_result()
+            bot.invoke_command(
+                ctx.message().expect("message-origin invocation"),
+                "leaf",
+                "",
+            )
+            .await
+            .into_result()
         })
         .command("outer", "outer", |ctx| async move {
             let bot = ctx.bot().unwrap();
-            bot.invoke_command(&ctx, "leaf", "").await.into_result()?;
-            bot.invoke_command_with_operation_id(&ctx, "middle", "", id("parent"))
-                .await
-                .into_result()?;
+            bot.invoke_command(
+                ctx.message().expect("message-origin invocation"),
+                "leaf",
+                "",
+            )
+            .await
+            .into_result()?;
+            bot.invoke_command_with_operation_id(
+                ctx.message().expect("message-origin invocation"),
+                "middle",
+                "",
+                id("parent"),
+            )
+            .await
+            .into_result()?;
             assert_eq!(ctx.operation_id(), None);
             // A stable key by itself does not suppress a handler.
             for _ in 0..2 {
-                bot.invoke_command_with_operation_id(&ctx, "leaf", "", id("same"))
-                    .await
-                    .into_result()?;
+                bot.invoke_command_with_operation_id(
+                    ctx.message().expect("message-origin invocation"),
+                    "leaf",
+                    "",
+                    id("same"),
+                )
+                .await
+                .into_result()?;
             }
             let detached = ctx.clone();
             assert_eq!(
@@ -238,7 +295,7 @@ async fn operation_metadata_does_not_bypass_gate_cog_checks_or_revocation() {
         .message_gate(move |ctx| {
             let a = a.clone();
             async move {
-                scope(&ctx);
+                scope(&ctx.clone().into());
                 Ok(if a.load(Ordering::SeqCst) {
                     MessageDisposition::Continue
                 } else {
@@ -258,7 +315,12 @@ async fn operation_metadata_does_not_bypass_gate_cog_checks_or_revocation() {
             async move {
                 let bot = ctx.bot().unwrap();
                 let plan = bot
-                    .prepare_invocation_with_operation_id(&ctx, "target", "", id("key"))
+                    .prepare_invocation_with_operation_id(
+                        ctx.message().expect("message-origin invocation"),
+                        "target",
+                        "",
+                        id("key"),
+                    )
                     .await?;
                 allowed.store(false, Ordering::SeqCst);
                 let out = bot.invoke_prepared(plan).await;
@@ -266,12 +328,17 @@ async fn operation_metadata_does_not_bypass_gate_cog_checks_or_revocation() {
                 assert_eq!(out.operation_id(), Some(&id("key")));
                 allowed.store(true, Ordering::SeqCst);
                 assert_eq!(
-                    bot.invoke_command_with_operation_id(&ctx, "private", "", id("key"))
-                        .await
-                        .status,
+                    bot.invoke_command_with_operation_id(
+                        ctx.message().expect("message-origin invocation"),
+                        "private",
+                        "",
+                        id("key")
+                    )
+                    .await
+                    .status,
                     InvocationStatus::Denied
                 );
-                let mut forged = ctx.clone();
+                let mut forged = ctx.message().unwrap().clone();
                 forged.event.author_id = Uuid::nil();
                 let denied = bot
                     .invoke_command_with_operation_id(&forged, "target", "", id("key"))
@@ -295,10 +362,10 @@ async fn operation_metadata_does_not_bypass_gate_cog_checks_or_revocation() {
                 panic!("denied handler")
             })]
         }
-        async fn check(&self, ctx: &MessageContext) -> bool {
+        async fn check(&self, ctx: &rappin::CommandContext) -> rappin::Result<bool> {
             scope(ctx);
             assert_eq!(ctx.operation_id(), Some(id("key")));
-            false
+            Ok(false)
         }
     }
     bot.handle().add_cog(Private).await.unwrap();
@@ -333,7 +400,12 @@ async fn partial_uncertain_causes_keep_operation_identity_through_failure_callba
         .command("outer", "outer", |ctx| async move {
             ctx.bot()
                 .unwrap()
-                .invoke_command_with_operation_id(&ctx, "effect", "", id("uncertain-step"))
+                .invoke_command_with_operation_id(
+                    ctx.message().expect("message-origin invocation"),
+                    "effect",
+                    "",
+                    id("uncertain-step"),
+                )
                 .await
                 .into_result()
         })
@@ -383,8 +455,18 @@ async fn concurrent_identified_calls_keep_independent_task_local_metadata() {
         .command("outer", "outer", |ctx| async move {
             let bot = ctx.bot().unwrap();
             let (left, right) = tokio::join!(
-                bot.invoke_command_with_operation_id(&ctx, "leaf", "", id("left")),
-                bot.invoke_command_with_operation_id(&ctx, "leaf", "", id("right")),
+                bot.invoke_command_with_operation_id(
+                    ctx.message().expect("message-origin invocation"),
+                    "leaf",
+                    "",
+                    id("left")
+                ),
+                bot.invoke_command_with_operation_id(
+                    ctx.message().expect("message-origin invocation"),
+                    "leaf",
+                    "",
+                    id("right")
+                ),
             );
             assert_eq!(left.operation_id(), Some(&id("left")));
             assert_eq!(right.operation_id(), Some(&id("right")));

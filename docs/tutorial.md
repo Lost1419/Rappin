@@ -77,8 +77,9 @@ fn add_button(builder: BotBuilder) -> BotBuilder {
 }
 ```
 
-Send `!menu`, click Apple and expect a private confirmation. Message handlers
-receive `MessageContext`; buttons, selects and forms receive `InteractionContext`.
+Send `!menu`, click Apple and expect a private confirmation. Command handlers receive `CommandContext` for either prefix messages or slash
+interactions. Buttons, selects and forms receive `InteractionContext`. Natural-language
+message listeners retain `MessageContext`.
 Interaction replies have deadlines and shared acknowledgement ownership.
 See the [interaction guide](interactions.md) for defer, update, follow-up and modal flows.
 
@@ -156,7 +157,7 @@ the installed routes serving and exposes structured diagnostics.
 Worker command specs support the same argument metadata, aliases and groups.
 Built-in checks run through the parent-authenticated API. Custom checks need a
 worker implementation. Read-only preparation reports worker checks as deferred.
-These specs require protocol 11. Build the parent and workers from the same
+These specs require protocol 12. Build the parent and workers from the same
 development revision. Compilation executes trusted build scripts and procedural macros.
 
 ## 8. Understand completion before deploying

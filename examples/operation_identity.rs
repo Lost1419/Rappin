@@ -37,7 +37,8 @@ async fn main() -> Result<()> {
                     // Run application authorization here even for a previously completed key.
                     let key = (
                         ctx.server_id().expect("server check"),
-                        ctx.author_id(),
+                        ctx.author_id()
+                            .ok_or_else(|| CommandError::Denied("Requester required".into()))?,
                         operation,
                     );
                     let mut rows = journal.lock().await;
@@ -62,6 +63,9 @@ async fn main() -> Result<()> {
             "record-plan",
             "Assess and execute two records",
             |ctx| async move {
+                let message = ctx
+                    .message()
+                    .ok_or_else(|| CommandError::Denied("Send !record-plan as a message".into()))?;
                 let bot = ctx.bot().expect("framework context");
                 // In production, load the saved plan and stable IDs from consumer storage.
                 // These IDs remain distinct while authenticated message provenance stays intact.
@@ -69,10 +73,10 @@ async fn main() -> Result<()> {
                 for (step, recipient) in [("first", "alice"), ("second", "bob")] {
                     plans.push(
                         bot.prepare_invocation_with_operation_id(
-                            &ctx,
+                            message,
                             "record",
                             recipient,
-                            OperationId::new(format!("{}/{step}", ctx.message_id()))?,
+                            OperationId::new(format!("{}/{step}", message.message_id()))?,
                         )
                         .await?,
                     );

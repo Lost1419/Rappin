@@ -30,9 +30,11 @@ per cursor file and a separate file per bot/consumer.
 ## Startup and intake availability
 
 Identify the failing read: startup identity (`GET /me`), initial cursor probe
-(`GET /events` without a saved cursor), or intake. Existing behavior remains unless
-`BotBuilder::availability_policy` is configured. Bounded opt-in recovery includes
-520/521/522, cancellable backoff and reads; it never restarts handlers/processes.
+(`GET /events` without a saved cursor), intake, or a handler/client GET/HEAD request.
+Bounded read recovery is enabled by default. Inspect `TransportConfig::availability`
+for startup/intake and `read_availability` for ordinary native/worker API reads.
+Recovery includes 520/521/522 and cancellable backoff within an episode budget.
+It preserves the running bot and never re-executes handlers or restarts processes.
 
 Inspect `availability_status()` / `subscribe_availability()` for phase, state,
 configured limits, attempts, last cause and cumulative retries/exhaustions.
@@ -51,7 +53,10 @@ Authentication/configuration/decode and exhausted client wait budgets stay termi
 `BotHandle::stop()` cancels reads/backoff. Startup cancellation returns a structured
 availability failure; intake stop drains accepted work and commits only completed
 prefixes. Keep intake failures separate from handler failure callbacks and cursor
-storage errors. Do not add a catch-all retry loop or tune budgets without evidence.
+storage errors. Client read telemetry is available through `read_availability_status()`
+and `subscribe_read_availability()`. Command failures use one CommandContext callback
+across message and interaction delivery. Preserve optional original identity facts.
+Do not add a catch-all retry loop or tune budgets without evidence.
 
 ## Handler failures and stopped intake
 
@@ -119,7 +124,7 @@ candidate stays visible until a changed candidate installs. Use path/phase conte
 for missing files; distinguish transient runtime churn from required source/input
 loss. Do not suppress every ENOENT or repeatedly rebuild to clear an alert.
 
-Check parent and worker revisions. Both require protocol 11 and must be rebuilt
+Check parent and worker revisions. Both require protocol 12 and must be rebuilt
 together. Earlier versions fail at startup. UI callbacks, operation identities
 and single-attempt requests are available on all worker routes. Stdout belongs
 to IPC. Review diagnostics before sharing. Builds, procedural macros and workers
@@ -128,7 +133,7 @@ execute trusted code and can produce effects even when compilation fails.
 API 1.4 computed permission reads can establish requester and bot access
 independently. Use `get_member_permissions` with the actual server/user/channel.
 A missing flag stays unknown. Rollout-related 403 responses concern availability.
-Resource lifecycle worker listeners require protocol 11. See the
+Resource lifecycle worker listeners require protocol 12. See the
 [API 1.4 guide](https://github.com/Lost1419/Rappin/blob/dev/docs/resources.md).
 
 ## API origin

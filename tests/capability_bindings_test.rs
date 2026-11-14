@@ -714,7 +714,8 @@ async fn bound_execute_futures_are_usable_in_native_handlers() {
     let b:OperationCommandBinding=serde_json::from_value(json!({"operation":"list_roles","name":"roles","description":"Roles","fixed_arguments":{"id":server()}})).unwrap();
     let _command = b
         .bind(|ctx, call| async move {
-            let scope = OperationContext::server(ctx.server_id().unwrap(), ctx.author_id());
+            let scope =
+                OperationContext::server(ctx.server_id().unwrap(), ctx.author_id().unwrap());
             call.execute(&ctx, &scope).await?;
             Ok(())
         })

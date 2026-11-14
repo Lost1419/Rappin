@@ -27,11 +27,15 @@ async fn main() -> Result<()> {
             "Inspect your computed channel access",
             |ctx| async move {
                 let server = ctx
-                    .event
-                    .server_id
+                    .server_id()
                     .ok_or_else(|| CommandError::Denied("Use this command in a server".into()))?;
                 let access = ctx
-                    .get_member_permissions(server, ctx.event.author_id, Some(ctx.event.channel_id))
+                    .get_member_permissions(
+                        server,
+                        ctx.author_id()
+                            .ok_or_else(|| CommandError::Denied("Requester required".into()))?,
+                        ctx.channel_id(),
+                    )
                     .await?;
                 ctx.reply(format!(
                     "View channel {:?}, manage messages {:?}",

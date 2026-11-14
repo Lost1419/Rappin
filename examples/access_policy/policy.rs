@@ -167,18 +167,21 @@ pub async fn execute<A: Api + ?Sized>(
         .await
 }
 
-/// For prefix/slash message commands: identities come from the authenticated event.
+/// Native and worker commands retain their authenticated requester and resource scope.
 #[allow(dead_code)]
-pub async fn native(
-    ctx: &rappin::MessageContext,
+pub async fn command(
+    ctx: &rappin::CommandContext,
     call: &ValidatedOperation,
 ) -> Result<OperationResult> {
     let server = ctx
         .server_id()
-        .ok_or_else(|| Error::validation("server", "server message required"))?;
+        .ok_or_else(|| Error::validation("server", "server command required"))?;
+    let requester = ctx
+        .author_id()
+        .ok_or_else(|| Error::validation("requester", "requester required"))?;
     execute(
         ctx,
-        &OperationContext::server(server, ctx.author_id()).freshness(Freshness::Refresh),
+        &OperationContext::server(server, requester).freshness(Freshness::Refresh),
         call,
     )
     .await
@@ -187,31 +190,9 @@ pub async fn native(
 #[allow(dead_code)]
 pub fn native_command(binding: OperationCommandBinding) -> Result<rappin::RegisteredCommand> {
     binding.bind(|ctx, call| async move {
-        native(&ctx, &call).await?;
+        command(&ctx, &call).await?;
         Ok(())
     })
-}
-
-/// Workers borrow their existing authenticated proxy; no token is sent to them.
-#[cfg(feature = "hot-reload")]
-#[allow(dead_code)]
-pub async fn worker(
-    ctx: &rappin::WorkerContext,
-    call: &ValidatedOperation,
-) -> Result<OperationResult> {
-    let message = ctx
-        .event
-        .message()
-        .ok_or_else(|| Error::validation("event", "message command required"))?;
-    let server = message
-        .server_id
-        .ok_or_else(|| Error::validation("server", "server message required"))?;
-    execute(
-        ctx,
-        &OperationContext::server(server, message.author_id).freshness(Freshness::Refresh),
-        call,
-    )
-    .await
 }
 
 #[cfg(feature = "hot-reload")]
@@ -222,7 +203,7 @@ pub fn worker_cog(binding: OperationCommandBinding) -> Result<rappin::WorkerCog>
         let binding = binding.clone();
         async move {
             let call = binding.prepare(&values)?;
-            worker(&ctx, &call).await?;
+            command(&ctx, &call).await?;
             Ok(())
         }
     })

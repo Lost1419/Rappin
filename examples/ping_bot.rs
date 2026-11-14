@@ -25,10 +25,10 @@ async fn main() -> Result<()> {
             Ok(())
         })
         .command("roll", "Roll a die, like /roll 20", |ctx| async move {
-            let sides = ctx
-                .argv
+            let tokens = rappin::commands::tokenize(ctx.args())?;
+            let sides = tokens
                 .first()
-                .and_then(|s| s.parse::<u32>().ok())
+                .and_then(|token| token.value.parse::<u32>().ok())
                 .unwrap_or(6)
                 .clamp(2, 1000);
 
@@ -54,8 +54,7 @@ async fn main() -> Result<()> {
                     Button::link("Yapin' Devs", "https://www.yapin.gg/developers"),
                 ]);
 
-                let msg = CreateMessage::reply("Which fruit do you prefer?", ctx.message_id())
-                    .action_row(row);
+                let msg = CreateMessage::new("Which fruit do you prefer?").action_row(row);
 
                 ctx.reply_with(msg).await?;
                 Ok(())

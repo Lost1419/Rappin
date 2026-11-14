@@ -55,9 +55,9 @@ proptest! {
                     let seen=seen.clone(); let decisions=decisions.clone();
                     async move {
                         let mut seen = seen.lock().unwrap();
-                        let index = seen.len(); seen.push(ctx.event.id);
+                        let index = seen.len(); seen.push(ctx.message().expect("message identity").event.id);
                         if decisions[index] { return Err(Error::Config("fixture failure".into())); }
-                        if index + 1 == decisions.len() { ctx.bot.as_ref().unwrap().stop(); }
+                        if index + 1 == decisions.len() { ctx.bot().unwrap().stop(); }
                         Ok(())
                     }
                 }).build().expect("valid bot configuration");

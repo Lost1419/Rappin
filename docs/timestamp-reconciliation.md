@@ -16,8 +16,8 @@ missing receipts, interaction events, or changed message content/identity.
 All APIs are exported from `rappin` and `rappin::bot`, with **no optional feature**.
 Maintenance runs in the host with a `Client` and the consumer's durable
 `IngressStore`. Existing store implementations still compile; approval fails
-closed until they implement the new atomic hook. Worker protocols stay 4–8;
-workers and their handlers do not participate in maintenance.
+closed until they implement the new atomic hook. Workers and their handlers
+do not participate in this host-side maintenance API.
 
 ```rust,no_run
 use rappin::{Client, IngressStore, OperationId, Result, TimestampReconciliationRequest, prepare_timestamp_reconciliation};

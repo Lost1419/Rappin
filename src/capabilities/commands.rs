@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    ArgumentSchema, ArgumentType, CommandSchema, CommandValues, DynamicCommandSpec, MessageContext,
+    ArgumentSchema, ArgumentType, CommandContext, CommandSchema, CommandValues, DynamicCommandSpec,
     RegisteredCommand,
 };
 use std::{future::Future, sync::Arc};
@@ -286,7 +286,7 @@ impl OperationCommandBinding {
     /// ```
     pub fn bind<F, Fut>(self, handler: F) -> Result<RegisteredCommand>
     where
-        F: Fn(MessageContext, ValidatedOperation) -> Fut + Send + Sync + 'static,
+        F: Fn(CommandContext, ValidatedOperation) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         let schema = self.command_schema()?;

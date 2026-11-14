@@ -193,6 +193,6 @@ runner. It operates on that consumer-owned source of truth; do not export/edit a
 database into it. Database consumers implement the same hook in their own transaction.
 
 Feature `gateway` enables the API response pump. Feature `hot-reload` enables
-executable workers using protocol 11, including `api_once`, UI callbacks and
+executable workers using protocol 12, including `api_once`, UI callbacks and
 operation identities. Native and worker commands run their normal authorization,
 parsing, checks, cooldowns and reply coordination during draining.

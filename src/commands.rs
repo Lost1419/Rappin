@@ -1,5 +1,5 @@
 //! Local command parsing and policy. Yapin's advertised Command remains only a name and description.
-use crate::{cache::Freshness, Error, MessageContext, Result};
+use crate::{cache::Freshness, CommandContext, Error, Result};
 use std::{future::Future, marker::PhantomData, pin::Pin, str::FromStr, sync::Arc, time::Duration};
 use uuid::Uuid;
 mod dynamic;
@@ -717,75 +717,56 @@ pub type CheckFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>
 /// # Example
 ///
 /// ```rust
-/// use rappin::{MessageContext, commands::{CommandCheck, CheckFuture, CommandError}};
+/// use rappin::{CommandContext, commands::{CommandCheck, CheckFuture, CommandError}};
 /// struct ServerOnly;
 /// impl CommandCheck for ServerOnly {
-///     fn check<'a>(&'a self, ctx: &'a MessageContext) -> CheckFuture<'a> {
+///     fn check<'a>(&'a self, ctx: &'a CommandContext) -> CheckFuture<'a> {
 ///         Box::pin(async move {
 ///             if ctx.server_id().is_none() { return Err(CommandError::Denied("Server required".into()).into()); }
 ///             Ok(())
 ///         })
 ///     }
-///     fn prepare<'a>(&'a self, ctx: &'a MessageContext) -> Option<CheckFuture<'a>> { Some(self.check(ctx)) }
+///     fn prepare<'a>(&'a self, ctx: &'a CommandContext) -> Option<CheckFuture<'a>> { Some(self.check(ctx)) }
 /// }
 /// ```
 pub trait CommandCheck: Send + Sync + 'static {
-    /// Evaluate the check inside a worker using its parent-authenticated API.
-    /// Built-in checks support both contexts. A custom check must implement this
-    /// method before being installed on a worker command.
-    ///
-    /// ```rust
-    /// use rappin::{Check, CommandCheck, WorkerContext};
-    /// async fn assess(ctx: &WorkerContext) -> rappin::Result<()> {
-    ///     Check::server_only().check_worker(ctx).await
-    /// }
-    /// ```
-    #[cfg(feature = "hot-reload")]
-    fn check_worker<'a>(&'a self, _ctx: &'a crate::WorkerContext) -> CheckFuture<'a> {
-        Box::pin(async {
-            Err(
-                CommandError::Definition("custom check requires a worker implementation".into())
-                    .into(),
-            )
-        })
-    }
     /// Evaluate current authority before handler execution; execution runs it even after successful preparation.
     ///
     /// # Example
     ///
     /// ```rust
-    /// use rappin::{MessageContext, commands::{CommandCheck, CheckFuture, CommandError}};
+    /// use rappin::{CommandContext, commands::{CommandCheck, CheckFuture, CommandError}};
     /// struct ServerOnly;
     /// impl CommandCheck for ServerOnly {
-    ///     fn check<'a>(&'a self, ctx: &'a MessageContext) -> CheckFuture<'a> {
+    ///     fn check<'a>(&'a self, ctx: &'a CommandContext) -> CheckFuture<'a> {
     ///         Box::pin(async move {
     ///             if ctx.server_id().is_none() { return Err(CommandError::Denied("Server required".into()).into()); }
     ///             Ok(())
     ///         })
     ///     }
-    ///     fn prepare<'a>(&'a self, ctx: &'a MessageContext) -> Option<CheckFuture<'a>> { Some(self.check(ctx)) }
+    ///     fn prepare<'a>(&'a self, ctx: &'a CommandContext) -> Option<CheckFuture<'a>> { Some(self.check(ctx)) }
     /// }
     /// ```
-    fn check<'a>(&'a self, ctx: &'a MessageContext) -> CheckFuture<'a>;
+    fn check<'a>(&'a self, ctx: &'a CommandContext) -> CheckFuture<'a>;
     /// Optional read-only assessment. Must not reply, mutate application state,
     /// reserve access, or consume cooldowns. Execution always calls `check` again.
     /// The default reports this check as deferred.
     /// # Example
     ///
     /// ```rust
-    /// use rappin::{MessageContext, commands::{CommandCheck, CheckFuture, CommandError}};
+    /// use rappin::{CommandContext, commands::{CommandCheck, CheckFuture, CommandError}};
     /// struct ServerOnly;
     /// impl CommandCheck for ServerOnly {
-    ///     fn check<'a>(&'a self, ctx: &'a MessageContext) -> CheckFuture<'a> {
+    ///     fn check<'a>(&'a self, ctx: &'a CommandContext) -> CheckFuture<'a> {
     ///         Box::pin(async move {
     ///             if ctx.server_id().is_none() { return Err(CommandError::Denied("Server required".into()).into()); }
     ///             Ok(())
     ///         })
     ///     }
-    ///     fn prepare<'a>(&'a self, ctx: &'a MessageContext) -> Option<CheckFuture<'a>> { Some(self.check(ctx)) }
+    ///     fn prepare<'a>(&'a self, ctx: &'a CommandContext) -> Option<CheckFuture<'a>> { Some(self.check(ctx)) }
     /// }
     /// ```
-    fn prepare<'a>(&'a self, _ctx: &'a MessageContext) -> Option<CheckFuture<'a>> {
+    fn prepare<'a>(&'a self, _ctx: &'a CommandContext) -> Option<CheckFuture<'a>> {
         None
     }
 }
@@ -816,17 +797,17 @@ pub struct CheckFn<F>(F);
 /// ```
 pub fn check_fn<F, Fut>(check: F) -> CheckFn<F>
 where
-    F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
+    F: Fn(CommandContext) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
 {
     CheckFn(check)
 }
 impl<F, Fut> CommandCheck for CheckFn<F>
 where
-    F: Fn(MessageContext) -> Fut + Send + Sync + 'static,
+    F: Fn(CommandContext) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,
 {
-    fn check<'a>(&'a self, ctx: &'a MessageContext) -> CheckFuture<'a> {
+    fn check<'a>(&'a self, ctx: &'a CommandContext) -> CheckFuture<'a> {
         Box::pin((self.0)(ctx.clone()))
     }
 }
@@ -944,35 +925,50 @@ impl Check {
         self
     }
 }
-impl CommandCheck for Check {
-    #[cfg(feature = "hot-reload")]
-    fn check_worker<'a>(&'a self, ctx: &'a crate::WorkerContext) -> CheckFuture<'a> {
+impl Check {
+    fn check_actor<'a>(
+        &'a self,
+        api: &'a dyn crate::Api,
+        client: Option<&'a crate::Client>,
+        actor: Option<Uuid>,
+        server: Option<Uuid>,
+    ) -> CheckFuture<'a> {
         Box::pin(async move {
             let deny = |message: &str| Error::from(CommandError::Denied(message.into()));
-            let actor = ctx
-                .author_id()
-                .ok_or_else(|| deny("command has no authenticated requester"))?;
-            let server = ctx.event.message().and_then(|message| message.server_id);
+            let actor = actor.ok_or_else(|| deny("command has no authenticated requester"))?;
             match self {
+                Self::Owner => {
+                    let me = if let Some(client) = client {
+                        match client.cache().get_me().await {
+                            Some(me) => me,
+                            None => client.get_me().await?,
+                        }
+                    } else {
+                        crate::ApiExt::get_me(api).await?
+                    };
+                    if me.bot.as_ref().map(|bot| bot.owner_id) != Some(actor) {
+                        return Err(deny("only the bot owner may run this command"));
+                    }
+                }
                 Self::ServerOnly => {
                     if server.is_none() {
                         return Err(deny("this command requires a server"));
                     }
                 }
-                Self::Owner => {
-                    let me: crate::BotProfile =
-                        serde_json::from_value(ctx.api("GET", "/me", None).await?)?;
-                    if me.bot.as_ref().map(|bot| bot.owner_id) != Some(actor) {
-                        return Err(deny("only the bot owner may run this command"));
-                    }
-                }
-                Self::Roles { ids, .. } => {
+                Self::Roles { ids, freshness } => {
                     let server = server.ok_or_else(|| deny("this command requires a server"))?;
-                    let value = ctx
-                        .api("GET", &format!("/servers/{server}/members/{actor}"), None)
-                        .await?;
-                    let member: crate::MemberDetail =
-                        serde_json::from_value(value["member"].clone())?;
+                    let member: crate::MemberDetail = if let Some(client) = client {
+                        client.fetch_member(server, actor, *freshness).await?
+                    } else {
+                        let value = api
+                            .request(
+                                reqwest::Method::GET,
+                                &format!("/servers/{server}/members/{actor}"),
+                                None,
+                            )
+                            .await?;
+                        serde_json::from_value(value["member"].clone())?
+                    };
                     if member.member.user.id != actor {
                         return Err(Error::validation(
                             "member",
@@ -988,7 +984,7 @@ impl CommandCheck for Check {
                     freshness,
                 } => {
                     let server = server.ok_or_else(|| deny("this command requires a server"))?;
-                    crate::ApiExt::evaluate_permissions(ctx, server, actor, *freshness)
+                    crate::ApiExt::evaluate_permissions(api, server, actor, *freshness)
                         .await?
                         .require(permissions)?;
                 }
@@ -996,58 +992,18 @@ impl CommandCheck for Check {
             Ok(())
         })
     }
-    fn prepare<'a>(&'a self, ctx: &'a MessageContext) -> Option<CheckFuture<'a>> {
-        Some(self.check(ctx))
+}
+impl CommandCheck for Check {
+    fn check<'a>(&'a self, ctx: &'a crate::CommandContext) -> CheckFuture<'a> {
+        self.check_actor(
+            ctx.api(),
+            ctx.native_client(),
+            ctx.author_id(),
+            ctx.server_id(),
+        )
     }
-    fn check<'a>(&'a self, ctx: &'a MessageContext) -> CheckFuture<'a> {
-        Box::pin(async move {
-            let deny = |message: &str| Error::from(CommandError::Denied(message.into()));
-            match self {
-                Self::Owner => {
-                    let me = match ctx.cache().get_me().await {
-                        Some(me) => me,
-                        None => ctx.client.get_me().await?,
-                    };
-                    if me.bot.as_ref().map(|b| b.owner_id) != Some(ctx.author_id()) {
-                        return Err(deny("only the bot owner may run this command"));
-                    }
-                }
-                Self::ServerOnly => {
-                    if ctx.server_id().is_none() {
-                        return Err(deny("this command requires a server"));
-                    }
-                }
-                Self::Roles { ids, freshness } => {
-                    let server = ctx
-                        .server_id()
-                        .ok_or_else(|| deny("this command requires a server"))?;
-                    let member = ctx
-                        .client
-                        .fetch_member(server, ctx.author_id(), *freshness)
-                        .await?;
-                    if !ids.iter().any(|id| member.member.roles.contains(id)) {
-                        return Err(deny("a required role is missing"));
-                    }
-                }
-                Self::Permissions {
-                    permissions,
-                    freshness,
-                } => {
-                    let server = ctx
-                        .server_id()
-                        .ok_or_else(|| deny("this command requires a server"))?;
-                    crate::ApiExt::evaluate_permissions(
-                        ctx.client.as_ref(),
-                        server,
-                        ctx.author_id(),
-                        *freshness,
-                    )
-                    .await?
-                    .require(permissions)?;
-                }
-            }
-            Ok(())
-        })
+    fn prepare<'a>(&'a self, ctx: &'a crate::CommandContext) -> Option<CheckFuture<'a>> {
+        Some(self.check(ctx))
     }
 }
 
@@ -1294,7 +1250,7 @@ impl<A: FromArgs> CommandSpec<A> {
     /// ```
     pub fn bind<F, Fut>(self, handler: F) -> RegisteredCommand
     where
-        F: Fn(MessageContext, A) -> Fut + Send + Sync + 'static,
+        F: Fn(CommandContext, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
         let checks = Arc::new(self.checks);
@@ -1316,7 +1272,7 @@ impl<A: FromArgs> CommandSpec<A> {
                 let checks = checks.clone();
                 let handler = handler.clone();
                 Box::pin(async move {
-                    let mut args = Arguments::new(&ctx.args)?;
+                    let mut args = Arguments::new(ctx.args())?;
                     let parsed = A::parse(&mut args)?;
                     args.finish()?;
                     for check in checks.iter() {

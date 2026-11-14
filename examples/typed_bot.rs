@@ -53,9 +53,10 @@ async fn main() -> Result<()> {
             },
         )
         .command("question", "Ask for a reply", |ctx| async move {
-            let reply = ctx.replies().timeout(Duration::from_secs(30)).subscribe()?;
-            ctx.reply("What should I call you?").await?;
-            match reply.wait().await {
+            match ctx
+                .prompt_for_reply("What should I call you?", Duration::from_secs(30))
+                .await
+            {
                 Ok(answer) => {
                     ctx.reply(format!(
                         "Hello, {}",
@@ -63,11 +64,11 @@ async fn main() -> Result<()> {
                     ))
                     .await?;
                 }
-                Err(WaitError::Timeout) => {
+                Err(Error::Wait(WaitError::Timeout)) => {
                     ctx.reply("Time is up.").await?;
                 }
-                Err(WaitError::Closed) => (), // Graceful shutdown cancels active waiters.
-                Err(error) => return Err(error.into()),
+                Err(Error::Wait(WaitError::Closed)) => (), // Graceful shutdown cancels active waiters.
+                Err(error) => return Err(error),
             }
             Ok(())
         })

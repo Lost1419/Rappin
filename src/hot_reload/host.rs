@@ -543,7 +543,7 @@ impl Generation {
             };
             let manifest = match ready {
                 Wire::Ready { protocol: version, manifest } if version == protocol::VERSION => manifest,
-                _ => return Err(error(Protocol, "candidate requires protocol 11; rebuild the parent and worker together", None, true, false, None)),
+                _ => return Err(error(Protocol, "candidate requires protocol 12; rebuild the parent and worker together", None, true, false, None)),
             };
             manifest.validate().map_err(|cause| error(Registration, "candidate manifest is invalid", Some(&cause), true, false, None))?;
             Ok(Arc::new(Self {
@@ -582,6 +582,10 @@ impl Generation {
         operation_id: Option<crate::OperationId>,
     ) -> Result<crate::MessageDisposition> {
         let completed = std::sync::atomic::AtomicBool::new(false);
+        let prompt_interaction = match &event {
+            CogEvent::InteractionCommand { event, .. } => Some(event.interaction.clone()),
+            _ => None,
+        };
         let call = async {
             let mut io = self.io.lock().await;
             if io.poisoned {
@@ -632,7 +636,17 @@ impl Generation {
                                 let channel = channel.ok_or_else(|| {
                                     Error::validation("channel", "prompt requires a channel")
                                 })?;
-                                client.send_message(channel, &message).await?;
+                                if let Some(interaction) = &prompt_interaction {
+                                    crate::ApiExt::respond(
+                                        client,
+                                        interaction,
+                                        crate::InteractionCallbackType::Reply,
+                                        &message,
+                                    )
+                                    .await?;
+                                } else {
+                                    client.send_message(channel, &message).await?;
+                                }
                             }
                             let event = waiter.wait().await?;
                             let value = client.worker_output(serde_json::to_value(event)?);
@@ -1059,20 +1073,44 @@ impl ProcessCog {
                     let generation = generation.clone();
                     let command = name.clone();
                     async move {
-                        let operation_id = ctx.operation_id();
-                        generation
-                            .invoke_message_identified(
-                                CogEvent::Command {
-                                    command,
-                                    args: ctx.args,
-                                    argv: ctx.argv,
-                                    message: ctx.event,
-                                },
-                                &ctx.client,
-                                operation_id,
-                            )
-                            .await
-                            .map(|_| ())
+                        let args = ctx.args().to_owned();
+                        let argv = crate::commands::tokenize(&args)
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|token| token.value)
+                            .collect();
+                        if let Some(message) = ctx.message() {
+                            generation
+                                .invoke_message_identified(
+                                    CogEvent::Command {
+                                        command,
+                                        args,
+                                        argv,
+                                        message: message.event.clone(),
+                                    },
+                                    &message.client,
+                                    ctx.operation_id(),
+                                )
+                                .await
+                                .map(|_| ())
+                        } else if let Some(interaction) = ctx.interaction() {
+                            generation
+                                .invoke(
+                                    CogEvent::InteractionCommand {
+                                        command,
+                                        args,
+                                        argv,
+                                        event: interaction.data(),
+                                    },
+                                    &interaction.client,
+                                )
+                                .await
+                        } else {
+                            Err(Error::validation(
+                                "command.context",
+                                "parent command dispatch requires an original native context",
+                            ))
+                        }
                     }
                 })
             })

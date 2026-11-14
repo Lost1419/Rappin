@@ -14,8 +14,11 @@ async fn main() -> Result<()> {
             },
         )
         .command("plan", "Invoke an installed command", |ctx| async move {
-            let bot = ctx.bot.as_ref().expect("framework context");
-            let prepared = bot.prepare_invocation(&ctx, "greet", "").await?;
+            let message = ctx
+                .message()
+                .ok_or_else(|| rappin::CommandError::Denied("Send !plan as a message".into()))?;
+            let bot = ctx.bot().expect("framework context");
+            let prepared = bot.prepare_invocation(message, "greet", "").await?;
             // Consumer policy decides whether these deferred checks are acceptable.
             // Preparation never promises a transaction or reserves authorization.
             eprintln!("deferred checks: {:?}", prepared.report().deferred);

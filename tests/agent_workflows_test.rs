@@ -743,9 +743,13 @@ async fn cancellation_does_not_abandon_submitted_writes() {
 }
 
 #[tokio::test]
-async fn read_failures_are_safe_reads_and_tiny_budgets_do_not_hide_results() {
+async fn default_read_recovery_and_tiny_budgets_do_not_hide_results() {
     let (base, _rx, server) = mock(vec![
         response(502, json!({"error":"gateway"})),
+        response(
+            200,
+            json!({"servers":[{"id":"a","description":"x".repeat(1000)}]}),
+        ),
         response(
             200,
             json!({"servers":[{"id":"a","description":"x".repeat(1000)}]}),
@@ -754,8 +758,8 @@ async fn read_failures_are_safe_reads_and_tiny_budgets_do_not_hide_results() {
     .await;
     let cfg = config();
     let (ok, error) = cli(&cfg, Some(&base), &["servers", "list"]).await;
-    assert!(!ok);
-    assert_eq!(error["error"]["retry_safety"], "safe_read");
+    assert!(ok);
+    assert_eq!(error["data"]["servers"].as_array().unwrap().len(), 1);
     let (ok, error) = cli(
         &cfg,
         Some(&base),
