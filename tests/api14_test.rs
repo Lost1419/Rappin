@@ -117,7 +117,7 @@ impl MockApi {
 
 #[test]
 fn catalogue_14_and_prior_gaps_have_matching_validation() {
-    assert_eq!(bundled_schema()["info"]["version"], "1.4.0");
+    assert_eq!(bundled_schema()["info"]["version"], "1.5.0");
     for name in [
         "resolve_id",
         "get_member_permissions",

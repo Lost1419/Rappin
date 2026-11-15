@@ -260,7 +260,8 @@ protocol compatibility. The worker example includes `roll` and `question`.
 
 ### Worker transport and command definitions
 
-Protocol 12 carries structured errors, message completion, operation identities,
+Protocol 13 carries slash option declarations, typed change events, structured
+errors, message completion and operation identities. It also supports
 permission lookups, UI callbacks, public reads and bounded uploads. Upload chunks
 are 64 KiB, total upload data is bounded to 12 MiB and ordinary frames to 1 MiB.
 Rebuild the parent and every worker together when migrating from 0.1 or an earlier

@@ -287,7 +287,7 @@ async fn protected_roles_missing_data_and_incomplete_inventory_never_grant() {
 }
 
 #[tokio::test]
-async fn scoped_lookup_rollout_and_revocation_are_rechecked_before_execution() {
+async fn scoped_lookup_and_revocation_are_rechecked_before_execution() {
     let api = Mock::new();
     let policy = RoleHierarchyPolicy::new(&api).owner_admin_strict();
     let foreign = capability("delete_role")
@@ -306,7 +306,7 @@ async fn scoped_lookup_rollout_and_revocation_are_rechecked_before_execution() {
             .await
             .unwrap()
             .decision(),
-        AccessDecision::Unknown
+        AccessDecision::Allowed
     );
     assert_eq!(
         operation()
@@ -318,7 +318,7 @@ async fn scoped_lookup_rollout_and_revocation_are_rechecked_before_execution() {
             .await
             .unwrap()
             .decision(),
-        AccessDecision::Denied
+        AccessDecision::Allowed
     );
     assert!(operation()
         .assess_with_policy(&api, &context(), &policy)

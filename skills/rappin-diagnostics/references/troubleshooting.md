@@ -123,7 +123,7 @@ candidate stays visible until a changed candidate installs. Use path/phase conte
 for missing files; distinguish transient runtime churn from required source/input
 loss. Do not suppress every ENOENT or repeatedly rebuild to clear an alert.
 
-Check parent and worker revisions. Both require protocol 12 and must be rebuilt
+Check parent and worker revisions. Both require protocol 13 and must be rebuilt
 together. Earlier versions fail at startup. UI callbacks, operation identities
 and single-attempt requests are available on all worker routes. Stdout belongs
 to IPC. Review diagnostics before sharing. Builds, procedural macros and workers
@@ -132,7 +132,7 @@ execute trusted code and can produce effects even when compilation fails.
 API 1.4 computed permission reads can establish requester and bot access
 independently. Use `get_member_permissions` with the actual server/user/channel.
 A missing flag stays unknown. Rollout-related 403 responses concern availability.
-Resource lifecycle worker listeners require protocol 12. See the
+Resource lifecycle worker listeners require protocol 13. See the
 [API 1.4 guide](https://github.com/Lost1419/Rappin/blob/dev/docs/resources.md).
 
 ## API origin

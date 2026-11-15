@@ -208,6 +208,7 @@ async fn dynamic_commands_preflight_conflicts_before_actions_and_replace_transac
                 name: "new".into(),
                 description: "New".into(),
                 aliases: vec![],
+                slash_options: vec![],
                 arguments: vec![],
             }],
             Some("dynamic"),

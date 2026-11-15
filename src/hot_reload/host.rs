@@ -543,7 +543,7 @@ impl Generation {
             };
             let manifest = match ready {
                 Wire::Ready { protocol: version, manifest } if version == protocol::VERSION => manifest,
-                _ => return Err(error(Protocol, "candidate requires protocol 12; rebuild the parent and worker together", None, true, false, None)),
+                _ => return Err(error(Protocol, "candidate requires protocol 13; rebuild the parent and worker together", None, true, false, None)),
             };
             manifest.validate().map_err(|cause| error(Registration, "candidate manifest is invalid", Some(&cause), true, false, None))?;
             Ok(Arc::new(Self {
@@ -1019,6 +1019,17 @@ impl Cog for ProcessCog {
         .await?;
         Ok(())
     }
+    async fn on_change_event(&self, client: &Client, event: &crate::ChangeEvent) -> Result<()> {
+        self.listen_result(
+            Listener::ChangeEvent,
+            CogEvent::ChangeEvent {
+                event: event.clone(),
+            },
+            client,
+        )
+        .await
+    }
+
     async fn on_resource_event(&self, client: &Client, event: &crate::ResourceEvent) -> Result<()> {
         self.listen_result(
             Listener::ResourceEvent,
@@ -1101,6 +1112,7 @@ impl ProcessCog {
                                         args,
                                         argv,
                                         event: interaction.data(),
+                                        slash_options: ctx.slash_option_declarations().to_vec(),
                                     },
                                     &interaction.client,
                                 )

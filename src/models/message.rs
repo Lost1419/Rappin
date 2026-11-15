@@ -65,6 +65,12 @@ pub struct Message {
     /// Timestamp when message was pinned, if pinned.
     #[serde(default)]
     pub pinned_at: Option<DateTime<Utc>>,
+    /// Nonce acknowledged by the platform when this message was sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+    /// Whether the send returned an existing receipt for the same nonce.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub duplicate: bool,
 }
 
 impl Message {
@@ -118,6 +124,9 @@ pub struct CreateMessage {
     /// Standalone sticker ID. Validation rejects mixing a sticker with content.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sticker_id: Option<Uuid>,
+    /// Caller-owned idempotency key for one file-free send.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Optional message text; normal message validation limits it to 2,000 characters.
     pub content: Option<String>,
@@ -136,6 +145,18 @@ pub struct CreateMessage {
 }
 
 impl CreateMessage {
+    /// Set a caller-generated nonce for this send. Reuse it only for the same
+    /// message and channel within the platform's ten-minute deduplication window.
+    ///
+    /// ```
+    /// let message = rappin::CreateMessage::new("Hello").nonce("send-0001");
+    /// assert_eq!(message.nonce.as_deref(), Some("send-0001"));
+    /// ```
+    pub fn nonce(mut self, nonce: impl Into<String>) -> Self {
+        self.nonce = Some(nonce.into());
+        self
+    }
+
     /// Create a standalone sticker message.
     ///
     /// ```rust
@@ -159,6 +180,7 @@ impl CreateMessage {
     pub fn new(content: impl Into<String>) -> Self {
         Self {
             sticker_id: None,
+            nonce: None,
             content: Some(content.into()),
             reply_to: None,
             embeds: None,
@@ -189,6 +211,7 @@ impl CreateMessage {
     pub fn layout(components: impl IntoIterator<Item = impl Into<Component>>) -> Self {
         Self {
             sticker_id: None,
+            nonce: None,
             content: None,
             reply_to: None,
             embeds: None,

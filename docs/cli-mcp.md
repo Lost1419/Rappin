@@ -47,7 +47,7 @@ Inline arguments are limited to 128 KiB.
 | Diagnostics | `doctor`, `get_capabilities`, `get_schema`, `get_api_version`, `get_api_changelog` |
 | API 1.2 | File uploads, emoji management and bot-owned webhooks; see [API 1.2 workflows](uploads-and-webhooks.md) |
 | Server management | Role/permission writes, invites, counts and scheduled events. See [server management](server-management.md) for operations and rollout restrictions. |
-| API 1.4 | Resource resolution, computed permissions, role ordering, explicit overrides and stickers. See [resource and permission workflows](resources.md#cli-mcp-and-permanent-commands). |
+| Resources | Resource resolution, computed permissions, role ordering, explicit overrides and stickers. See [resource and permission workflows](resources.md#cli-mcp-and-permanent-commands). |
 
 Writes support `dry_run`. Destructive annotations identify edits, deletion,
 removal and cursor acknowledgement. Annotations describe behavior and do not
@@ -169,3 +169,17 @@ arguments. Operator-only `upload` and `emoji-upload` accept local paths; these
 commands are never exposed as MCP file-selection tools. The inline-argument limit
 remains 128 KiB. Use CLI `--max-retry-wait SECONDS` or TOML `max_retry_wait` to
 configure the total wait budget (default 30 seconds).
+
+## Threads, reactions and slash publication
+
+The shared catalogue exposes `list_threads`, `create_thread`,
+`edit_thread`, `delete_thread`, `moderate_reactions`, `list_slash_commands`,
+and `publish_slash_commands`. Use `tools call` or `platform` with an arguments
+file, or pass the same JSON arguments to MCP. Slash publication replaces all
+commands for the configured bot and supports a write preview.
+
+Send a caller-assigned nonce in `send_message.body.nonce` or a body file passed to
+`messages send`. The JSON response preserves any `nonce` and `duplicate` fields.
+Nonce sends use one attempt. A caller can reuse the same key for the same message
+and channel within Yapin's ten-minute deduplication window. Use separate keys
+for separate messages. File uploads and split sends use separate workflows.

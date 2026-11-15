@@ -24,7 +24,7 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
     let mut args = args.clone();
     if matches!(
         entry.name,
-        "send_message" | "edit_message" | "send_files" | "post_bot_webhook"
+        "send_message" | "edit_message" | "send_files" | "post_bot_webhook" | "create_thread"
     ) {
         if let Some(body) = args.get_mut("body") {
             crate::utils::strip_proxy_metadata(body);
@@ -40,6 +40,12 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
     match entry.name {
         "send_message" => {
             if args.get("body").is_some() {
+                if args["split"] == true || args.get("content").is_some() {
+                    return Err(Error::validation(
+                        "body",
+                        "use a message body or content with optional splitting",
+                    ));
+                }
                 let mut message: crate::CreateMessage =
                     serde_json::from_value(args["body"].clone())?;
                 if let Some(reply) = args["reply_to"].as_str() {
@@ -89,6 +95,7 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
         }
         "create_channel" => {
             let body: CreateChannelRequest = serde_json::from_value(args["body"].clone())?;
+            body.validate()?;
             args["body"] = serde_json::to_value(body)?;
         }
         "edit_channel" => {
@@ -107,6 +114,34 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
         "reorder_roles" => {
             crate::resource_api::role_order_ids(&args["body"])?;
         }
+        "publish_slash_commands" => {
+            let commands: Vec<crate::Command> =
+                serde_json::from_value(args["body"]["commands"].clone())?;
+            crate::validation::validate_commands(&commands)?;
+        }
+        "moderate_reactions" => {
+            if args["emoji"].as_str().is_some_and(str::is_empty)
+                || args.get("user").is_some() && args.get("emoji").is_none()
+            {
+                return Err(Error::validation(
+                    "emoji",
+                    "a user target requires an emoji",
+                ));
+            }
+        }
+        "create_thread" => {
+            let body = &args["body"];
+            crate::threads::thread_name(body["name"].as_str())?;
+            if body["name"].is_null() && body["message_id"].is_null() {
+                return Err(Error::validation(
+                    "name",
+                    "provide a name or a parent message",
+                ));
+            }
+            crate::validation::validate_classic_buttons(body)?;
+            crate::validation::validate_message(body, true)?;
+        }
+        "edit_thread" => crate::threads::thread_name(args["body"]["name"].as_str())?,
         "send_sticker" => {
             writes.push(json!({"sticker_id":args["sticker"]}));
         }
@@ -221,6 +256,8 @@ pub(super) fn collection_key(name: &str) -> Option<&'static str> {
     match name {
         "list_servers" => Some("servers"),
         "list_channels" => Some("channels"),
+        "list_threads" => Some("threads"),
+        "list_slash_commands" => Some("commands"),
         "list_members" => Some("members"),
         "read_messages" => Some("messages"),
         "search_channels" | "search_members" => Some("matches"),

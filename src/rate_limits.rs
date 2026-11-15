@@ -57,6 +57,8 @@ const ROUTES: &[&str] = &[
     "/servers/:id/voice/leave",
     "/channels/:id",
     "/channels/:id/messages",
+    "/channels/:id/threads",
+    "/threads/:id",
     "/channels/:id/messages/bulk-delete",
     "/channels/:id/messages/:id",
     "/channels/:id/messages/:id/pin",

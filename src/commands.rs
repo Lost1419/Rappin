@@ -455,6 +455,16 @@ pub trait FromArgs: Send + 'static {
         vec![]
     }
 }
+// A handler can own the full token cursor when its parsing depends on context,
+// for example when decoding a slash command's declared form options.
+impl FromArgs for Arguments {
+    fn parse(args: &mut Arguments) -> std::result::Result<Self, CommandError> {
+        Ok(Self {
+            tokens: std::mem::take(&mut args.tokens),
+        })
+    }
+}
+
 impl FromArgs for () {
     fn schema() -> Option<Vec<ArgumentSchema>> {
         Some(vec![])
@@ -1033,6 +1043,9 @@ pub struct CommandInfo {
     pub aliases: Vec<String>,
     /// Ordered local parsing/help metadata.
     pub arguments: Vec<ArgumentInfo>,
+    /// Slash options advertised for this root command.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slash_options: Vec<crate::SlashOption>,
 }
 impl CommandInfo {
     /// Definition-only validation; does not call handlers or perform network I/O.
@@ -1051,6 +1064,12 @@ impl CommandInfo {
     /// # Ok::<(), rappin::Error>(())
     /// ```
     pub fn validate(&self) -> Result<()> {
+        crate::slash_options::validate_options(&self.slash_options)?;
+        if !self.slash_options.is_empty() && self.name.contains(' ') {
+            return Err(
+                CommandError::Definition("slash options require a root command".into()).into(),
+            );
+        }
         let mut names = std::collections::HashSet::new();
         for name in std::iter::once(&self.name).chain(&self.aliases) {
             if !names.insert(name) || name.split(' ').count() > 8 {
@@ -1180,11 +1199,24 @@ impl<A: FromArgs> CommandSpec<A> {
                 description: description.into(),
                 aliases: vec![],
                 arguments: A::describe(),
+                slash_options: vec![],
             },
             checks: vec![],
             marker: PhantomData,
         }
     }
+    /// Declare options shown by Yapin for this root command.
+    ///
+    /// ```
+    /// let spec = rappin::CommandSpec::<()>::new("find", "Find items")
+    ///     .slash_options([rappin::SlashOption::new("query", rappin::SlashOptionKind::String)]);
+    /// assert_eq!(spec.info().slash_options.len(), 1);
+    /// ```
+    pub fn slash_options(mut self, options: impl IntoIterator<Item = crate::SlashOption>) -> Self {
+        self.info.slash_options = options.into_iter().collect();
+        self
+    }
+
     /// Add a local alias for the same command binding.
     ///
     /// # Example

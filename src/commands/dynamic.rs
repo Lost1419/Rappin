@@ -185,6 +185,7 @@ impl CommandSchema {
             name: self.name.clone(),
             description: self.description.clone(),
             aliases: self.aliases.clone(),
+            slash_options: vec![],
             arguments: self
                 .arguments
                 .iter()

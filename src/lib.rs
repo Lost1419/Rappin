@@ -106,6 +106,14 @@ pub use availability::{
     AvailabilityStatus,
 };
 pub mod api;
+mod threads;
+pub use threads::{CreatedThread, ReactionCleanup, ReactionTarget, Thread, ThreadEdit};
+mod slash_options;
+pub use slash_options::{SlashChoice, SlashOption, SlashOptionKind};
+mod change_events;
+pub use change_events::{
+    BotServerChange, ChangeEvent, MessageChange, MessageDeleteBulk, MessageUpdate,
+};
 mod state;
 #[cfg(feature = "derive")]
 pub use rappin_rs_derive::FromArgs;

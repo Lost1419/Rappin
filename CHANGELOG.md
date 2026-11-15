@@ -5,7 +5,7 @@
 - Consolidate typed API extensions, rich message/component models and interaction contexts. Preserve lossless response fields and explicit null edits. Accept resource-specific IDs at typed API boundaries.
 - Make bot construction fallible. Group advanced configuration and add process-local typed state for native and worker handlers.
 - Add optional FromArgs derives for parsing, bounds and help, with pure schema metadata for checked invocation.
-- Add worker command specs with aliases, groups and protocol 12 invocation/schema metadata. Worker checks, operation identities and partial/uncertain write causes remain explicit. Legacy worker button listeners retain their event scope.
+- Add worker command specs with aliases, groups and protocol 13 invocation/schema metadata. Worker checks, operation identities and partial/uncertain write causes remain explicit. Legacy worker button listeners retain their event scope.
 - Use fallible event/cog listeners and explicit failure callbacks throughout. Remove legacy void failure observers.
 - Add gateway-first project generation, human-readable init/doctor output, an ordered tutorial and a 0.1-to-2.0 migration guide.
 
@@ -13,9 +13,16 @@
 - Enable bounded startup/intake and ordinary GET/HEAD recovery by default. Configure independent read/write attempt budgets and read policies under `TransportConfig`. Preserve single-attempt requests, structured causes and terminal uncertain writes. Keep coherent latest-episode fields and exact concurrent recovery counters.
 - Register native/worker reply collectors before publishing message or interaction prompts. Unify rich replies, paginators and confirmation helpers while preserving callback ownership and error/checkpoint barriers. Reject duplicate raw command definitions before startup.
 
+### Yapin API 1.5.0
+
+- Add native/worker thread management and reaction cleanup, with shared CLI/MCP schemas, permission checks and scoped previews.
+- Use the existing message and channel APIs for nonce sends and private channel audiences. Retain nonce deduplication receipts, returned allowlists and structured platform errors.
+- Publish typed slash options from command specs, parse positional and named form submissions, acknowledge unanswered slash commands, and support classic ephemeral button updates.
+- Dispatch typed message edits/deletions and bot membership notifications through native, cog and worker listeners. Update the bundled contract and capability availability.
+
 ### Development cleanup
 
-- Require worker protocol 12. Remove older protocol negotiation, capability-switch builders and string-only IPC errors. Rebuild parent and workers together.
+- Require worker protocol 13. Remove older protocol negotiation, capability-switch builders and string-only IPC errors. Rebuild parent and workers together.
 - Route typed and runtime worker commands through shared registration, including aliases, groups and preparation schemas.
 - Store interaction callback patches in `EditMessage` and share validation across native, worker and generic API paths.
 - Submit split message parts once and retain confirmed receipts when a part fails. Preserve the failed request's status, retry hints and unknown outcome.

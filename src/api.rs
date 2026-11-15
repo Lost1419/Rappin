@@ -12,6 +12,7 @@
 //! Shared JSON transport for native handlers and isolated Rust workers.
 use crate::resource_api::{decode_overrides, validate_role_order};
 use crate::*;
+use crate::{CreatedThread, ReactionCleanup, ReactionTarget, Thread, ThreadEdit};
 use async_trait::async_trait;
 use reqwest::Method;
 use serde::{de::DeserializeOwned, Serialize};
@@ -210,6 +211,262 @@ pub trait Api: Send + Sync {
 /// }
 /// ```
 pub trait ApiExt: Api {
+    /// Create a public or private channel in a single request.
+    ///
+    /// ```no_run
+    /// async fn ticket(api: &impl rappin::Api, server: uuid::Uuid, member: uuid::Uuid) -> rappin::Result<()> {
+    ///     use rappin::ApiExt;
+    ///     api.create_channel(server, &rappin::CreateChannelRequest::text("ticket").private_audience([], [member])).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn create_channel(
+        &self,
+        server: impl Into<crate::ServerId> + Send,
+        body: &crate::CreateChannelRequest,
+    ) -> Result<crate::Channel> {
+        let server = Uuid::from(server.into());
+        body.validate()?;
+        let value = self
+            .request(
+                Method::POST,
+                &format!("/servers/{server}/channels"),
+                Some(json!(body)),
+            )
+            .await?;
+        let channel: crate::Channel = crate::threads::decode(value, "channel")?;
+        if channel.server_id.is_some_and(|id| id != server) {
+            return Err(crate::threads::unexpected_receipt(
+                "channel creation returned a different server",
+            ));
+        }
+        Ok(channel)
+    }
+
+    /// Edit channel settings and optionally replace the private member allowlist.
+    ///
+    /// ```no_run
+    /// async fn clear(api: &impl rappin::Api, channel: uuid::Uuid) -> rappin::Result<()> {
+    ///     use rappin::ApiExt;
+    ///     api.edit_channel(channel, &rappin::EditChannelRequest::new().user_ids([])).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn edit_channel(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        body: &crate::EditChannelRequest,
+    ) -> Result<crate::Channel> {
+        let channel = Uuid::from(channel.into());
+        body.validate()?;
+        #[derive(serde::Deserialize)]
+        struct Receipt {
+            channel: crate::Channel,
+            user_ids: Option<Vec<Uuid>>,
+        }
+        let value = self
+            .request(
+                Method::PATCH,
+                &format!("/channels/{channel}"),
+                Some(json!(body)),
+            )
+            .await?;
+        let mut receipt: Receipt = serde_json::from_value(value)?;
+        if receipt.channel.id != channel {
+            return Err(crate::threads::unexpected_receipt(
+                "channel edit returned a different channel",
+            ));
+        }
+        if receipt.user_ids.is_some() {
+            receipt.channel.user_ids = receipt.user_ids;
+        }
+        Ok(receipt.channel)
+    }
+
+    /// Read this bot's published slash commands, including options.
+    ///
+    /// ```no_run
+    /// async fn read(api: &impl rappin::Api) -> rappin::Result<Vec<rappin::Command>> {
+    ///     use rappin::ApiExt;
+    ///     api.get_commands().await
+    /// }
+    /// ```
+    async fn get_commands(&self) -> Result<Vec<Command>> {
+        let value = self.request(Method::GET, "/commands", None).await?;
+        crate::threads::decode(value, "commands")
+    }
+
+    /// Replace all published slash commands. Omit the interaction setting to use Yapin's default.
+    ///
+    /// ```no_run
+    /// async fn publish(api: &impl rappin::Api) -> rappin::Result<()> {
+    ///     use rappin::ApiExt;
+    ///     api.publish_commands(&[rappin::Command::new("ping", "Check access")], Some(true)).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn publish_commands(
+        &self,
+        commands: &[Command],
+        interactions: Option<bool>,
+    ) -> Result<Vec<Command>> {
+        crate::validation::validate_commands(commands)?;
+        let mut body = json!({"commands": commands});
+        if let Some(enabled) = interactions {
+            body["interactions"] = json!(enabled);
+        }
+        let value = self.request(Method::PUT, "/commands", Some(body)).await?;
+        crate::threads::decode(value, "commands")
+    }
+
+    /// List recent threads in a parent channel. The optional limit is 1–50.
+    ///
+    /// ```no_run
+    /// # use rappin::{Client, ApiExt};
+    /// # async fn run(client: &Client, channel: uuid::Uuid) -> rappin::Result<()> {
+    /// client.list_threads(channel, Some(25)).await?;
+    /// # Ok(()) }
+    /// ```
+    async fn list_threads(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        limit: Option<u8>,
+    ) -> Result<Vec<Thread>> {
+        let channel = Uuid::from(channel.into());
+        let mut path = format!("/channels/{channel}/threads");
+        if let Some(limit) = limit {
+            if !(1..=50).contains(&limit) {
+                return Err(Error::validation("limit", "expected 1 to 50"));
+            }
+            path.push_str(&format!("?limit={limit}"));
+        }
+        let response = self.request(Method::GET, &path, None).await?;
+        let threads: Vec<Thread> = crate::threads::decode(response, "threads")?;
+        if threads.iter().any(|thread| thread.parent_id != channel) {
+            return Err(Error::validation(
+                "parent_id",
+                "thread belongs to a different channel",
+            ));
+        }
+        Ok(threads)
+    }
+
+    /// Create a thread with a first message and optional parent message ID.
+    ///
+    /// ```no_run
+    /// # use rappin::{Client, ApiExt, CreateMessage};
+    /// # async fn run(client: &Client, channel: uuid::Uuid) -> rappin::Result<()> {
+    /// client.create_thread(channel, Some("Discussion"), None, &CreateMessage::new("Welcome")).await?;
+    /// # Ok(()) }
+    /// ```
+    async fn create_thread(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        name: Option<&str>,
+        message_id: Option<Uuid>,
+        first: &CreateMessage,
+    ) -> Result<CreatedThread> {
+        let channel = Uuid::from(channel.into());
+        crate::threads::thread_name(name)?;
+        if name.is_none() && message_id.is_none() {
+            return Err(Error::validation(
+                "name",
+                "provide a name or a parent message",
+            ));
+        }
+        if first.reply_to.is_some()
+            || first.sticker_id.is_some()
+            || first.flags.is_some()
+            || first.nonce.is_some()
+        {
+            return Err(Error::validation(
+                "message",
+                "thread creation accepts content, embeds and button rows",
+            ));
+        }
+        let mut body = json!(first);
+        crate::validation::validate_classic_buttons(&body)?;
+        crate::validation::validate_message(&body, true)?;
+        if let Some(name) = name {
+            body["name"] = json!(name);
+        }
+        if let Some(message_id) = message_id {
+            body["message_id"] = json!(message_id);
+        }
+        crate::utils::strip_proxy_metadata(&mut body);
+        let response = self
+            .request(
+                Method::POST,
+                &format!("/channels/{channel}/threads"),
+                Some(body),
+            )
+            .await?;
+        let created: CreatedThread = serde_json::from_value(response)?;
+        if created.thread.parent_id != channel || created.message.channel_id != created.thread.id {
+            return Err(crate::threads::unexpected_receipt(
+                "thread creation returned a different channel",
+            ));
+        }
+        Ok(created)
+    }
+
+    /// Rename, lock or archive a thread.
+    ///
+    /// ```no_run
+    /// # use rappin::{Client, ApiExt, ThreadEdit};
+    /// # async fn run(client: &Client, thread: uuid::Uuid) -> rappin::Result<()> {
+    /// let mut edit = ThreadEdit::default();
+    /// edit.locked = Some(true);
+    /// client.edit_thread(thread, &edit).await?;
+    /// # Ok(()) }
+    /// ```
+    async fn edit_thread(&self, thread: Uuid, edit: &ThreadEdit) -> Result<()> {
+        crate::threads::thread_name(edit.name.as_deref())?;
+        self.request(
+            Method::PATCH,
+            &format!("/threads/{thread}"),
+            Some(json!(edit)),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Delete a thread explicitly.
+    ///
+    /// ```no_run
+    /// # use rappin::{Client, ApiExt};
+    /// # async fn run(client: &Client, thread: uuid::Uuid) -> rappin::Result<()> {
+    /// client.delete_thread(thread).await?;
+    /// # Ok(()) }
+    /// ```
+    async fn delete_thread(&self, thread: Uuid) -> Result<()> {
+        self.request(Method::DELETE, &format!("/threads/{thread}"), None)
+            .await?;
+        Ok(())
+    }
+
+    /// Run one reaction moderation request. The caller decides whether to use `more`.
+    ///
+    /// ```no_run
+    /// # use rappin::{Client, ApiExt, ReactionTarget};
+    /// # async fn run(client: &Client, channel: uuid::Uuid, message: uuid::Uuid) -> rappin::Result<()> {
+    /// client.moderate_reactions(channel, message, ReactionTarget::Emoji("👍")).await?;
+    /// # Ok(()) }
+    /// ```
+    async fn moderate_reactions(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        message: impl Into<crate::MessageId> + Send,
+        target: ReactionTarget<'_>,
+    ) -> Result<ReactionCleanup> {
+        let channel = Uuid::from(channel.into());
+        let message = Uuid::from(message.into());
+        let path = crate::threads::reaction_path(channel, message, target)?;
+        Ok(serde_json::from_value(
+            self.request(Method::DELETE, &path, None).await?,
+        )?)
+    }
+
     /// Update the original interaction message using an explicit edit patch.
     /// Omitted fields retain their values and null fields clear them. Ownership,
     /// source-message eligibility and callback deadlines remain enforced.
@@ -236,6 +493,9 @@ pub trait ApiExt: Api {
         let mut value = json!(patch);
         value["type"] = json!(InteractionCallbackType::Update);
         crate::validation::validate_callback(&value, InteractionCallbackType::Update)?;
+        if event.reply_id.is_some() {
+            crate::validation::validate_classic_buttons(&value)?;
+        }
         Api::track_interaction(self, event).await?;
         crate::utils::strip_proxy_metadata(&mut value);
         self.request(
@@ -610,6 +870,12 @@ pub trait ApiExt: Api {
         let channel: crate::ChannelId = channel.into();
         let channel = Uuid::from(channel);
 
+        if body.nonce.is_some() {
+            return Err(Error::validation(
+                "nonce",
+                "file uploads do not accept a send nonce",
+            ));
+        }
         crate::validate_uploads(files)?;
         let clean = body.for_request();
         let body = clean.as_ref();
@@ -839,22 +1105,36 @@ pub trait ApiExt: Api {
         let channel: crate::ChannelId = channel.into();
         let channel = Uuid::from(channel);
 
+        body.validate()?;
         let mut value = json!(body);
-        crate::validation::validate_message(&value, true)?;
         crate::utils::strip_proxy_metadata(&mut value);
-        let mut response = self
-            .request(
-                Method::POST,
-                &format!("/channels/{channel}/messages"),
-                Some(value),
-            )
-            .await?;
-        Ok(serde_json::from_value(
+        let path = format!("/channels/{channel}/messages");
+        let mut response = if body.nonce.is_some() {
+            self.request_once(Method::POST, &path, Some(value)).await?
+        } else {
+            self.request(Method::POST, &path, Some(value)).await?
+        };
+        let mut message: Message = serde_json::from_value(
             response
                 .get_mut("message")
                 .map(Value::take)
                 .unwrap_or(Value::Null),
-        )?)
+        )?;
+        if let Some(expected) = &body.nonce {
+            message.nonce = response["nonce"].as_str().map(str::to_owned);
+            message.duplicate = response["duplicate"].as_bool().unwrap_or(false);
+            if message.channel_id != channel
+                || message
+                    .nonce
+                    .as_ref()
+                    .is_some_and(|nonce| nonce != expected)
+            {
+                return Err(crate::threads::unexpected_receipt(
+                    "send returned a different nonce or channel",
+                ));
+            }
+        }
+        Ok(message)
     }
     /// Validate and edit an extended message body, preserving omission versus explicit null clearing. Reply targets cannot be changed by edits.
     ///
@@ -929,7 +1209,7 @@ pub trait ApiExt: Api {
         .await?;
         Ok(())
     }
-    /// Send an extended reply, ephemeral response or original-message update. Reply targets, invalid updates, component-bearing ephemeral replies and Ack payloads are rejected before sending. Use existing ack helpers for acknowledgement.
+    /// Send an extended reply, ephemeral response or original-message update. Reply targets, invalid updates, invalid ephemeral layouts and Ack payloads are rejected before sending. Use existing ack helpers for acknowledgement.
     ///
     /// # Example
     ///
@@ -948,6 +1228,12 @@ pub trait ApiExt: Api {
         kind: InteractionCallbackType,
         body: &CreateMessage,
     ) -> Result<()> {
+        if body.nonce.is_some() {
+            return Err(Error::validation(
+                "nonce",
+                "only channel message sends accept a nonce",
+            ));
+        }
         if body.sticker_id.is_some() {
             return Err(Error::validation(
                 "sticker_id",
@@ -978,6 +1264,9 @@ pub trait ApiExt: Api {
         let mut value = json!(body);
         value["type"] = json!(kind);
         crate::validation::validate_callback(&value, kind)?;
+        if kind == InteractionCallbackType::Update && event.reply_id.is_some() {
+            crate::validation::validate_classic_buttons(&value)?;
+        }
         Api::track_interaction(self, event).await?;
         crate::utils::strip_proxy_metadata(&mut value);
         self.request(
@@ -1005,20 +1294,7 @@ pub trait ApiExt: Api {
         commands: &[Command],
         enabled: bool,
     ) -> Result<Vec<Command>> {
-        crate::validation::validate_commands(commands)?;
-        let mut value = self
-            .request(
-                Method::PUT,
-                "/commands",
-                Some(json!({"commands":commands,"interactions":enabled})),
-            )
-            .await?;
-        Ok(serde_json::from_value(
-            value
-                .get_mut("commands")
-                .map(Value::take)
-                .unwrap_or(Value::Null),
-        )?)
+        self.publish_commands(commands, Some(enabled)).await
     }
     /// Resolve an ID visible to the bot. Hidden and absent resources return the platform 404.
     ///

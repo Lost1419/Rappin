@@ -71,6 +71,7 @@ async fn test_cache_servers_and_channels() {
         category: None,
         category_id: None,
         private: Some(false),
+        user_ids: None,
         read_only: Some(false),
         slowmode: Some(0),
     };
@@ -83,6 +84,7 @@ async fn test_cache_servers_and_channels() {
         category: None,
         category_id: None,
         private: Some(false),
+        user_ids: None,
         read_only: Some(false),
         slowmode: Some(0),
     };
@@ -95,6 +97,7 @@ async fn test_cache_servers_and_channels() {
         category: None,
         category_id: None,
         private: Some(false),
+        user_ids: None,
         read_only: Some(false),
         slowmode: Some(0),
     };

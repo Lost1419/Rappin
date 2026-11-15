@@ -582,7 +582,7 @@ pub struct WorkerCog {
 }
 impl WorkerCog {
     /// Register the same command metadata, parser and built-in checks used by
-    /// native cogs. Supports aliases and command groups. Requires host protocol 12.
+    /// native cogs. Supports aliases and command groups. Requires host protocol 13.
     ///
     /// ```rust
     /// use rappin::{WorkerCog, CommandSpec, Check};
@@ -742,6 +742,7 @@ impl WorkerCog {
             name: name.into(),
             description: description.into(),
             aliases: vec![],
+            slash_options: vec![],
             arguments: vec![],
         };
         self.register_command(
@@ -925,6 +926,7 @@ impl WorkerCog {
                 CogEvent::ReactionAdd { .. } => self.listeners.get(&Listener::ReactionAdd),
                 CogEvent::ReactionRemove { .. } => self.listeners.get(&Listener::ReactionRemove),
                 CogEvent::Interaction { .. } => self.listeners.get(&Listener::Interaction),
+                CogEvent::ChangeEvent { .. } => self.listeners.get(&Listener::ChangeEvent),
                 CogEvent::UiInteraction { .. } => self.listeners.get(&Listener::UiInteraction),
                 CogEvent::MemberJoin { .. } => self.listeners.get(&Listener::MemberJoin),
                 CogEvent::MemberLeave { .. } => self.listeners.get(&Listener::MemberLeave),

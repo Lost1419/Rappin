@@ -37,7 +37,7 @@ impl Project {
         marker: Option<&Path>,
         listeners: &[&str],
     ) {
-        let ready = json!({"op":"ready","protocol":12,"manifest":{"name":"fixture","commands":commands.iter().map(|n|Command::new(*n,version)).collect::<Vec<_>>(),"buttons":[format!("{version}:")],"listeners":listeners}});
+        let ready = json!({"op":"ready","protocol":13,"manifest":{"name":"fixture","commands":commands.iter().map(|n|Command::new(*n,version)).collect::<Vec<_>>(),"buttons":[format!("{version}:")],"listeners":listeners}});
         let api = json!({"op":"api","method":"POST","path":"/channels/00000000-0000-0000-0000-000000000000/messages","body":{"content":version}});
         let source=r#"
 use std::io::{BufRead, Write};
@@ -1055,7 +1055,7 @@ async fn candidate_timeout_exit_and_protocol_phases_are_explicit() {
             rappin::ReloadPhase::Protocol,
         ),
         (
-            12,
+            13,
             vec![Command::new("INVALID!", "test")],
             rappin::ReloadPhase::Registration,
         ),
@@ -1093,7 +1093,7 @@ async fn structured_candidate_failure_crosses_worker_and_callback_without_implic
     let original = Error::HotReload {
         failure: Box::new(failure.clone()),
     };
-    let ready = json!({"op":"ready","protocol":12,"manifest":{"name":"fixture","commands":[Command::new("proposal","test")],"buttons":[],"listeners":[]}}).to_string();
+    let ready = json!({"op":"ready","protocol":13,"manifest":{"name":"fixture","commands":[Command::new("proposal","test")],"buttons":[],"listeners":[]}}).to_string();
     let done = json!({"op":"done","error":original.to_remote()}).to_string();
     let source = format!(
         r#"use std::io::{{BufRead,Write}};fn main() {{ println!("{{}}",{ready:?});std::io::stdout().flush().unwrap();for line in std::io::stdin().lock().lines() {{ if line.unwrap().contains("shutdown") {{break;}} println!("{{}}",{done:?}); std::io::stdout().flush().unwrap(); }} }}"#

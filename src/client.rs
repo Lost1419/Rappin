@@ -989,10 +989,6 @@ impl Client {
                 return Ok(res);
             }
 
-            if status == StatusCode::UNAUTHORIZED {
-                return Err(Error::Unauthorized);
-            }
-
             let retry_header = res
                 .headers()
                 .get("Retry-After")
@@ -1012,6 +1008,16 @@ impl Client {
                 .unwrap_or_else(|| status.canonical_reason().unwrap_or("Unknown error"))
                 .to_string();
 
+            let api_error = || {
+                crate::error::platform_error(
+                    status.as_u16(),
+                    &msg,
+                    retry_header.map(|delay| delay.as_secs_f64()),
+                    &err_json,
+                    &[self.inner.token.as_str()],
+                )
+            };
+
             // A headerless 429 is a permanent limit (e.g. exhausted interaction).
             // 503 guarantees the request did not execute; don't retry other writes.
             if matches!(
@@ -1026,11 +1032,7 @@ impl Client {
                         self.inner.rate_limits.delay(key, delay, global).await;
                     }
                     if retries > 0 && delay <= Duration::from_secs(60) {
-                        let source = Error::Api {
-                            status: status.as_u16(),
-                            message: crate::security::scrub(&msg, &[self.inner.token.as_str()]),
-                            retry_after: Some(delay.as_secs_f64()),
-                        };
+                        let source = api_error();
                         if delay > self.inner.max_retry_wait.saturating_sub(progress.wait) {
                             return Err(Error::RetryWaitExceeded {
                                 waited: progress.wait,
@@ -1049,11 +1051,7 @@ impl Client {
                     }
                 }
             }
-            return Err(Error::Api {
-                status: status.as_u16(),
-                message: crate::security::scrub(&msg, &[&self.inner.token]),
-                retry_after: retry_header.map(|d| d.as_secs_f64()),
-            });
+            return Err(api_error());
         }
     }
 
@@ -1085,14 +1083,16 @@ impl Client {
         let callback = method == Method::POST
             && path.starts_with("/interactions/")
             && path.ends_with("/callback");
-        let kind = if callback {
+        let callback_body: Option<serde_json::Value> = if callback {
             body_data
                 .as_ref()
-                .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
-                .and_then(|body| body["type"].as_str().map(str::to_owned))
+                .and_then(|bytes| serde_json::from_slice(bytes).ok())
         } else {
             None
         };
+        let kind = callback_body
+            .as_ref()
+            .and_then(|body| body["type"].as_str());
         let tracked = if callback {
             Some(self.inner.interactions.entry(path)?)
         } else {
@@ -1114,19 +1114,19 @@ impl Client {
                     "previous response outcome is uncertain; do not blindly retry",
                 ));
             }
-            if kind.as_deref() == Some("ack") && entry.state.phase != ResponsePhase::Unanswered {
+            if kind == Some("ack") && entry.state.phase != ResponsePhase::Unanswered {
                 return serde_json::from_value(serde_json::json!({})).map_err(Into::into);
             }
-            if kind.as_deref() == Some("modal") && entry.state.phase != ResponsePhase::Unanswered {
+            if kind == Some("modal") && entry.state.phase != ResponsePhase::Unanswered {
                 return Err(Error::validation("modal", "modal must be the first response; acknowledgement or an earlier response prevents opening it"));
             }
-            if kind.as_deref() == Some("modal") && entry.kind.as_deref() == Some("modal_submit") {
+            if kind == Some("modal") && entry.kind.as_deref() == Some("modal_submit") {
                 return Err(Error::validation(
                     "modal",
                     "cannot open a modal from its submission",
                 ));
             }
-            if kind.as_deref() == Some("update")
+            if kind == Some("update")
                 && (entry.kind.as_deref() == Some("command")
                     || entry.kind.as_deref() == Some("modal_submit") && !entry.has_message)
             {
@@ -1134,6 +1134,11 @@ impl Client {
                     "interaction",
                     "interaction has no source message to update",
                 ));
+            }
+            if kind == Some("update") && entry.ephemeral_target {
+                if let Some(body) = &callback_body {
+                    crate::validation::validate_classic_buttons(body)?;
+                }
             }
             // A cancelled request leaves Uncertain rather than permitting a duplicate initial response.
             entry.state.phase = ResponsePhase::Uncertain;
@@ -1178,7 +1183,7 @@ impl Client {
             use crate::interactions::ResponsePhase;
             match &response {
                 Ok(_) => {
-                    entry.state.phase = if kind.as_deref() == Some("ack") {
+                    entry.state.phase = if kind == Some("ack") {
                         ResponsePhase::Acknowledged
                     } else {
                         ResponsePhase::Responded
@@ -1186,7 +1191,7 @@ impl Client {
                     entry.state.responses = entry.state.responses.saturating_add(1);
                 }
                 Err(error) if error.to_json()["outcome"] == "unknown" => (),
-                Err(Error::Api { .. } | Error::Unauthorized) => {
+                Err(error) if error.status_code().is_some() => {
                     if let Some(previous) = previous {
                         entry.state = previous;
                     }
@@ -1448,14 +1453,7 @@ impl Client {
     /// }
     /// ```
     pub async fn get_commands(&self) -> Result<Vec<Command>> {
-        #[derive(Deserialize)]
-        struct Resp {
-            commands: Vec<Command>,
-        }
-        let resp: Resp = self
-            .request_json::<Resp, ()>(Method::GET, "/commands", None)
-            .await?;
-        Ok(resp.commands)
+        crate::ApiExt::get_commands(self).await
     }
 
     /// Replaces the registered slash commands for this bot (`PUT /commands`, up to 100).
@@ -1470,19 +1468,7 @@ impl Client {
     /// }
     /// ```
     pub async fn set_commands(&self, commands: &[Command]) -> Result<Vec<Command>> {
-        crate::validation::validate_commands(commands)?;
-        #[derive(Serialize)]
-        struct Req<'a> {
-            commands: &'a [Command],
-        }
-        #[derive(Deserialize)]
-        struct Resp {
-            commands: Vec<Command>,
-        }
-        let resp: Resp = self
-            .request_json(Method::PUT, "/commands", Some(&Req { commands }))
-            .await?;
-        Ok(resp.commands)
+        crate::ApiExt::publish_commands(self, commands, None).await
     }
 
     // -----------------------------------------------------------------------
@@ -2154,22 +2140,9 @@ impl Client {
         server_id: impl Into<crate::ServerId> + Send,
         req: &CreateChannelRequest,
     ) -> Result<Channel> {
-        let server_id: crate::ServerId = server_id.into();
-        let server_id = Uuid::from(server_id);
-
-        #[derive(Deserialize)]
-        struct Resp {
-            channel: Channel,
-        }
-        let resp: Resp = self
-            .request_json(
-                Method::POST,
-                &format!("/servers/{}/channels", server_id),
-                Some(req),
-            )
-            .await?;
-        self.inner.cache.update_channel(resp.channel.clone()).await;
-        Ok(resp.channel)
+        let channel = crate::ApiExt::create_channel(self, server_id, req).await?;
+        self.inner.cache.update_channel(channel.clone()).await;
+        Ok(channel)
     }
 
     /// Retrieves current active voice channels and users in a server (`GET /servers/{id}/voice`).
@@ -2405,23 +2378,9 @@ impl Client {
         channel_id: impl Into<crate::ChannelId> + Send,
         req: &EditChannelRequest,
     ) -> Result<Channel> {
-        let channel_id: crate::ChannelId = channel_id.into();
-        let channel_id = Uuid::from(channel_id);
-
-        req.validate()?;
-        #[derive(Deserialize)]
-        struct Resp {
-            channel: Channel,
-        }
-        let resp: Resp = self
-            .request_json(
-                Method::PATCH,
-                &format!("/channels/{}", channel_id),
-                Some(req),
-            )
-            .await?;
-        self.inner.cache.update_channel(resp.channel.clone()).await;
-        Ok(resp.channel)
+        let channel = crate::ApiExt::edit_channel(self, channel_id, req).await?;
+        self.inner.cache.update_channel(channel.clone()).await;
+        Ok(channel)
     }
 
     /// Deletes a channel (`DELETE /channels/{id}`).

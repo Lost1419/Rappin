@@ -22,10 +22,27 @@ pub struct Command {
     /// Command name (lowercase, 1-32 chars, regex `^[a-z0-9_-]{1,32}$`).
     pub name: String,
     /// Human readable command description.
+    #[serde(default)]
     pub description: String,
+    /// Declared slash options in positional order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<crate::SlashOption>,
 }
 
 impl Command {
+    /// Set the options published with this command.
+    ///
+    /// ```
+    /// let command = rappin::Command::new("search", "").options([
+    ///     rappin::SlashOption::new("query", rappin::SlashOptionKind::String),
+    /// ]);
+    /// assert_eq!(command.options.len(), 1);
+    /// ```
+    pub fn options(mut self, options: impl IntoIterator<Item = crate::SlashOption>) -> Self {
+        self.options = options.into_iter().collect();
+        self
+    }
+
     /// Create slash-command metadata. Publication validates the platform naming and description bounds.
     ///
     /// # Example
@@ -39,6 +56,7 @@ impl Command {
         Self {
             name: name.into(),
             description: description.into(),
+            options: Vec::new(),
         }
     }
 }

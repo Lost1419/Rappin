@@ -297,6 +297,42 @@ impl super::Bot {
         }
 
         tracing::error!("Command /{name} failed: {}", info.error);
+        if info.error.kind == "partial_write"
+            || matches!(
+                info.error
+                    .details
+                    .get("outcome")
+                    .and_then(serde_json::Value::as_str),
+                Some("unknown" | "incomplete")
+            )
+        {
+            return Err(error);
+        }
+        if let Some(interaction) = ctx
+            .interaction()
+            .filter(|ctx| ctx.event.kind.as_deref() == Some("command"))
+        {
+            let notification = catch(async {
+                use crate::interactions::ResponsePhase;
+                let state = interaction.response_state().await?;
+                if matches!(
+                    state.phase,
+                    ResponsePhase::Unanswered | ResponsePhase::Acknowledged
+                ) {
+                    interaction
+                        .ephemeral(format!("Something went wrong running /{name}."))
+                        .await?;
+                }
+                Ok(())
+            })
+            .await;
+            if let Err(handling_error) = notification {
+                return Err(Error::FailureHandling {
+                    source: Box::new(error),
+                    handling_error: Box::new(handling_error),
+                });
+            }
+        }
         Err(error)
     }
     pub(super) async fn button_failed(

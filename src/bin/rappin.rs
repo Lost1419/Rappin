@@ -184,11 +184,11 @@ enum Servers {
     Get {
         id: Uuid,
     },
-    /// Live counts (test servers only).
+    /// Live counts.
     Counts {
         id: Uuid,
     },
-    /// Invite list (Manage Server; test servers only).
+    /// Invite list (Manage Server).
     Invites {
         id: Uuid,
     },
@@ -452,9 +452,17 @@ impl Context {
         if self.dry && method != Method::GET && method != Method::HEAD {
             return Ok(json!({"dry_run":true,"method":method.as_str(),"path":path,"body":body}));
         }
-        self.client()?
-            .request_json(method, path, body.as_ref())
-            .await
+        let client = self.client()?;
+        if method == Method::POST
+            && path
+                .strip_prefix("/channels/")
+                .and_then(|rest| rest.split_once('/'))
+                .is_some_and(|(_, route)| route == "messages")
+            && body.as_ref().is_some_and(|body| body["nonce"].is_string())
+        {
+            return rappin::Api::request_once(client, method, path, body).await;
+        }
+        client.request_json(method, path, body.as_ref()).await
     }
 }
 fn local_upload(path: &std::path::Path, maximum: usize) -> Result<rappin::UploadFile> {
@@ -775,25 +783,24 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                     .await
             }
             Channels::Create { server, body_file } => {
-                let body: rappin::CreateChannelRequest =
-                    serde_json::from_value(ctx.body(&body_file)?)?;
+                let operation = rappin::capabilities::capability("create_channel")
+                    .expect("channel creation capability")
+                    .validate(&json!({"server":server,"body":ctx.body(&body_file)?}))?;
+                let body = operation.arguments()["body"].clone();
                 ctx.request(
                     Method::POST,
                     &format!("/servers/{server}/channels"),
-                    Some(serde_json::to_value(body)?),
+                    Some(body),
                 )
                 .await
             }
             Channels::Edit { id, body_file } => {
-                let body: rappin::EditChannelRequest =
-                    serde_json::from_value(ctx.body(&body_file)?)?;
-                body.validate()?;
-                ctx.request(
-                    Method::PATCH,
-                    &format!("/channels/{id}"),
-                    Some(serde_json::to_value(body)?),
-                )
-                .await
+                let operation = rappin::capabilities::capability("edit_channel")
+                    .expect("channel edit capability")
+                    .validate(&json!({"id":id,"body":ctx.body(&body_file)?}))?;
+                let body = operation.arguments()["body"].clone();
+                ctx.request(Method::PATCH, &format!("/channels/{id}"), Some(body))
+                    .await
             }
             Channels::Delete { id } => {
                 ctx.request(Method::DELETE, &format!("/channels/{id}"), None)
@@ -932,6 +939,12 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
                 reply_to,
                 split,
             } => {
+                if body_file.is_some() && (split || content.is_some()) {
+                    return Err(Error::validation(
+                        "body",
+                        "use a message body or content with optional splitting",
+                    ));
+                }
                 let mut message = match body_file {
                     Some(p) => {
                         let mut body: rappin::CreateMessage =

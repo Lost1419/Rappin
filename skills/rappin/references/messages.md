@@ -30,7 +30,9 @@ Preserve every confirmed per-file/message receipt when an upload partially succe
 `failed_step` (one-based). Do not replay the whole workflow. A failed step with
 `outcome: unknown` might have executed; inspect recent history before deciding
 whether to send again. History can help reconcile, but matching text is not proof
-of identity and the API provides no documented idempotency key.
+of identity. Yapin documents a rollout-gated `nonce` for sends without files, with
+a 10-minute deduplication window. This applies to sends that originally used the
+same nonce.
 
 Errors distinguish `server_advised` waits, request corrections, and unknown write
 outcomes. Respect `retry_after`; permission/hierarchy/rollout failures need evidence

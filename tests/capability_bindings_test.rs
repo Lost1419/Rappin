@@ -196,12 +196,12 @@ impl OperationPolicy for HostEvidence {
 
 #[test]
 fn catalogue_is_offline_filtered_complete_and_has_one_schema_source() {
-    assert_eq!(catalogue().len(), 69);
+    assert_eq!(catalogue().len(), 76);
     let names = catalogue()
         .iter()
         .map(|c| c.name)
         .collect::<std::collections::HashSet<_>>();
-    assert_eq!(names.len(), 69);
+    assert_eq!(names.len(), 76);
     for descriptor in catalogue() {
         let tool = descriptor.tool_definition();
         assert_eq!(tool["inputSchema"], descriptor.input_schema());
@@ -237,13 +237,13 @@ fn catalogue_is_offline_filtered_complete_and_has_one_schema_source() {
         .iter()
         .all(|c| !c.write && c.domain == CapabilityDomain::Messages));
     let filter = CapabilityFilter {
-        names: vec!["create_role".into()],
+        names: vec!["get_role".into()],
         include_test_servers: false,
         ..Default::default()
     };
     assert!(filtered_catalogue(&filter).is_empty());
     assert!(
-        capability("create_role")
+        capability("get_role")
             .unwrap()
             .availability
             .test_servers_only
@@ -334,7 +334,7 @@ async fn preview_and_local_metadata_need_no_api_access() {
     assert!(api.requests.lock().unwrap().is_empty());
     let call = operation("get_capabilities", json!({}));
     let result = call.execute(&api, &context()).await.unwrap();
-    assert_eq!(result.data["tools"].as_array().unwrap().len(), 69);
+    assert_eq!(result.data["tools"].as_array().unwrap().len(), 76);
     assert!(api.requests.lock().unwrap().is_empty());
     for name in ["ack_events", "poll_events", "doctor"] {
         let args = if name == "ack_events" {
@@ -500,7 +500,7 @@ async fn model_arguments_cannot_escape_server_channel_role_category_or_reply_sco
 #[tokio::test]
 async fn test_server_availability_is_unknown_until_host_evidence_exists() {
     let api = MockApi::standard();
-    let call = operation("get_member_counts", json!({"id":server()}));
+    let call = operation("get_role", json!({"id":server(), "role":role()}));
     let report = call.assess(&api, &context()).await.unwrap();
     assert_eq!(report.decision(), AccessDecision::Unknown);
     assert!(report
@@ -1506,4 +1506,34 @@ async fn message_emoji_lookup_requires_scoped_message_both_actors_and_rollout_ev
         )
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn thread_moderation_accepts_separate_permission_alternatives() {
+    struct ChannelPolicy;
+    #[async_trait]
+    impl OperationPolicy for ChannelPolicy {
+        async fn check(&self, question: &AccessQuestion<'_>) -> Result<CheckResolution> {
+            assert_eq!(question.check, ExternalCheck::ChannelPermissions);
+            assert_eq!(question.channel_id, Some(channel()));
+            let accepted = match question.principal {
+                Principal::Requester => "manage_threads",
+                Principal::Bot => "manage_messages",
+                Principal::Context => panic!("channel proof requires a principal"),
+            };
+            Ok(if question.permissions == ["view_channel", accepted] {
+                CheckResolution::allowed("fixture grants this alternative")
+            } else {
+                CheckResolution::denied("fixture denies this alternative")
+            })
+        }
+    }
+    let api = MockApi::standard();
+    let call = operation("delete_thread", json!({"thread":channel()}));
+    let report = call
+        .assess_with_policy(&api, &context(), &ChannelPolicy)
+        .await
+        .unwrap();
+    assert!(report.allowed(), "{report:?}");
+    assert_eq!(api.mutations.load(Ordering::SeqCst), 0);
 }

@@ -276,7 +276,7 @@ also subject to WorkerProject's handler timeout, which includes queueing and API
 work. Waits count toward the 128 requests per invocation budget. In-flight old
 workers can finish their existing waits during reload; subscriptions do not migrate
 into the new process. Structured errors and parent-owned permission lookups are
-available in protocol 12. Rebuild the parent and all workers together when migrating
+available in protocol 13. Rebuild the parent and all workers together when migrating
 from 0.1 or an earlier 2.0 preview. Other versions fail during candidate startup.
 All worker routes support structured errors, operation identities, UI callbacks
 and single-attempt API requests. The old capability-switch methods are removed.

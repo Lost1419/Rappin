@@ -168,7 +168,7 @@ structured causes. Partial receipts and unknown outcomes retain checkpoint
 barriers. A message gate and checked nested invocation require original message
 provenance. An interaction never acquires a synthetic message or permission grant.
 
-Workers require protocol 12, with resolved `InteractionCommand` metadata separate
+Workers require protocol 13, with resolved `InteractionCommand` metadata separate
 from the original interaction. Rebuild the parent and workers together. Consumer
 state, databases, cache backends, prefixes, approvals and replay decisions remain
 application-owned.

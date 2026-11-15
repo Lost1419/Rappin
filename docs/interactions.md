@@ -161,3 +161,44 @@ scope and assess requester/bot history access separately. Inspect the installed
 catalogue with `rappin capabilities`; platform calls accept explicit IDs.
 
 The complete native form example is [interactive_forms.rs](../examples/interactive_forms.rs).
+
+## Slash options and ephemeral buttons
+
+Yapin still lists typed command options and forms as testing features. Set `CommandSpec::slash_options` on a root command registered by a bot, cog,
+or worker. Use the same `SlashOption` values on `Command::options` when
+publishing metadata directly. `ctx.parse_slash_options()` accepts positional
+arguments and named form submissions such as `query="release notes"` and
+returns a map keyed by option name. Use `CommandSpec::<Arguments>` to give
+the handler ownership of the full argument cursor when it uses this parser.
+Use `Command::parse_options` with standalone publication metadata.
+
+```rust,no_run
+use rappin::{Arguments, Bot, CommandSpec, SlashOption, SlashOptionKind};
+
+let bot = Bot::builder("example").command_spec(
+    CommandSpec::<Arguments>::new("find", "Find items")
+        .slash_options([SlashOption::new("query", SlashOptionKind::String)]),
+    |ctx, args| async move {
+        let query = if ctx.message().is_some() {
+            let mut args = args;
+            args.rest()
+        } else {
+            ctx.parse_slash_options()?.get("query").and_then(|value| value.as_str()).unwrap_or("").to_owned()
+        };
+        ctx.reply(format!("Searching for {query}")).await
+    },
+).build()?;
+# Ok::<(), rappin::Error>(())
+```
+
+A completed slash command with no callback is acknowledged after 10 seconds by default.
+Set `ExecutionConfig::command_auto_ack_after` to change the delay or disable
+it. A prior callback or uncertain callback outcome prevents a duplicate ack.
+Use an explicit reply to attach the response to the invocation. The default
+failure handler sends a generic ephemeral error when an unexpected command
+failure still has an eligible callback and the handler has no partial or
+uncertain result. The original failure retains its checkpoint barrier.
+
+Ephemeral replies can include up to five classic button rows. Use `update`
+when a button click has a `reply_id` to edit the ephemeral reply in place.
+The server owns the 15-minute button lifetime and the callback deadline.

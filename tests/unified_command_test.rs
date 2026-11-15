@@ -310,6 +310,17 @@ impl FromArgs for Count{fn parse(a:&mut Arguments)->std::result::Result<Self,Com
     let first=ctx.say("confirmed").await?;let cause=ctx.say("uncertain").await.unwrap_err();
     Err(Error::PartialWrite{completed:vec![serde_json::json!({"message":first})],failed_step:2,source:Box::new(cause)})
  })
+ .command_spec(CommandSpec::<Arguments>::new("find","Find").slash_options([
+    SlashOption::new("query", SlashOptionKind::String),
+ ]), |ctx, _args| async move {
+    let values=ctx.parse_slash_options()?;
+    assert_eq!(values["query"], "two words");
+    ctx.reply("found").await
+ })
+ .listen(Listener::ChangeEvent, |ctx| async move {
+    assert!(matches!(ctx.event, CogEvent::ChangeEvent { event: ChangeEvent::ServerRemove(_) }));
+    Ok(())
+ })
  .on_interaction(|_|async{panic!("registered worker command reached generic UI listener")})
  .run().await
 }
@@ -341,6 +352,7 @@ impl FromArgs for Count{fn parse(a:&mut Arguments)->std::result::Result<Self,Com
         (callback(2), vec![support::response(200, json!({}))]),
         (callback(4), vec![support::response(200, json!({}))]),
         (callback(6), vec![support::response(200, json!({}))]),
+        (callback(7), vec![support::response(200, json!({}))]),
     ])
     .await;
     let failures = Arc::new(AtomicUsize::new(0));
@@ -401,6 +413,17 @@ impl FromArgs for Count{fn parse(a:&mut Arguments)->std::result::Result<Self,Com
     bot.process_event(interaction("tools", "count 7", 6))
         .await
         .unwrap();
+    bot.process_event(interaction("find", r#"query="two words""#, 7))
+        .await
+        .unwrap();
+    bot.process_event(
+        serde_json::from_value(json!({
+            "id":8,"type":"server_remove","data":{"server_id":Uuid::from_u128(3)}
+        }))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
     assert_eq!(failures.load(Ordering::SeqCst), 3);
     assert_eq!(bot.client().read_availability_status().recoveries, 1);
     http.await.unwrap();
@@ -417,7 +440,8 @@ impl FromArgs for Count{fn parse(a:&mut Arguments)->std::result::Result<Self,Com
             .count(),
         1
     );
-    assert!(writes.last().unwrap().contains("counted 1"));
+    assert!(writes[writes.len() - 2].contains("counted 1"));
+    assert!(writes.last().unwrap().contains("found"));
 }
 
 #[tokio::test]

@@ -22,6 +22,23 @@ use crate::models::{BotProfile, MemberJoinEvent, MemberLeaveEvent, ReactionEvent
 /// }
 /// ```
 pub trait EventHandler: Send + Sync + 'static {
+    /// Handle a message edit/deletion or bot server membership notification.
+    ///
+    /// ```
+    /// fn inspect(event: &rappin::ChangeEvent) {
+    ///     if let rappin::ChangeEvent::ServerRemove(server) = event {
+    ///         println!("{}", server.server_id);
+    ///     }
+    /// }
+    /// ```
+    async fn on_change_event(
+        &self,
+        _client: &crate::Client,
+        _event: &crate::ChangeEvent,
+    ) -> crate::Result<()> {
+        Ok(())
+    }
+
     /// Process a resource lifecycle event. Errors retain the event's checkpoint barrier.
     ///
     /// ```rust
@@ -44,7 +61,7 @@ pub trait EventHandler: Send + Sync + 'static {
         Ok(())
     }
 
-    /// An invite was created (Manage Server; test servers only).
+    /// An invite was created (Manage Server).
     /// # Example
     ///
     /// ```rust
@@ -64,7 +81,7 @@ pub trait EventHandler: Send + Sync + 'static {
         Ok(())
     }
 
-    /// An invite was deleted (Manage Server; test servers only).
+    /// An invite was deleted (Manage Server).
     /// # Example
     ///
     /// ```rust

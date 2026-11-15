@@ -31,6 +31,7 @@ pub struct CommandContext {
     source: Source,
     resolved: Option<String>,
     arguments: Option<String>,
+    slash_options: Vec<crate::SlashOption>,
 }
 impl From<MessageContext> for CommandContext {
     fn from(ctx: MessageContext) -> Self {
@@ -38,6 +39,7 @@ impl From<MessageContext> for CommandContext {
             source: Source::Message(ctx),
             resolved: None,
             arguments: None,
+            slash_options: vec![],
         }
     }
 }
@@ -47,6 +49,7 @@ impl From<InteractionContext> for CommandContext {
             source: Source::Interaction(ctx),
             resolved: None,
             arguments: None,
+            slash_options: vec![],
         }
     }
 }
@@ -57,15 +60,22 @@ impl From<crate::hot_reload::WorkerContext> for CommandContext {
             source: Source::Worker(ctx),
             resolved: None,
             arguments: None,
+            slash_options: vec![],
         }
     }
 }
 impl CommandContext {
-    pub(crate) fn resolved(ctx: InteractionContext, name: String, args: String) -> Self {
+    pub(crate) fn resolved(
+        ctx: InteractionContext,
+        name: String,
+        args: String,
+        slash_options: Vec<crate::SlashOption>,
+    ) -> Self {
         Self {
             source: Source::Interaction(ctx),
             resolved: Some(name),
             arguments: Some(args),
+            slash_options,
         }
     }
     pub(crate) fn for_message(ctx: MessageContext, name: String) -> Self {
@@ -73,6 +83,7 @@ impl CommandContext {
             source: Source::Message(ctx),
             resolved: Some(name),
             arguments: None,
+            slash_options: vec![],
         }
     }
     pub(crate) fn native_client(&self) -> Option<&crate::Client> {
@@ -255,6 +266,48 @@ impl CommandContext {
         arguments.finish()?;
         Ok(value)
     }
+    /// Read the declared options of a slash invocation by name.
+    /// Supports both positional slash input and submissions from Yapin's option form.
+    ///
+    /// ```
+    /// fn inspect(ctx: &rappin::CommandContext) -> rappin::Result<()> {
+    ///     let options = ctx.parse_slash_options()?;
+    ///     println!("{:?}", options.get("query"));
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn parse_slash_options(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, serde_json::Value>> {
+        let options = match &self.source {
+            Source::Interaction(ctx) if ctx.event.kind.as_deref() == Some("command") => {
+                &self.slash_options
+            }
+            #[cfg(feature = "hot-reload")]
+            Source::Worker(ctx) => match &ctx.event {
+                crate::CogEvent::InteractionCommand { slash_options, .. } => slash_options,
+                _ => {
+                    return Err(crate::Error::validation(
+                        "options",
+                        "requires a slash command",
+                    ))
+                }
+            },
+            _ => {
+                return Err(crate::Error::validation(
+                    "options",
+                    "requires a slash command",
+                ))
+            }
+        };
+        crate::slash_options::parse_options(options, self.args())
+    }
+
+    #[cfg(feature = "hot-reload")]
+    pub(crate) fn slash_option_declarations(&self) -> &[crate::SlashOption] {
+        &self.slash_options
+    }
+
     /// Preserve the consumer's local operation label. It grants no permission
     /// and does not make remote writes idempotent.
     /// # Example

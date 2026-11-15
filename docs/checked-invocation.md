@@ -80,7 +80,7 @@ composition preserves this bound; detached execution is rejected.
 
 The API requires no optional feature for native commands. Targets installed with
 `hot-reload` use the existing parent-owned worker proxy, authorization context and
-structured error protocol 12; gateway event intake remains optional. Rebuild the
+structured error protocol 13; gateway event intake remains optional. Rebuild the
 parent and workers together. Worker metadata can supply a pure argument schema
 for preparation. Worker checks and unavailable parsers are reported as deferred
 and run inside the worker at execution. Command specs support aliases and groups.
@@ -155,7 +155,7 @@ makes no API request idempotent and does not make a payment safe to resend.
 
 ### Workers and compatibility
 
-Workers require `hot-reload` and protocol 12. Every worker supports operation
+Workers require `hot-reload` and protocol 13. Every worker supports operation
 identities, single-attempt API requests and UI callbacks. Rebuild the parent and
 workers together. The old `operation_identity`, `single_attempt_api` and `ui_api`
 capability switches are removed. Consumer operation IDs retain their separate

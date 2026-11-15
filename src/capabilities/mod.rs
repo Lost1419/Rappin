@@ -171,6 +171,9 @@ pub struct PermissionRequirements {
     pub requester_channel: Vec<&'static str>,
     /// Effective channel permissions the bot must independently possess.
     pub bot_channel: Vec<&'static str>,
+    /// Alternative effective channel grants. Each principal must hold at least one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub channel_any: Vec<&'static str>,
     /// Facts requiring host policy or additional authoritative evidence.
     pub additional_checks: Vec<ExternalCheck>,
 }
@@ -399,6 +402,7 @@ fn metadata(
         bot: P::Member,
         requester_channel: vec![],
         bot_channel: vec![],
+        channel_any: vec![],
         additional_checks: vec![],
     };
     let (scope, domain) = match name {
@@ -432,6 +436,9 @@ fn metadata(
         | "get_channel_overrides"
         | "set_channel_override"
         | "delete_channel_override" => (S::Channel("channel"), D::Permissions),
+        "list_threads" | "create_thread" => (S::Channel("channel"), D::Channels),
+        "edit_thread" | "delete_thread" => (S::Channel("thread"), D::Channels),
+        "moderate_reactions" => (S::Channel("channel"), D::Messages),
         "send_sticker" => (S::Channel("channel"), D::Messages),
         "list_invites" => (S::Server("id"), D::Members),
         "list_server_events" | "create_server_event" => (S::Server("id"), D::Events),
@@ -449,6 +456,7 @@ fn metadata(
         "send_files" => (S::Channel("channel"), D::Messages),
         "get_api_version" | "get_api_changelog" => (S::Public, D::Diagnostics),
         "poll_events" => (S::GlobalEvents, D::Events),
+        "list_slash_commands" | "publish_slash_commands" => (S::CliRuntime, D::Messages),
         "ack_events" => (S::CliRuntime, D::Events),
         "doctor" => (S::CliRuntime, D::Diagnostics),
         "get_capabilities" => (S::Offline, D::Schema),
@@ -476,7 +484,7 @@ fn metadata(
                     .additional_checks
                     .push(ExternalCheck::CategoryPermissions);
             }
-            if name == "edit_channel" {
+            if matches!(name, "create_channel" | "edit_channel") {
                 permissions
                     .additional_checks
                     .push(ExternalCheck::OverrideAuthority);
@@ -522,6 +530,30 @@ fn metadata(
             permissions
                 .additional_checks
                 .push(ExternalCheck::MessageContentRules);
+        }
+        "list_threads" => {
+            permissions.requester_channel.push("read_history");
+            permissions.bot_channel.push("read_history");
+        }
+        "create_thread" => {
+            permissions
+                .requester_channel
+                .extend(["create_threads", "send_in_threads"]);
+            permissions
+                .bot_channel
+                .extend(["create_threads", "send_in_threads"]);
+            permissions
+                .additional_checks
+                .push(ExternalCheck::MessageContentRules);
+        }
+        "edit_thread" | "delete_thread" => {
+            permissions
+                .channel_any
+                .extend(["manage_threads", "manage_messages"]);
+        }
+        "moderate_reactions" => {
+            permissions.requester_channel.push("manage_messages");
+            permissions.bot_channel.push("manage_messages");
         }
         "send_message" | "send_sticker" => {
             permissions.requester_channel.push("send_messages");
@@ -627,30 +659,6 @@ fn metadata(
             | "set_category_override"
             | "delete_category_override"
             | "send_sticker"
-            | "get_message_emojis"
-            | "send_files"
-            | "list_emojis"
-            | "create_emoji"
-            | "edit_emoji"
-            | "delete_emoji"
-            | "list_bot_webhooks"
-            | "list_channel_webhooks"
-            | "create_bot_webhook"
-            | "delete_bot_webhook"
-            | "post_bot_webhook"
-            | "get_member_counts"
-            | "list_invites"
-            | "create_role"
-            | "edit_role"
-            | "delete_role"
-            | "set_everyone_permissions"
-            | "get_channel_permissions"
-            | "set_channel_permissions"
-            | "clear_channel_permissions"
-            | "set_category_permissions"
-            | "clear_category_permissions"
-            | "list_server_events"
-            | "create_server_event"
     );
     let library = match scope {
         S::Offline => LibrarySupport::Offline,

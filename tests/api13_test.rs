@@ -295,7 +295,7 @@ async fn opt_in_ui_routing_keeps_values_separate_from_legacy_buttons_and_failure
 #[test]
 fn emoji_lookup_catalogue_scope_and_rollout_are_explicit() {
     let entry = capability("get_message_emojis").unwrap();
-    assert!(entry.availability.test_servers_only);
+    assert!(!entry.availability.test_servers_only);
     assert!(entry
         .permissions
         .requester_channel

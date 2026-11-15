@@ -151,10 +151,7 @@ async fn developer_update_tools_preview_typed_payloads_and_reject_path_targets()
     )
     .await;
     let schema = mcp.recv().await;
-    assert!(data(&schema)["operation"]["description"]
-        .as_str()
-        .unwrap()
-        .contains("In testing"));
+    assert!(data(&schema)["operation"]["x-flag"].is_null());
     assert!(data(&schema)["components"]["schemas"]["ServerEvent"].is_object());
     assert!(data(&schema)["operation"]["x-rappin-source"].is_null());
     mcp.close().await;
@@ -1152,4 +1149,59 @@ async fn platform_collection_limits_match_advertised_schemas() {
     mcp.close().await;
     std::fs::remove_file(arguments).unwrap();
     std::fs::remove_file(cfg).unwrap();
+}
+
+#[tokio::test]
+async fn api15_write_previews_match_through_cli_and_mcp() {
+    let config = config();
+    let path = temp("json");
+    let id = Uuid::nil();
+    let rows = [
+        (
+            "create_thread",
+            json!({"channel":id,"body":{"name":"Discussion","content":"Welcome"}}),
+        ),
+        ("edit_thread", json!({"thread":id,"body":{"archived":true}})),
+        ("delete_thread", json!({"thread":id})),
+        (
+            "moderate_reactions",
+            json!({"channel":id,"message":id,"emoji":"👍","user":id}),
+        ),
+        (
+            "publish_slash_commands",
+            json!({"body":{"commands":[{"name":"find","options":[{"name":"query"}]}]}}),
+        ),
+        (
+            "create_channel",
+            json!({"server":id,"body":{"name":"ticket","private":true,"user_ids":[id]}}),
+        ),
+        (
+            "send_message",
+            json!({"channel":id,"body":{"content":"Hello","nonce":"api15-mock"}}),
+        ),
+    ];
+    let mut mcp = Mcp::new(None, None);
+    for (index, (name, mut arguments)) in rows.into_iter().enumerate() {
+        arguments["dry_run"] = true.into();
+        std::fs::write(&path, arguments.to_string()).unwrap();
+        let (ok, result) = cli(
+            &config,
+            None,
+            &[
+                "tools",
+                "call",
+                name,
+                "--arguments-file",
+                path.to_str().unwrap(),
+            ],
+        )
+        .await;
+        assert!(ok, "{name}: {result}");
+        mcp.call(index as u64 + 1, name, arguments).await;
+        let response = mcp.recv().await;
+        assert_eq!(response["result"]["structuredContent"], result, "{name}");
+    }
+    mcp.close().await;
+    std::fs::remove_file(config).unwrap();
+    std::fs::remove_file(path).unwrap();
 }

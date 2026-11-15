@@ -6,6 +6,8 @@ pub fn collection(command: &Command) -> Option<&'static str> {
             "list_emojis" | "get_message_emojis" => Some("emojis"),
             "get_channel_overrides" | "get_category_overrides" => Some("overrides"),
             "reorder_roles" => Some("roles"),
+            "list_threads" => Some("threads"),
+            "list_slash_commands" => Some("commands"),
             "list_channel_webhooks" | "list_bot_webhooks" => Some("webhooks"),
             _ => None,
         },

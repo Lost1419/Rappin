@@ -1,9 +1,8 @@
 # Uploads, emojis and webhooks
 
-Rappin supports the public Yapin API 1.2 specification. Message uploads, custom
-emojis, bot-owned webhooks and DM delivery remain subject to Yapin's test-server
-or tester rollout. The SDK preserves availability and permission failures; it
-cannot enable an upstream feature for a server.
+Yapin API 1.5.0 documents message uploads, custom emojis, bot-owned webhooks
+and DM delivery without their earlier testing flags. Each request remains
+subject to Yapin's visibility, permissions and validation.
 
 ## Uploads
 
@@ -57,8 +56,7 @@ base64/data URLs with
 `EmojiCreateResult { emoji: None, pending: true, .. }` means moderation is pending,
 not a failed write. Do not upload again just because no emoji is returned yet.
 
-The platform documents a 2 MB upload limit. Endpoint descriptions restrict rollout
-even where tag headings omit testing. Use the endpoint's eligibility requirements.
+The current platform schema documents a 2 MiB decoded upload limit.
 See the [dated API support report](https://github.com/Lost1419/Rappin/blob/dev/docs/api-support-0.1.28.md)
 for the older release's limits.
 

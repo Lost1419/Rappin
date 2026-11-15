@@ -7,7 +7,7 @@ struct RoleResponse {
 }
 
 impl Client {
-    /// Creates a role (Manage Roles; test servers only).
+    /// Creates a role (Manage Roles).
     /// # Example
     ///
     /// ```no_run
@@ -51,7 +51,7 @@ impl Client {
         Ok(result?.role)
     }
 
-    /// Deletes a role below the bot's highest role (test servers only).
+    /// Deletes a role below the bot's highest role.
     /// # Example
     ///
     /// ```no_run
@@ -73,7 +73,7 @@ impl Client {
         result.map(|_| ())
     }
 
-    /// Changes only supplied @everyone permission keys (test servers only).
+    /// Changes only supplied @everyone permission keys.
     /// # Example
     ///
     /// ```no_run
@@ -99,7 +99,7 @@ impl Client {
         result.map(|_| ())
     }
 
-    /// Lists channel overrides (test servers only). Null role IDs mean @everyone.
+    /// Lists channel overrides. Null role IDs mean @everyone.
     /// # Example
     ///
     /// ```no_run
@@ -129,7 +129,7 @@ impl Client {
         Ok(response.overrides)
     }
 
-    /// Replaces an override; empty allow/deny lists clear it (test servers only).
+    /// Replaces an override; empty allow/deny lists clear it.
     /// # Example
     ///
     /// ```no_run
@@ -155,7 +155,7 @@ impl Client {
         .map(|_| ())
     }
 
-    /// Removes a channel override (test servers only).
+    /// Removes a channel override.
     /// # Example
     ///
     /// ```no_run
@@ -180,7 +180,7 @@ impl Client {
         .map(|_| ())
     }
 
-    /// Replaces a category override (Manage Roles or Manage Channels; test servers only).
+    /// Replaces a category override (Manage Roles or Manage Channels).
     /// # Example
     ///
     /// ```no_run
@@ -208,7 +208,7 @@ impl Client {
         result.map(|_| ())
     }
 
-    /// Removes a category override (test servers only).
+    /// Removes a category override.
     /// # Example
     ///
     /// ```no_run
@@ -235,7 +235,7 @@ impl Client {
         result.map(|_| ())
     }
 
-    /// Live member/online counts (test servers only). Ask every few minutes.
+    /// Live member/online counts. Ask every few minutes.
     /// # Example
     ///
     /// ```no_run
@@ -251,7 +251,7 @@ impl Client {
             .await
     }
 
-    /// Lists invites (Manage Server; test servers only).
+    /// Lists invites (Manage Server).
     /// # Example
     ///
     /// ```no_run
@@ -273,7 +273,7 @@ impl Client {
         Ok(response.invites)
     }
 
-    /// Lists upcoming and live scheduled events (test servers only).
+    /// Lists upcoming and live scheduled events.
     /// # Example
     ///
     /// ```no_run
@@ -295,7 +295,7 @@ impl Client {
         Ok(response.events)
     }
 
-    /// Creates a scheduled event (Manage Events or Manage Server; test servers only).
+    /// Creates a scheduled event (Manage Events or Manage Server).
     /// Yapin enforces its limit of 25 upcoming events per server.
     /// # Example
     ///

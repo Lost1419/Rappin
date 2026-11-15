@@ -99,6 +99,9 @@ pub struct Channel {
     /// Whether the channel is private to permitted roles.
     #[serde(default)]
     pub private: Option<bool>,
+    /// Member allowlist returned by a private-channel edit, when supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_ids: Option<Vec<Uuid>>,
     /// Whether the channel is read-only.
     #[serde(default)]
     pub read_only: Option<bool>,
@@ -159,6 +162,15 @@ pub struct ChannelRow {
 /// assert_eq!(request.category_id, Some(uuid::Uuid::nil()));
 /// ```
 pub struct CreateChannelRequest {
+    /// Create the channel privately from the start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub private: Option<bool>,
+    /// Roles allowed to see the new private channel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role_ids: Option<Vec<Uuid>>,
+    /// Server members allowed to see the new private channel.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_ids: Option<Vec<Uuid>>,
     /// Channel display name, when returned by this endpoint.
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -170,6 +182,37 @@ pub struct CreateChannelRequest {
 }
 
 impl CreateChannelRequest {
+    /// Create the channel with a private audience in the same request.
+    ///
+    /// ```
+    /// let body = rappin::CreateChannelRequest::text("ticket")
+    ///     .private_audience([], [uuid::Uuid::nil()]);
+    /// assert_eq!(body.private, Some(true));
+    /// ```
+    pub fn private_audience(
+        mut self,
+        roles: impl IntoIterator<Item = Uuid>,
+        users: impl IntoIterator<Item = Uuid>,
+    ) -> Self {
+        self.private = Some(true);
+        self.role_ids = Some(roles.into_iter().collect());
+        self.user_ids = Some(users.into_iter().collect());
+        self
+    }
+
+    pub(crate) fn validate(&self) -> crate::Result<()> {
+        if (self.role_ids.is_some() || self.user_ids.is_some()) && self.private != Some(true) {
+            return Err(crate::Error::validation(
+                "private",
+                "an allowlist requires a private channel",
+            ));
+        }
+        if let Some(users) = &self.user_ids {
+            crate::threads::validate_user_ids(users)?;
+        }
+        Ok(())
+    }
+
     /// Create a request with only a name; the API selects the channel kind.
     ///
     /// # Example
@@ -184,6 +227,9 @@ impl CreateChannelRequest {
             name: name.into(),
             kind: None,
             category_id: None,
+            private: None,
+            role_ids: None,
+            user_ids: None,
         }
     }
 
@@ -201,6 +247,9 @@ impl CreateChannelRequest {
             name: name.into(),
             kind: Some(ChannelKind::Text),
             category_id: None,
+            private: None,
+            role_ids: None,
+            user_ids: None,
         }
     }
 
@@ -218,6 +267,9 @@ impl CreateChannelRequest {
             name: name.into(),
             kind: Some(ChannelKind::Voice),
             category_id: None,
+            private: None,
+            role_ids: None,
+            user_ids: None,
         }
     }
 
@@ -247,6 +299,9 @@ impl CreateChannelRequest {
 /// request.validate().unwrap();
 /// ```
 pub struct EditChannelRequest {
+    /// Replacement private-channel member allowlist. An empty list clears it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_ids: Option<Vec<Uuid>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Channel display name, when returned by this endpoint.
     pub name: Option<String>,
@@ -284,6 +339,15 @@ impl EditChannelRequest {
     /// assert!(EditChannelRequest::new().slowmode(21_601).validate().is_err());
     /// ```
     pub fn validate(&self) -> crate::Result<()> {
+        if let Some(users) = &self.user_ids {
+            if self.private == Some(false) {
+                return Err(crate::Error::validation(
+                    "private",
+                    "an allowlist requires a private channel",
+                ));
+            }
+            crate::threads::validate_user_ids(users)?;
+        }
         if self.slowmode.is_some_and(|seconds| seconds > 21600) {
             return Err(crate::Error::validation(
                 "slowmode",
@@ -345,6 +409,17 @@ impl EditChannelRequest {
     /// ```
     pub fn private(mut self, private: bool) -> Self {
         self.private = Some(private);
+        self
+    }
+
+    /// Replace the member allowlist on a private channel.
+    ///
+    /// ```
+    /// let patch = rappin::EditChannelRequest::new().user_ids([]);
+    /// assert_eq!(patch.user_ids, Some(vec![]));
+    /// ```
+    pub fn user_ids(mut self, users: impl IntoIterator<Item = Uuid>) -> Self {
+        self.user_ids = Some(users.into_iter().collect());
         self
     }
 

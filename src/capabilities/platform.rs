@@ -5,7 +5,12 @@ use reqwest::Method;
 pub(super) fn is_platform_operation(name: &str) -> bool {
     matches!(
         name,
-        "resolve_id"
+        "list_threads"
+            | "create_thread"
+            | "edit_thread"
+            | "delete_thread"
+            | "moderate_reactions"
+            | "resolve_id"
             | "get_member_permissions"
             | "get_channel_member_permissions"
             | "get_role"
@@ -112,6 +117,41 @@ impl ValidatedOperation {
     pub fn api_request(&self) -> Result<OperationRequest> {
         let id = |key: &str| self.args[key].as_str().unwrap_or_default();
         let (method, path, public) = match self.name() {
+            "list_slash_commands" => (Method::GET, "/commands".into(), false),
+            "publish_slash_commands" => (Method::PUT, "/commands".into(), false),
+            "list_threads" => {
+                let mut path = format!("/channels/{}/threads", id("channel"));
+                if let Some(limit) = self.args["limit"].as_u64() {
+                    path.push_str(&format!("?limit={limit}"));
+                }
+                (Method::GET, path, false)
+            }
+            "create_thread" => (
+                Method::POST,
+                format!("/channels/{}/threads", id("channel")),
+                false,
+            ),
+            "edit_thread" => (Method::PATCH, format!("/threads/{}", id("thread")), false),
+            "delete_thread" => (Method::DELETE, format!("/threads/{}", id("thread")), false),
+            "moderate_reactions" => {
+                let target = match (self.args["emoji"].as_str(), self.args["user"].as_str()) {
+                    (Some(emoji), Some(_)) => crate::ReactionTarget::User {
+                        emoji,
+                        user: self.uuid("user"),
+                    },
+                    (Some(emoji), _) => crate::ReactionTarget::Emoji(emoji),
+                    _ => crate::ReactionTarget::Message,
+                };
+                (
+                    Method::DELETE,
+                    crate::threads::reaction_path(
+                        self.uuid("channel"),
+                        self.uuid("message"),
+                        target,
+                    )?,
+                    false,
+                )
+            }
             "resolve_id" => (Method::GET, format!("/resolve/{}", id("id")), false),
             "get_member_permissions" => (
                 Method::GET,

@@ -91,6 +91,9 @@ pub struct ExecutionConfig {
     pub max_event_age: Option<u32>,
     /// Optional early interaction acknowledgement delay.
     pub auto_ack_after: Option<Duration>,
+    /// Delay before acknowledging a slash command that has not sent a callback.
+    /// Set to None to let the handler own acknowledgement entirely.
+    pub command_auto_ack_after: Option<Duration>,
 }
 impl Default for ExecutionConfig {
     fn default() -> Self {
@@ -100,6 +103,7 @@ impl Default for ExecutionConfig {
             drain_timeout: None,
             max_event_age: None,
             auto_ack_after: None,
+            command_auto_ack_after: Some(Duration::from_secs(10)),
         }
     }
 }

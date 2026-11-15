@@ -154,7 +154,7 @@ fn build_catalog() -> Vec<Capability> {
         Entry{name:"resolve_member",description:"Resolve a member name within bounded pages",cli:&["members","resolve"],fields:vec![id("server",None,true),text("name",None,true),number("max_pages","--max-pages",1,100)],write:false,destructive:false,collection:false},
         Entry{name:"get_member",description:"Fetch current membership and roles",cli:&["members","get"],fields:vec![id("server",None,true),id("user",None,true)],write:false,destructive:false,collection:false},
         Entry{name:"read_messages",description:"Read bounded history; cursors are RFC3339 timestamps",cli:&["messages","list"],fields:vec![id("channel",None,true),number("limit","--limit",1,100),field("before",Some("--before"),json!({"type":"string","format":"date-time"}),false),field("after",Some("--after"),json!({"type":"string","format":"date-time"}),false),number("max_pages","--max-pages",1,100)],write:false,destructive:false,collection:true},
-        Entry{name:"get_message_emojis",description:"Read custom emojis found in one scoped message; test servers only",cli:&["platform","get_message_emojis"],fields:vec![id("channel",None,true),id("message",None,true)],write:false,destructive:false,collection:true},
+        Entry{name:"get_message_emojis",description:"Read custom emojis found in one scoped message",cli:&["platform","get_message_emojis"],fields:vec![id("channel",None,true),id("message",None,true)],write:false,destructive:false,collection:true},
         Entry{name:"get_message",description:"Read one message and its author context",cli:&["messages","get"],fields:vec![id("channel",None,true),id("message",None,true)],write:false,destructive:false,collection:false},
         Entry{name:"send_message",description:"Send requested text or a rich-message body; dry_run previews without sending",cli:&["messages","send"],fields:vec![id("channel",None,true),field("content",Some("--content"),json!({"type":"string","description":"Up to 2000 characters unless split=true"}),false),field("body",Some("--body-file"),json!({"type":"object","description":"CreateMessage JSON with embeds/components/layout flags"}),false),id("reply_to",Some("--reply-to"),false)],write:true,destructive:false,collection:false},
         Entry{name:"edit_message",description:"Edit a bot message with an inline JSON body",cli:&["messages","edit"],fields:vec![id("channel",None,true),id("message",None,true),body()],write:true,destructive:true,collection:false},
@@ -188,7 +188,7 @@ fn build_catalog() -> Vec<Capability> {
         Entry{name:"search_members",description:"Return bounded member candidates; a full final page is incomplete, never confirmed unique",cli:&["members","search"],fields:vec![id("server",None,true),text("name",None,true),number("max_pages","--max-pages",1,100)],write:false,destructive:false,collection:true},
         Entry {
             name: "get_member_counts",
-            description: "Live counts, refreshed roughly once a minute; test servers only",
+            description: "Live counts, refreshed roughly once a minute",
             cli: &["servers", "counts"],
             fields: vec![id("id", None, true)],
             write: false,
@@ -197,7 +197,7 @@ fn build_catalog() -> Vec<Capability> {
         },
         Entry {
             name: "list_invites",
-            description: "List invites; Manage Server and test-server access required",
+            description: "List invites; Manage Server required",
             cli: &["servers", "invites"],
             fields: vec![id("id", None, true)],
             write: false,
@@ -216,7 +216,7 @@ fn build_catalog() -> Vec<Capability> {
         Entry {
             name: "create_role",
             description:
-                "Create a role; Manage Roles, hierarchy checks and test-server access apply",
+                "Create a role; Manage Roles and hierarchy checks apply",
             cli: &["servers", "role-create"],
             fields: vec![id("id", None, true), body()],
             write: true,
@@ -226,7 +226,7 @@ fn build_catalog() -> Vec<Capability> {
         Entry {
             name: "edit_role",
             description:
-                "Patch role fields; only supplied permission keys change; test servers only",
+                "Patch role fields; only supplied permission keys change",
             cli: &["servers", "role-edit"],
             fields: vec![id("id", None, true), id("role", None, true), body()],
             write: true,
@@ -235,7 +235,7 @@ fn build_catalog() -> Vec<Capability> {
         },
         Entry {
             name: "delete_role",
-            description: "Delete a specified role when authorized; test servers only",
+            description: "Delete a specified role when authorized",
             cli: &["servers", "role-delete"],
             fields: vec![id("id", None, true), id("role", None, true)],
             write: true,
@@ -245,7 +245,7 @@ fn build_catalog() -> Vec<Capability> {
         Entry {
             name: "set_everyone_permissions",
             description:
-                "Patch everyone permissions using a permissions dictionary; test servers only",
+                "Patch everyone permissions using a permissions dictionary",
             cli: &["servers", "everyone-permissions"],
             fields: vec![id("id", None, true), body()],
             write: true,
@@ -254,7 +254,7 @@ fn build_catalog() -> Vec<Capability> {
         },
         Entry {
             name: "get_channel_permissions",
-            description: "List role overrides; null role_id means everyone; test servers only",
+            description: "List role overrides; null role_id means everyone",
             cli: &["channels", "permissions"],
             fields: vec![id("id", None, true)],
             write: false,
@@ -263,7 +263,7 @@ fn build_catalog() -> Vec<Capability> {
         },
         Entry {
             name: "set_channel_permissions",
-            description: "Replace allow/deny lists for a role or everyone; test servers only",
+            description: "Replace allow/deny lists for a role or everyone",
             cli: &["channels", "permissions-set"],
             fields: vec![id("id", None, true), target(), body()],
             write: true,
@@ -272,7 +272,7 @@ fn build_catalog() -> Vec<Capability> {
         },
         Entry {
             name: "clear_channel_permissions",
-            description: "Remove a specified channel override; test servers only",
+            description: "Remove a specified channel override",
             cli: &["channels", "permissions-clear"],
             fields: vec![id("id", None, true), target()],
             write: true,
@@ -281,7 +281,7 @@ fn build_catalog() -> Vec<Capability> {
         },
         Entry {
             name: "set_category_permissions",
-            description: "Replace category allow/deny lists; test servers only",
+            description: "Replace category allow/deny lists",
             cli: &["servers", "category-permissions-set"],
             fields: vec![
                 id("id", None, true),
@@ -295,7 +295,7 @@ fn build_catalog() -> Vec<Capability> {
         },
         Entry {
             name: "clear_category_permissions",
-            description: "Remove a specified category override; test servers only",
+            description: "Remove a specified category override",
             cli: &["servers", "category-permissions-clear"],
             fields: vec![id("id", None, true), id("category", None, true), target()],
             write: true,
@@ -304,7 +304,7 @@ fn build_catalog() -> Vec<Capability> {
         },
         Entry {
             name: "list_server_events",
-            description: "List upcoming/live scheduled server events; test servers only",
+            description: "List upcoming/live scheduled server events",
             cli: &["servers", "scheduled-events"],
             fields: vec![id("id", None, true)],
             write: false,
@@ -314,7 +314,7 @@ fn build_catalog() -> Vec<Capability> {
         Entry {
             name: "create_server_event",
             description:
-                "Create a scheduled event; Manage Events or Manage Server; test servers only",
+                "Create a scheduled event; Manage Events or Manage Server",
             cli: &["servers", "event-create"],
             fields: vec![id("id", None, true), body()],
             write: true,
@@ -409,6 +409,69 @@ fn build_catalog() -> Vec<Capability> {
             description: "Remove a role or everyone override on a channel",
             cli: &["platform", "delete_channel_override"],
             fields: vec![id("channel", None, true), text("target", None, true)],
+            write: true,
+            destructive: true,
+            collection: false,
+        },
+        Entry {
+            name: "list_slash_commands",
+            description: "List the bot's published slash commands and options",
+            cli: &["platform", "list_slash_commands"],
+            fields: vec![],
+            write: false,
+            destructive: false,
+            collection: true,
+        },
+        Entry {
+            name: "publish_slash_commands",
+            description: "Replace the bot's complete published slash command list and options",
+            cli: &["platform", "publish_slash_commands"],
+            fields: vec![body()],
+            write: true,
+            destructive: true,
+            collection: false,
+        },
+        Entry {
+            name: "list_threads",
+            description: "List recent threads in a text channel",
+            cli: &["platform", "list_threads"],
+            fields: vec![id("channel",None,true), number("limit","--limit",1,50)],
+            write: false,
+            destructive: false,
+            collection: true,
+        },
+        Entry {
+            name: "create_thread",
+            description: "Create a thread and send its first message",
+            cli: &["platform", "create_thread"],
+            fields: vec![id("channel",None,true), body()],
+            write: true,
+            destructive: false,
+            collection: false,
+        },
+        Entry {
+            name: "edit_thread",
+            description: "Rename, lock or archive a thread",
+            cli: &["platform", "edit_thread"],
+            fields: vec![id("thread",None,true), body()],
+            write: true,
+            destructive: true,
+            collection: false,
+        },
+        Entry {
+            name: "delete_thread",
+            description: "Delete a thread",
+            cli: &["platform", "delete_thread"],
+            fields: vec![id("thread",None,true)],
+            write: true,
+            destructive: true,
+            collection: false,
+        },
+        Entry {
+            name: "moderate_reactions",
+            description: "Remove reactions from one message. Omit emoji to clear all, or supply emoji and optional user",
+            cli: &["platform", "moderate_reactions"],
+            fields: vec![id("channel",None,true), id("message",None,true), text("emoji",Some("--emoji"),false), id("user",Some("--user"),false)],
             write: true,
             destructive: true,
             collection: false,

@@ -1,10 +1,9 @@
 # Server management APIs
 
-The [Yapin developer guide](https://www.yapin.gg/developers), checked on
-31 October 2026, documents role management, permission overrides, live counts,
-invites and scheduled events. **These endpoints are currently available only on
-test servers.** Rappin exposes them without assuming that a bot has access.
-Permission errors from Yapin remain visible to the caller.
+The [Yapin developer guide](https://www.yapin.gg/developers) documents role
+management, permission overrides, live counts, invites and scheduled events.
+Use capability availability metadata for operations still limited to test
+servers. Permission errors from Yapin remain visible to the caller.
 
 For independently evaluated requester/bot hierarchy checks, explicit owner/admin
 rules and single-attempt role deletion, see [availability and role hierarchy](https://github.com/Lost1419/Rappin/blob/dev/docs/availability-and-hierarchy.md).
@@ -12,7 +11,11 @@ rules and single-attempt role deletion, see [availability and role hierarchy](ht
 The API reference and bundled upstream OpenAPI specification now contain
 these endpoints and their response schemas. Schema discovery uses this upstream
 specification directly; the old guide-only supplement is no longer needed.
-Availability restrictions still apply.
+Private channels can be created atomically with
+`CreateChannelRequest::text("ticket").private_audience(roles, users)`.
+Use `EditChannelRequest::new().user_ids(users)` to replace the member allowlist
+and pass an empty list to clear it. A channel edit exposes the platform's
+returned allowlist in `Channel::user_ids`.
 
 ## Rust client
 

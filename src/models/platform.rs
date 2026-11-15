@@ -57,14 +57,15 @@ pub struct SdkVersions {
 ///
 /// ```rust
 /// let value: rappin::SdkPackages = serde_json::from_value(serde_json::json!({"npm":"yapin","pypi":"yapin"})).unwrap();
-/// assert_eq!(value.npm, "yapin");
+/// assert_eq!(value.npm.as_deref(), Some("yapin"));
 /// ```
 pub struct SdkPackages {
-    /// Official npm package name.
-    pub npm: String,
-    /// Official PyPI package name.
-    pub pypi: String,
+    /// Official npm package name, when published.
+    pub npm: Option<String>,
+    /// Official PyPI package name, when published.
+    pub pypi: Option<String>,
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 /// Public platform changelog response.

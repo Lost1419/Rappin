@@ -138,14 +138,16 @@ fn advertised_commands(commands: &HashMap<String, CommandDef>) -> Result<Vec<Com
         for part in &parts {
             crate::validation::validate_commands(&[Command::new(*part, &def.description)])?;
         }
-        roots
-            .entry(parts[0].to_string())
-            .or_insert_with(|| def.description.clone());
+        roots.entry(parts[0].to_string()).or_insert_with(|| {
+            let options = def
+                .info
+                .as_ref()
+                .map(|info| info.slash_options.clone())
+                .unwrap_or_default();
+            Command::new(parts[0], &def.description).options(options)
+        });
     }
-    let result: Vec<_> = roots
-        .into_iter()
-        .map(|(name, description)| Command::new(name, description))
-        .collect();
+    let result: Vec<_> = roots.into_values().collect();
     crate::validation::validate_commands(&result)?;
     Ok(result)
 }
@@ -274,6 +276,7 @@ pub(crate) struct BotState {
     pending_batches: usize,
     drain_timeout: Option<Duration>,
     auto_ack_after: Option<Duration>,
+    command_auto_ack_after: Option<Duration>,
     ingress: Option<EventIngress>,
     telemetry: crate::diagnostics::Telemetry,
     pub(crate) availability_telemetry: crate::availability::Telemetry,
@@ -345,6 +348,7 @@ impl BotHandle {
                         name: name.clone(),
                         description: def.description.clone(),
                         aliases: vec![],
+                        slash_options: vec![],
                         arguments: vec![],
                     })
             })
@@ -629,6 +633,7 @@ impl BotHandle {
                 name: c.name,
                 description: c.description,
                 aliases: vec![],
+                slash_options: vec![],
                 arguments: vec![],
             })
             .collect::<Vec<_>>();
@@ -1635,6 +1640,7 @@ impl BotBuilder {
             pending_batches: self.config.execution.pending_batches,
             drain_timeout: self.config.execution.drain_timeout,
             auto_ack_after: self.config.execution.auto_ack_after,
+            command_auto_ack_after: self.config.execution.command_auto_ack_after,
             ingress,
             telemetry: crate::diagnostics::Telemetry::new(self.config.transport.mode),
             availability_telemetry: Default::default(),
@@ -2067,7 +2073,17 @@ impl Bot {
         {
             let data = crate::UiInteraction::from_event(&event)?;
             self.client().track_interaction(&data.interaction).await?;
-            return self.handle_ui_interaction(data, event.id).await;
+            let acknowledgement = self
+                .handle
+                .inner
+                .command_auto_ack_after
+                .filter(|_| data.interaction.kind.as_deref() == Some("command"))
+                .map(|after| (data.interaction.clone(), after));
+            let result = self.handle_ui_interaction(data, event.id).await;
+            if let Some((interaction, after)) = acknowledgement.filter(|_| result.is_ok()) {
+                self.client().auto_ack(interaction, after);
+            }
+            return result;
         }
         let parsed = match prepared
             .map(|interaction| Ok(EventData::Interaction(*interaction)))
@@ -2218,6 +2234,30 @@ impl Bot {
                     } else {
                         cog.on_invite_delete(self.handle.client(), &ev).await?;
                     }
+                }
+            }
+            EventData::Change(change) => {
+                if let crate::ChangeEvent::ServerAdd(server)
+                | crate::ChangeEvent::ServerRemove(server) = &change
+                {
+                    self.client()
+                        .invalidate_server_lookups(server.server_id)
+                        .await;
+                }
+                if let Some(handler) = &self.handle.inner.event_handler {
+                    failure::catch(handler.on_change_event(self.client(), &change)).await?;
+                }
+                let cogs: Vec<_> = self
+                    .handle
+                    .inner
+                    .cogs
+                    .read()
+                    .await
+                    .values()
+                    .cloned()
+                    .collect();
+                for cog in cogs {
+                    failure::catch(cog.on_change_event(self.client(), &change)).await?;
                 }
             }
             EventData::Resource(resource) => {
@@ -2458,7 +2498,18 @@ impl Bot {
                         .as_ref()
                         .map(|info| info.name.clone())
                         .unwrap_or_else(|| path.clone());
-                    let command = crate::CommandContext::resolved(ctx.clone(), canonical, args);
+                    let slash_options = snapshot
+                        .def
+                        .info
+                        .as_ref()
+                        .map(|info| info.slash_options.clone())
+                        .unwrap_or_default();
+                    let command = crate::CommandContext::resolved(
+                        ctx.clone(),
+                        canonical,
+                        args,
+                        slash_options,
+                    );
                     let result = failure::catch(async {
                         if let Some(cog) = snapshot.cog {
                             if !cog.check(&command).await? {

@@ -129,7 +129,7 @@ retain the event barrier. Logging an error alone cannot establish completion.
 
 ## Rebuild workers
 
-All workers require protocol 12. Rebuild the parent and every worker together.
+All workers require protocol 13. Rebuild the parent and every worker together.
 Protocols 1–11 are rejected during startup before candidate routes are published.
 UI callbacks, operation identities and single-attempt requests are available on
 every route. Remove `.ui_api()`, `.operation_identity()` and `.single_attempt_api()`.
@@ -185,5 +185,5 @@ Checked invocation still requires an authenticated message. Pass
 `ctx.message().ok_or_else(...)` from a command, or the original `MessageContext`
 from a listener. Operation IDs and message identity retain their existing scope.
 Duplicate command/alias definitions fail at build/registration before network I/O.
-Worker protocol 12 separates resolved interaction command metadata from its raw
+Worker protocol 13 carries slash option declarations and change events. It separates resolved interaction command metadata from its raw
 source. Upgrade and rebuild parent and all workers together.

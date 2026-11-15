@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub(super) const VERSION: u32 = 12;
+pub(super) const VERSION: u32 = 13;
 const MAX_FRAME: u64 = 1024 * 1024;
 
 /// Optional listeners implemented by a worker in addition to commands and buttons.
@@ -44,6 +44,8 @@ pub enum Listener {
     UiInteraction,
     /// Fallible resource lifecycle listener.
     ResourceEvent,
+    /// Fallible message and bot membership listener.
+    ChangeEvent,
 }
 
 /// Serializable handler input. The bot credential is never part of this message.
@@ -137,6 +139,11 @@ pub enum CogEvent {
         /// Parent-validated resource identity and kind.
         event: crate::ResourceEvent,
     },
+    /// A message or bot membership notification.
+    ChangeEvent {
+        /// Original typed parent-delivered notification.
+        event: crate::ChangeEvent,
+    },
     /// An installed shared command with resolved arguments and original interaction.
     InteractionCommand {
         /// Canonical installed route, separate from the original slash command text.
@@ -147,6 +154,9 @@ pub enum CogEvent {
         argv: Vec<String>,
         /// Original authenticated interaction identity, values and command text.
         event: crate::UiInteraction,
+        /// Option declarations for the matched command.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        slash_options: Vec<crate::SlashOption>,
     },
 }
 impl CogEvent {
@@ -332,6 +342,7 @@ impl Manifest {
                     name: command.name.clone(),
                     description: command.description.clone(),
                     aliases: vec![],
+                    slash_options: command.options.clone(),
                     arguments: vec![],
                 });
             info.validate()?;

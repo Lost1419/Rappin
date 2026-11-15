@@ -59,6 +59,9 @@ impl Event {
         {
             return Ok(EventData::Resource(resource));
         }
+        if let Some(change) = self.parse_change()? {
+            return Ok(EventData::Change(change));
+        }
         match self.kind.as_str() {
             "dm_message" => DmMessageEvent::deserialize(&self.data).map(EventData::DmMessage),
             "message" => match serde::Deserialize::deserialize(&self.data) {
@@ -245,6 +248,8 @@ pub enum EventData {
         /// Original event payload, retained without interpretation.
         data: serde_json::Value,
     },
+    /// A message or bot membership notification.
+    Change(#[doc = "Typed change with its original scope."] crate::ChangeEvent),
     /// A validated channel, thread or category lifecycle event.
     Resource(
         #[doc = "Original resource event kind, identity and lossless data."] crate::ResourceEvent,
@@ -436,6 +441,9 @@ pub struct InteractionEvent {
     #[serde(default)]
     /// Original message containing the control, if present.
     pub message_id: Option<Uuid>,
+    /// Ephemeral reply targeted by this button click, when supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_id: Option<Uuid>,
     #[serde(default)]
     /// UTC interaction creation time, when supplied.
     pub created_at: Option<DateTime<Utc>>,
@@ -477,7 +485,7 @@ pub struct MemberJoinEvent {
     pub inviter_id: Option<Uuid>,
 }
 
-/// Invite created/deleted events require Manage Server and test-server access.
+/// Invite created/deleted events require Manage Server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// # Example
 ///

@@ -1,9 +1,10 @@
 # Resources and computed permissions
 
-Rappin supports the public API 1.4 contract captured on 12 November 2026. The new
-resource endpoints and lifecycle events require the platform's `bot_api_round2`
-rollout. The developer guide limits this to test servers and eligible test bot
-owners. Preserve a returned 403 and its cause when eligibility is unavailable.
+The bundled Yapin API 1.5.0 contract was captured on 15 November 2026. Computed
+permissions, explicit overrides, role lookup and ordering, resolution, stickers,
+and resource lifecycle events retain their documented testing requirements.
+Threads and reaction moderation are available under the API's ordinary
+visibility and permission rules.
 
 ## Computed permissions
 
@@ -111,7 +112,7 @@ uses delete and restoration uses create. Whole-server deletion emits no channel
 delete notifications. Channel create covers text/voice channels.
 
 Workers subscribe with `WorkerCog::listen(Listener::ResourceEvent, handler)` and
-match `CogEvent::ResourceEvent { event }`. All workers require protocol 12.
+match `CogEvent::ResourceEvent { event }`. All workers require protocol 13.
 Rebuild the parent and workers together. Resource API methods use
 the existing JSON proxy and preserve parent-held credentials and structured errors.
 
@@ -157,3 +158,36 @@ Revalidate saved definitions against the installed catalogue before publication.
 The [official API reference](https://www.yapin.gg/developers/api) and
 [developer guide](https://www.yapin.gg/developers) describe platform rollout and
 permissions. The SDK's public schema is an offline snapshot of that contract.
+
+## Threads and reaction cleanup
+
+Use the same `ApiExt` methods from a client, bot context, or worker. A thread can
+start from a parent message or a supplied name and requires a first message.
+Thread message delivery follows the existing message and resource event routes.
+
+```rust,no_run
+use rappin::{Api, ApiExt, CreateMessage, ReactionTarget, Result};
+use uuid::Uuid;
+
+async fn discuss(api: &impl Api, channel: Uuid, source: Uuid) -> Result<()> {
+    let created = api.create_thread(channel, None, Some(source), &CreateMessage::new("Discuss here")).await?;
+    let recent = api.list_threads(channel, Some(20)).await?;
+    println!("Started {}. {} recent threads.", created.thread.id, recent.len());
+    let result = api.moderate_reactions(channel, source, ReactionTarget::Emoji("👍")).await?;
+    println!("Removed {}. More remain: {}", result.removed, result.more);
+    Ok(())
+}
+```
+
+Use `ThreadEdit` for renaming, locking, or archiving. Server-bound edit and
+delete capabilities require Manage Threads or Manage Messages for each
+principal. Use the typed API when applying Yapin's thread-owner exceptions.
+Reaction cleanup supports
+clearing a message, targeting one emoji, or targeting a user's reaction to that
+emoji. Each call is bounded. The caller can decide whether to repeat a confirmed
+cleanup reporting `more` after checking permissions and the remaining scope.
+
+Message edits and deletes and bot server membership changes decode as
+`EventData::Change`. Implement fallible `on_change_event` on a native handler or
+cog, or register `Listener::ChangeEvent` in a worker. A callback failure retains
+the normal checkpoint barrier.

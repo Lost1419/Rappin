@@ -363,6 +363,7 @@ async fn shared_failed_replies_and_partial_uncertain_causes_remain_incomplete() 
         http.await.unwrap();
     }
     let bot = Bot::builder("fixture")
+        .base_url("http://127.0.0.1:1")
         .sync_commands(false)
         .log(false)
         .command("shared", "Shared", |_| async {

@@ -63,6 +63,7 @@ pub(crate) struct Tracked {
     retire_at: Instant,
     pub kind: Option<String>,
     pub has_message: bool,
+    pub ephemeral_target: bool,
 }
 pub(crate) struct Registry {
     entries: Mutex<HashMap<[u8; 32], Arc<AsyncMutex<Tracked>>>>,
@@ -103,6 +104,7 @@ impl Registry {
             retire_at: Instant::now() + Duration::from_secs(900),
             kind: None,
             has_message: false,
+            ephemeral_target: false,
         }));
         entries.insert(key, entry.clone());
         Ok(entry)
@@ -133,7 +135,8 @@ impl crate::Client {
         });
         // Preserve no-op tracking for legacy partial button events with no
         // server deadline. New kinds need kind/source tracking even without one.
-        if deadline.is_none()
+        if event.reply_id.is_none()
+            && deadline.is_none()
             && !matches!(
                 event.kind.as_deref(),
                 Some("select" | "modal_submit" | "command")
@@ -148,7 +151,8 @@ impl crate::Client {
         if tracked.kind.is_none() {
             tracked.kind = event.kind.clone();
         }
-        tracked.has_message |= event.message_id.is_some();
+        tracked.has_message |= event.message_id.is_some() || event.reply_id.is_some();
+        tracked.ephemeral_target |= event.reply_id.is_some();
         if let Some(deadline) = deadline {
             let remaining = (deadline - now)
                 .to_std()
@@ -206,8 +210,19 @@ impl crate::Client {
                         .unwrap_or(Duration::ZERO)
                 })
                 .unwrap_or(Duration::ZERO);
-            // Leave one second for the API, and count time already spent in delivery.
-            let delay = after.min(Duration::from_secs(2).saturating_sub(age));
+            let delay = if event.kind.as_deref() == Some("command") {
+                // Leave time to submit the callback before the command deadline.
+                let deadline = event.expires_at.map_or_else(
+                    || Duration::from_secs(15).saturating_sub(age),
+                    |expires| (expires - chrono::Utc::now()).to_std().unwrap_or_default(),
+                );
+                after
+                    .saturating_sub(age)
+                    .min(deadline.saturating_sub(Duration::from_secs(1)))
+            } else {
+                // Leave one second for the API, including time spent in delivery.
+                after.min(Duration::from_secs(2).saturating_sub(age))
+            };
             tokio::time::sleep(delay).await;
             if let Err(error) = client
                 .respond_interaction(&event.id, &event.token, &crate::InteractionCallback::ack())

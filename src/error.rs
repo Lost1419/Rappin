@@ -780,3 +780,36 @@ impl From<reqwest::Error> for Error {
         Self::Http(error.without_url())
     }
 }
+
+pub(crate) fn platform_error(
+    status: u16,
+    message: &str,
+    retry_after: Option<f64>,
+    body: &serde_json::Value,
+    secrets: &[&str],
+) -> Error {
+    let message = crate::security::scrub(message, secrets);
+    let error = if status == 401 {
+        Error::Unauthorized
+    } else {
+        Error::Api {
+            status,
+            message: message.clone(),
+            retry_after,
+        }
+    };
+    if !body["code"].is_string() {
+        return error;
+    }
+    let mut remote = error.to_remote();
+    remote.message = message;
+    for field in ["code", "permission", "permissions", "allow"] {
+        if let Some(value) = body.get(field) {
+            remote.details.insert(
+                field.into(),
+                crate::security::redact_json(value.clone(), secrets),
+            );
+        }
+    }
+    Error::Remote(remote)
+}

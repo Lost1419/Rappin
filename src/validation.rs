@@ -190,6 +190,19 @@ fn component(
 /// # Ok::<(), rappin::Error>(())
 /// ```
 pub fn validate_message(value: &Value, creating: bool) -> Result<()> {
+    if let Some(nonce) = value.get("nonce") {
+        if !creating {
+            return Err(invalid(
+                "nonce",
+                "only file-free message sends accept a nonce",
+            ));
+        }
+        crate::threads::validate_nonce(
+            nonce
+                .as_str()
+                .ok_or_else(|| invalid("nonce", "string required"))?,
+        )?;
+    }
     if !value["sticker_id"].is_null() {
         if !creating
             || value["sticker_id"]
@@ -295,18 +308,31 @@ pub(crate) fn validate_callback(value: &Value, kind: crate::InteractionCallbackT
     if kind == Ack {
         return Ok(());
     }
-    if kind == Ephemeral
-        && (value.get("components").is_some()
-            || value["flags"]
-                .as_u64()
-                .is_some_and(|flags| flags & 32768 != 0))
+    if kind == Ephemeral {
+        validate_classic_buttons(value)?;
+    }
+    validate_message(value, kind != Update)
+}
+
+pub(crate) fn validate_classic_buttons(value: &Value) -> Result<()> {
+    if value["flags"]
+        .as_u64()
+        .is_some_and(|flags| flags & 32768 != 0)
+        || value["components"].as_array().is_some_and(|rows| {
+            rows.iter().any(|row| {
+                kind(row) != 1
+                    || row["components"]
+                        .as_array()
+                        .is_none_or(|items| items.iter().any(|item| kind(item) != 2))
+            })
+        })
     {
         return Err(invalid(
             "components",
-            "ephemeral replies do not support components",
+            "only classic button rows are supported",
         ));
     }
-    validate_message(value, kind != Update)
+    Ok(())
 }
 
 impl crate::InteractionCallback {
@@ -419,6 +445,7 @@ pub(crate) fn validate_commands(commands: &[crate::Command]) -> Result<()> {
                 "requires a unique lowercase name of 1 to 32 letters, digits, _ or -",
             ));
         }
+        crate::slash_options::validate_options(&command.options)?;
         if command.description.chars().count() > 100 {
             return Err(Error::validation(
                 "commands.description",

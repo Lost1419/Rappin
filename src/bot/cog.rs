@@ -166,6 +166,23 @@ impl CogButton {
 /// }
 /// ```
 pub trait Cog: Send + Sync + 'static {
+    /// Handle a message edit/deletion or bot server membership notification.
+    ///
+    /// ```
+    /// fn inspect(event: &rappin::ChangeEvent) {
+    ///     if let rappin::ChangeEvent::ServerRemove(server) = event {
+    ///         println!("{}", server.server_id);
+    ///     }
+    /// }
+    /// ```
+    async fn on_change_event(
+        &self,
+        _client: &crate::Client,
+        _event: &crate::ChangeEvent,
+    ) -> crate::Result<()> {
+        Ok(())
+    }
+
     /// Process a resource lifecycle event. Errors retain the event's checkpoint barrier.
     ///
     /// ```rust
@@ -446,7 +463,7 @@ pub trait Cog: Send + Sync + 'static {
     ) -> crate::Result<()> {
         Ok(())
     }
-    /// Optional invite-create listener (Manage Server; test servers only).
+    /// Optional invite-create listener (Manage Server).
     /// # Example
     ///
     /// ```rust
@@ -466,7 +483,7 @@ pub trait Cog: Send + Sync + 'static {
     ) -> crate::Result<()> {
         Ok(())
     }
-    /// Optional invite-delete listener (Manage Server; test servers only).
+    /// Optional invite-delete listener (Manage Server).
     /// # Example
     ///
     /// ```rust
