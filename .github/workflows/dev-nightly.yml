@@ -75,8 +75,8 @@ jobs:
 
           binary = os.environ["BINARY"]
           source = Path("target/release", binary).resolve()
-          version = subprocess.check_output([source, "--version"], text=True).strip()
-          capabilities = json.loads(subprocess.check_output([source, "capabilities"], text=True))
+          version = subprocess.check_output([source, "--version"], encoding="utf-8").strip()
+          capabilities = json.loads(subprocess.check_output([source, "capabilities"], encoding="utf-8"))
           assert all(capabilities["data"]["features"][feature] for feature in ("cli", "gateway", "voice"))
           assert capabilities["data"]["tools"], "tool catalogue is empty"
 
@@ -90,7 +90,7 @@ jobs:
               "source_commit": os.environ["SOURCE_SHA"],
               "date_utc": os.environ["BUILD_DATE"],
               "platform": os.environ["PLATFORM"],
-              "rustc": subprocess.check_output(["rustc", "--version"], text=True).strip(),
+              "rustc": subprocess.check_output(["rustc", "--version"], encoding="utf-8").strip(),
           }
           (out / "build.json").write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
           PYTHON
