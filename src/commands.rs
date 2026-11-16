@@ -111,13 +111,18 @@ pub struct Token {
 /// # Ok::<(), rappin::commands::CommandError>(())
 /// ```
 pub fn tokenize(input: &str) -> std::result::Result<Vec<Token>, CommandError> {
+    tokens(input).collect()
+}
+
+pub(crate) fn tokens(
+    input: &str,
+) -> impl Iterator<Item = std::result::Result<Token, CommandError>> + '_ {
     let mut chars = input.char_indices().peekable();
-    let mut out = vec![];
-    while let Some(&(start, ch)) = chars.peek() {
-        if ch.is_whitespace() {
+    std::iter::from_fn(move || {
+        while chars.peek().is_some_and(|&(_, ch)| ch.is_whitespace()) {
             chars.next();
-            continue;
         }
+        let &(start, _) = chars.peek()?;
         let mut value = String::new();
         let mut quote = None;
         let mut end = start;
@@ -129,7 +134,7 @@ pub fn tokenize(input: &str) -> std::result::Result<Vec<Token>, CommandError> {
             end = i + ch.len_utf8();
             if ch == '\\' {
                 let Some((i, next)) = chars.next() else {
-                    return Err(CommandError::Quoting);
+                    return Some(Err(CommandError::Quoting));
                 };
                 value.push(next);
                 end = i + next.len_utf8();
@@ -146,11 +151,10 @@ pub fn tokenize(input: &str) -> std::result::Result<Vec<Token>, CommandError> {
             }
         }
         if quote.is_some() {
-            return Err(CommandError::Quoting);
+            return Some(Err(CommandError::Quoting));
         }
-        out.push(Token { value, start, end });
-    }
-    Ok(out)
+        Some(Ok(Token { value, start, end }))
+    })
 }
 
 /// Quote-aware argument cursor. Parsing performs no network requests.
@@ -1285,9 +1289,22 @@ impl<A: FromArgs> CommandSpec<A> {
         F: Fn(CommandContext, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
+        self.bind_with(A::schema(), CommandContext::parse::<A>, handler)
+    }
+
+    fn bind_with<F, Fut>(
+        self,
+        schema: Option<Vec<ArgumentSchema>>,
+        parse: fn(&CommandContext) -> Result<A>,
+        handler: F,
+    ) -> RegisteredCommand
+    where
+        F: Fn(CommandContext, A) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
         let checks = Arc::new(self.checks);
         let handler = Arc::new(handler);
-        let schema = A::schema().map(|arguments| CommandSchema {
+        let schema = schema.map(|arguments| CommandSchema {
             name: self.info.name.clone(),
             description: self.info.description.clone(),
             aliases: self.info.aliases.clone(),
@@ -1304,9 +1321,7 @@ impl<A: FromArgs> CommandSpec<A> {
                 let checks = checks.clone();
                 let handler = handler.clone();
                 Box::pin(async move {
-                    let mut args = Arguments::new(ctx.args())?;
-                    let parsed = A::parse(&mut args)?;
-                    args.finish()?;
+                    let parsed = parse(&ctx)?;
                     for check in checks.iter() {
                         check.check(&ctx).await?;
                     }
@@ -1316,6 +1331,30 @@ impl<A: FromArgs> CommandSpec<A> {
         }
     }
 }
+impl CommandSpec<()> {
+    /// Bind a handler that reads raw text from `CommandContext::args`.
+    /// The spec retains its checks, aliases and advertised slash options.
+    ///
+    /// ```
+    /// use rappin::{Bot, CommandSpec, SlashOption, SlashOptionKind};
+    /// let report = CommandSpec::<()>::new("report", "Record a report")
+    ///     .slash_options([SlashOption::new("text", SlashOptionKind::String)])
+    ///     .bind_raw(|ctx| async move {
+    ///         eprintln!("{}", ctx.args());
+    ///         Ok(())
+    ///     });
+    /// let bot = Bot::builder("example").registered_command(report).build()?;
+    /// # Ok::<(), rappin::Error>(())
+    /// ```
+    pub fn bind_raw<F, Fut>(self, handler: F) -> RegisteredCommand
+    where
+        F: Fn(CommandContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.bind_with(None, |_| Ok(()), move |ctx, ()| handler(ctx))
+    }
+}
+
 #[derive(Clone)]
 /// Erased typed handler and metadata, suitable for returning from a Cog.
 /// # Example

@@ -172,7 +172,7 @@ impl WorkerContext {
             .ok_or_else(|| Error::Config("event has no channel".into()))?;
         let filter = crate::collectors::EventFilter {
             kind: Some(
-                if matches!(self.event, CogEvent::DmMessage { .. }) {
+                if self.event.message().is_some_and(|message| message.is_dm) {
                     "dm_message"
                 } else {
                     "message"
@@ -596,28 +596,31 @@ impl WorkerCog {
         F: Fn(crate::CommandContext, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
-        let info = spec.info;
-        let schema = A::schema().map(|arguments| crate::CommandSchema {
-            name: info.name.clone(),
-            description: info.description.clone(),
-            aliases: info.aliases.clone(),
-            arguments,
-        });
-        let handler = Arc::new(handler);
-        let checks = Arc::new(spec.checks);
+        self.registered_command(spec.bind(handler))
+    }
+
+    /// Register a bound command with the same parsing and checks as a native cog.
+    ///
+    /// ```
+    /// use rappin::{CommandSpec, WorkerCog};
+    /// let spec = CommandSpec::<()>::new("report", "Record a report");
+    /// let worker = WorkerCog::new("reports").registered_command(
+    ///     spec.bind_raw(|ctx| async move { eprintln!("{}", ctx.args()); Ok(()) }),
+    /// );
+    /// ```
+    pub fn registered_command(self, command: crate::RegisteredCommand) -> Self {
+        let schema = command
+            .preparation
+            .as_ref()
+            .and_then(|prep| prep.schema.as_deref().cloned());
+        let handler = command.handler;
         self.register_command(
-            info,
+            command.info,
             schema,
             Arc::new(move |ctx| {
-                let handler = handler.clone();
-                let checks = checks.clone();
+                let call = handler(crate::CommandContext::from(ctx));
                 Box::pin(async move {
-                    let ctx = crate::CommandContext::from(ctx);
-                    let args = ctx.parse::<A>()?;
-                    for check in checks.iter() {
-                        check.check(&ctx).await?;
-                    }
-                    handler(ctx, args).await?;
+                    call.await?;
                     Ok(crate::MessageDisposition::Continue)
                 })
             }),

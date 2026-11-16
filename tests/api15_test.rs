@@ -388,3 +388,138 @@ async fn unexpected_slash_failure_notifies_privately_and_remains_incomplete() {
     assert!(!request.contains("private diagnostic"));
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn slash_ack_is_sent_while_the_handler_is_still_running() {
+    use std::sync::Arc;
+    use std::time::Duration;
+    let done = Arc::new(tokio::sync::Notify::new());
+    let (url, mut requests, server) = support::mock(vec![
+        support::response(200, json!({})),
+        support::response(200, json!({})),
+    ])
+    .await;
+    let bot = Bot::builder("fixture")
+        .base_url(url)
+        .configure(|cfg| cfg.execution.command_auto_ack_after = Some(Duration::from_millis(15)))
+        .command("slow", "", {
+            let done = done.clone();
+            move |ctx| {
+                let done = done.clone();
+                async move {
+                    done.notified().await;
+                    ctx.reply("Finished").await
+                }
+            }
+        })
+        .build()
+        .unwrap();
+    bot.cache()
+        .set_me(serde_json::from_value(support::profile()).unwrap())
+        .await;
+    let event = serde_json::from_value(json!({"id":1,"type":"command","data":{
+        "id":"slow","token":"fixture","command":"slow","args":""
+    }}))
+    .unwrap();
+    let execution = tokio::spawn(async move { bot.process_event(event).await });
+    let ack = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(ack.contains(r#""type":"ack""#));
+    assert!(!execution.is_finished());
+    done.notify_one();
+    execution.await.unwrap().unwrap();
+    let follow_up = requests.recv().await.unwrap();
+    assert!(follow_up.contains(r#""type":"reply""#));
+    assert!(follow_up.contains("Finished"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn raw_command_specs_keep_slash_metadata_checks_and_grouped_text() {
+    use std::sync::{Arc, Mutex};
+    let (base, mut requests, server) = support::mock(vec![support::response(
+        200,
+        json!({"commands":[{"name":"report"}]}),
+    )])
+    .await;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let bot = Bot::builder("fixture")
+        .base_url(base)
+        .configure(|config| config.execution.command_auto_ack_after = None)
+        .registered_command(
+            CommandSpec::<()>::new("report", "Report")
+                .slash_options([SlashOption::new("text", SlashOptionKind::String)])
+                .bind_raw(|_| async { panic!("grouped command fell back to root") }),
+        )
+        .registered_command(
+            CommandSpec::<()>::new("report create", "Record a report")
+                .check(Check::server_only())
+                .bind_raw({
+                    let seen = seen.clone();
+                    move |ctx| {
+                        let seen = seen.clone();
+                        async move {
+                            seen.lock().unwrap().push(ctx.args().to_owned());
+                            Ok(())
+                        }
+                    }
+                }),
+        )
+        .build()
+        .unwrap();
+    bot.cache()
+        .set_me(serde_json::from_value(support::profile()).unwrap())
+        .await;
+    bot.handle().sync_commands().await.unwrap();
+    let publication = requests.recv().await.unwrap();
+    assert!(publication.contains(r#""options":[{"name":"text""#));
+    let event = serde_json::from_value(json!({"id":1,"type":"command","data":{
+        "id":"report","token":"fixture","command":"report","args":"create can't reproduce this",
+        "server_id":Uuid::nil(),"user_id":Uuid::nil()
+    }}))
+    .unwrap();
+    bot.process_event(event).await.unwrap();
+    assert_eq!(*seen.lock().unwrap(), ["can't reproduce this"]);
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn shared_resource_operations_use_typed_results_and_existing_routes() {
+    let id = Uuid::nil();
+    let (base, mut requests, server) = support::mock(vec![
+        support::response(
+            200,
+            json!({"server":{"id":id,"name":"Community","owner_id":id}}),
+        ),
+        support::response(
+            200,
+            json!({"member":{"id":id,"username":"river","roles":[id]}}),
+        ),
+        support::response(200, json!({"roles":[{"id":id,"name":"Moderator"}]})),
+        support::response(200, json!({"channel":{"id":id,"kind":"text"}})),
+        support::response(200, json!({"ok":true})),
+    ])
+    .await;
+    async fn exercise(api: &impl Api, id: Uuid) -> Result<()> {
+        assert_eq!(api.get_server(id).await?.name, "Community");
+        assert_eq!(api.get_member(id, id).await?.member.roles, [id]);
+        assert_eq!(api.get_roles(id).await?[0].name, "Moderator");
+        assert_eq!(api.get_channel(id).await?.id, id);
+        api.delete_message(id, id).await
+    }
+    exercise(&Client::builder("fixture").base_url(base).build(), id)
+        .await
+        .unwrap();
+    for route in [
+        format!("GET /servers/{id} "),
+        format!("GET /servers/{id}/members/{id} "),
+        format!("GET /servers/{id}/roles "),
+        format!("GET /channels/{id} "),
+        format!("DELETE /channels/{id}/messages/{id} "),
+    ] {
+        assert!(requests.recv().await.unwrap().starts_with(&route));
+    }
+    server.await.unwrap();
+}

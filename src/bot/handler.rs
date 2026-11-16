@@ -136,7 +136,7 @@ pub trait EventHandler: Send + Sync + 'static {
     async fn on_message(&self, _ctx: &MessageContext) -> crate::Result<super::MessageDisposition> {
         Ok(super::MessageDisposition::Continue)
     }
-    /// Incoming DM; separate from server message/command dispatch.
+    /// Incoming direct message, following any enabled DM command dispatch.
     /// # Example
     ///
     /// ```rust

@@ -388,7 +388,7 @@ pub trait Cog: Send + Sync + 'static {
     ) -> crate::Result<()> {
         Ok(())
     }
-    /// Incoming DM; separate from server message/command dispatch.
+    /// Incoming direct message, following any enabled DM command dispatch.
     /// # Example
     ///
     /// ```rust

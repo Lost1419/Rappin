@@ -1571,18 +1571,9 @@ impl Client {
     /// }
     /// ```
     pub async fn get_server(&self, server_id: impl Into<crate::ServerId> + Send) -> Result<Server> {
-        let server_id: crate::ServerId = server_id.into();
-        let server_id = Uuid::from(server_id);
-
-        #[derive(Deserialize)]
-        struct Resp {
-            server: Server,
-        }
-        let resp: Resp = self
-            .request_json::<Resp, ()>(Method::GET, &format!("/servers/{}", server_id), None)
-            .await?;
-        self.inner.cache.update_server(resp.server.clone()).await;
-        Ok(resp.server)
+        let server = crate::ApiExt::get_server(self, server_id).await?;
+        self.inner.cache.update_server(server.clone()).await;
+        Ok(server)
     }
 
     /// Fetches roles defined on a server (`GET /servers/{id}/roles`).
@@ -1601,22 +1592,14 @@ impl Client {
         &self,
         server_id: impl Into<crate::ServerId> + Send,
     ) -> Result<Vec<Role>> {
-        let server_id: crate::ServerId = server_id.into();
-        let server_id = Uuid::from(server_id);
-
-        #[derive(Deserialize)]
-        struct Resp {
-            roles: Vec<Role>,
-        }
-        let resp: Resp = self
-            .request_json::<Resp, ()>(Method::GET, &format!("/servers/{}/roles", server_id), None)
-            .await?;
+        let server = Uuid::from(server_id.into());
+        let roles = crate::ApiExt::get_roles(self, server).await?;
         if let Some(backend) = &self.inner.lookup_backend {
-            backend.store_roles(server_id, &resp.roles).await;
+            backend.store_roles(server, &roles).await;
         } else {
-            self.cache().update_roles(server_id, &resp.roles).await;
+            self.cache().update_roles(server, &roles).await;
         }
-        Ok(resp.roles)
+        Ok(roles)
     }
 
     /// Fetches members of a server (`GET /servers/{id}/members`).
@@ -1676,30 +1659,15 @@ impl Client {
         server_id: impl Into<crate::ServerId> + Send,
         user_id: impl Into<crate::UserId> + Send,
     ) -> Result<MemberDetail> {
-        let server_id: crate::ServerId = server_id.into();
-        let server_id = Uuid::from(server_id);
-        let user_id: crate::UserId = user_id.into();
-        let user_id = Uuid::from(user_id);
-
-        #[derive(Deserialize)]
-        struct Resp {
-            member: MemberDetail,
-        }
-        let resp: Resp = self
-            .request_json::<Resp, ()>(
-                Method::GET,
-                &format!("/servers/{}/members/{}", server_id, user_id),
-                None,
-            )
-            .await?;
+        let server = Uuid::from(server_id.into());
+        let user = Uuid::from(user_id.into());
+        let member = crate::ApiExt::get_member(self, server, user).await?;
         if let Some(backend) = &self.inner.lookup_backend {
-            backend.store_member(server_id, user_id, &resp.member).await;
+            backend.store_member(server, user, &member).await;
         } else {
-            self.cache()
-                .update_member(server_id, user_id, &resp.member)
-                .await;
+            self.cache().update_member(server, user, &member).await;
         }
-        Ok(resp.member)
+        Ok(member)
     }
 
     /// Sets or clears a member's nickname (`PATCH /servers/{id}/members/{uid}`).
@@ -2349,17 +2317,7 @@ impl Client {
         &self,
         channel_id: impl Into<crate::ChannelId> + Send,
     ) -> Result<ChannelRow> {
-        let channel_id: crate::ChannelId = channel_id.into();
-        let channel_id = Uuid::from(channel_id);
-
-        #[derive(Deserialize)]
-        struct Resp {
-            channel: ChannelRow,
-        }
-        let resp: Resp = self
-            .request_json::<Resp, ()>(Method::GET, &format!("/channels/{}", channel_id), None)
-            .await?;
-        Ok(resp.channel)
+        crate::ApiExt::get_channel(self, channel_id).await
     }
 
     /// Modifies a channel (`PATCH /channels/{id}`).
@@ -2588,19 +2546,7 @@ impl Client {
         channel_id: impl Into<crate::ChannelId> + Send,
         message_id: impl Into<crate::MessageId> + Send,
     ) -> Result<()> {
-        let channel_id: crate::ChannelId = channel_id.into();
-        let channel_id = Uuid::from(channel_id);
-        let message_id: crate::MessageId = message_id.into();
-        let message_id = Uuid::from(message_id);
-
-        let _: OkResponse = self
-            .request_json::<OkResponse, ()>(
-                Method::DELETE,
-                &format!("/channels/{}/messages/{}", channel_id, message_id),
-                None,
-            )
-            .await?;
-        Ok(())
+        crate::ApiExt::delete_message(self, channel_id, message_id).await
     }
 
     /// Deletes up to 100 messages at once (`POST /channels/{id}/messages/bulk-delete`).

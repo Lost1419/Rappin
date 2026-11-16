@@ -211,6 +211,111 @@ pub trait Api: Send + Sync {
 /// }
 /// ```
 pub trait ApiExt: Api {
+    /// Read a server by ID.
+    ///
+    /// ```no_run
+    /// use rappin::ApiExt;
+    /// async fn run(api: &impl rappin::Api, server: uuid::Uuid) -> rappin::Result<rappin::Server> {
+    ///     api.get_server(server).await
+    /// }
+    /// ```
+    async fn get_server(&self, server: impl Into<crate::ServerId> + Send) -> Result<crate::Server> {
+        let server = Uuid::from(server.into());
+        let value = self
+            .request(Method::GET, &format!("/servers/{server}"), None)
+            .await?;
+        decode_field(self, value, "server")
+    }
+
+    /// Read a server member and their current roles and timeout.
+    ///
+    /// ```no_run
+    /// use rappin::ApiExt;
+    /// async fn run(api: &impl rappin::Api, server: uuid::Uuid, user: uuid::Uuid) -> rappin::Result<rappin::MemberDetail> {
+    ///     api.get_member(server, user).await
+    /// }
+    /// ```
+    async fn get_member(
+        &self,
+        server: impl Into<crate::ServerId> + Send,
+        user: impl Into<crate::UserId> + Send,
+    ) -> Result<crate::MemberDetail> {
+        let server = Uuid::from(server.into());
+        let user = Uuid::from(user.into());
+        let value = self
+            .request(
+                Method::GET,
+                &format!("/servers/{server}/members/{user}"),
+                None,
+            )
+            .await?;
+        decode_field(self, value, "member")
+    }
+
+    /// Read the roles defined by a server.
+    ///
+    /// ```no_run
+    /// use rappin::ApiExt;
+    /// async fn run(api: &impl rappin::Api, server: uuid::Uuid) -> rappin::Result<Vec<rappin::Role>> {
+    ///     api.get_roles(server).await
+    /// }
+    /// ```
+    async fn get_roles(
+        &self,
+        server: impl Into<crate::ServerId> + Send,
+    ) -> Result<Vec<crate::Role>> {
+        let server = Uuid::from(server.into());
+        let value = self
+            .request(Method::GET, &format!("/servers/{server}/roles"), None)
+            .await?;
+        decode_field(self, value, "roles")
+    }
+
+    /// Read channel metadata by ID.
+    ///
+    /// ```no_run
+    /// use rappin::ApiExt;
+    /// async fn run(api: &impl rappin::Api, channel: uuid::Uuid) -> rappin::Result<rappin::ChannelRow> {
+    ///     api.get_channel(channel).await
+    /// }
+    /// ```
+    async fn get_channel(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+    ) -> Result<crate::ChannelRow> {
+        let channel = Uuid::from(channel.into());
+        let value = self
+            .request(Method::GET, &format!("/channels/{channel}"), None)
+            .await?;
+        decode_field(self, value, "channel")
+    }
+
+    /// Delete a message in the selected channel.
+    ///
+    /// ```no_run
+    /// use rappin::ApiExt;
+    /// async fn run(api: &impl rappin::Api, channel: uuid::Uuid, message: uuid::Uuid) -> rappin::Result<()> {
+    ///     api.delete_message(channel, message).await
+    /// }
+    /// ```
+    async fn delete_message(
+        &self,
+        channel: impl Into<crate::ChannelId> + Send,
+        message: impl Into<crate::MessageId> + Send,
+    ) -> Result<()> {
+        let channel = Uuid::from(channel.into());
+        let message = Uuid::from(message.into());
+        let value = self
+            .request(
+                Method::DELETE,
+                &format!("/channels/{channel}/messages/{message}"),
+                None,
+            )
+            .await?;
+        let _: crate::OkResponse = decode_response(self, value)?;
+        Ok(())
+    }
+
     /// Create a public or private channel in a single request.
     ///
     /// ```no_run
@@ -234,7 +339,7 @@ pub trait ApiExt: Api {
                 Some(json!(body)),
             )
             .await?;
-        let channel: crate::Channel = crate::threads::decode(value, "channel")?;
+        let channel: crate::Channel = decode_field(self, value, "channel")?;
         if channel.server_id.is_some_and(|id| id != server) {
             return Err(crate::threads::unexpected_receipt(
                 "channel creation returned a different server",
@@ -293,7 +398,7 @@ pub trait ApiExt: Api {
     /// ```
     async fn get_commands(&self) -> Result<Vec<Command>> {
         let value = self.request(Method::GET, "/commands", None).await?;
-        crate::threads::decode(value, "commands")
+        decode_field(self, value, "commands")
     }
 
     /// Replace all published slash commands. Omit the interaction setting to use Yapin's default.
@@ -316,7 +421,7 @@ pub trait ApiExt: Api {
             body["interactions"] = json!(enabled);
         }
         let value = self.request(Method::PUT, "/commands", Some(body)).await?;
-        crate::threads::decode(value, "commands")
+        decode_field(self, value, "commands")
     }
 
     /// List recent threads in a parent channel. The optional limit is 1–50.
@@ -341,7 +446,7 @@ pub trait ApiExt: Api {
             path.push_str(&format!("?limit={limit}"));
         }
         let response = self.request(Method::GET, &path, None).await?;
-        let threads: Vec<Thread> = crate::threads::decode(response, "threads")?;
+        let threads: Vec<Thread> = decode_field(self, response, "threads")?;
         if threads.iter().any(|thread| thread.parent_id != channel) {
             return Err(Error::validation(
                 "parent_id",
@@ -1646,6 +1751,32 @@ pub trait ApiExt: Api {
         Ok(message)
     }
 }
+fn decode_response<T: serde::de::DeserializeOwned>(
+    api: &(impl Api + ?Sized),
+    value: Value,
+) -> Result<T> {
+    serde_json::from_value(value).map_err(|error| {
+        let message = api.sanitize(Value::String(error.to_string()));
+        Error::Json(<serde_json::Error as serde::de::Error>::custom(
+            message.as_str().unwrap_or("invalid API response"),
+        ))
+    })
+}
+
+fn decode_field<T: serde::de::DeserializeOwned>(
+    api: &(impl Api + ?Sized),
+    mut response: Value,
+    field: &str,
+) -> Result<T> {
+    decode_response(
+        api,
+        response
+            .get_mut(field)
+            .map(Value::take)
+            .unwrap_or(Value::Null),
+    )
+}
+
 impl<T: Api + ?Sized> ApiExt for T {}
 
 #[async_trait]

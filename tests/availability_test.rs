@@ -802,3 +802,28 @@ async fn advised_wait_budget_spans_availability_attempts_without_rearming() {
         http.await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn startup_connection_failure_is_safe_and_classified_as_a_read() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let token = "fixture-secret-credential";
+    let bot = Bot::builder(token)
+        .base_url(format!("http://{address}/secret-path"))
+        .sync_commands(false)
+        .configure(|settings| settings.transport.availability = Some(policy(1)))
+        .build()
+        .unwrap();
+    let failure = run(bot).await.unwrap_err().availability_failure().unwrap();
+    assert_eq!(failure.phase, AvailabilityPhase::StartupIdentity);
+    let cause = failure.last_error.unwrap();
+    assert_eq!(cause.message, "HTTP connection failed");
+    assert_eq!(cause.details["transport_kind"], "connection");
+    assert_eq!(cause.details["outcome"], "read_failed");
+    assert_eq!(cause.details["retry_safety"], "read_only");
+    let serialized = cause.to_json().to_string();
+    assert!(!serialized.contains(token));
+    assert!(!serialized.contains("secret-path"));
+    assert!(!serialized.contains(&address.to_string()));
+}

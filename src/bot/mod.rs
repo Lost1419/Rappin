@@ -65,6 +65,7 @@ struct CommandDef {
 struct CommandRegistry {
     routes: HashMap<String, CommandDef>,
     roots: std::collections::HashSet<String>,
+    groups: std::collections::HashSet<String>,
 }
 
 /// An advisory plan, not a reservation. Installation revalidates under the
@@ -94,6 +95,7 @@ impl CommandRegistry {
         let mut registry = Self {
             routes,
             roots: Default::default(),
+            groups: Default::default(),
         };
         registry.reindex();
         registry
@@ -104,6 +106,14 @@ impl CommandRegistry {
             .keys()
             .filter_map(|path| path.split(' ').next())
             .map(str::to_owned)
+            .collect();
+        self.groups = self
+            .routes
+            .keys()
+            .flat_map(|path| {
+                path.match_indices(' ')
+                    .map(|(index, _)| path[..index].to_owned())
+            })
             .collect();
     }
 }
@@ -277,6 +287,7 @@ pub(crate) struct BotState {
     drain_timeout: Option<Duration>,
     auto_ack_after: Option<Duration>,
     command_auto_ack_after: Option<Duration>,
+    dm_commands: bool,
     ingress: Option<EventIngress>,
     telemetry: crate::diagnostics::Telemetry,
     pub(crate) availability_telemetry: crate::availability::Telemetry,
@@ -1089,20 +1100,13 @@ impl BotBuilder {
     /// let spec = CommandSpec::<()>::new("status", "Show status");
     /// let bot = Bot::builder("unused-documentation-token").command_spec(spec, |ctx, ()| async move { ctx.reply("Ready").await?; Ok(()) }).build().expect("valid bot configuration");
     /// ```
-    pub fn command_spec<A, F, Fut>(
-        mut self,
-        spec: crate::commands::CommandSpec<A>,
-        handler: F,
-    ) -> Self
+    pub fn command_spec<A, F, Fut>(self, spec: crate::commands::CommandSpec<A>, handler: F) -> Self
     where
         A: crate::commands::FromArgs,
         F: Fn(crate::CommandContext, A) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
     {
-        if let Err(error) = insert_registered(&mut self.commands, spec.bind(handler), None) {
-            self.definition_error = Some(error);
-        }
-        self
+        self.registered_command(spec.bind(handler))
     }
     /// # Example
     ///
@@ -1641,6 +1645,7 @@ impl BotBuilder {
             drain_timeout: self.config.execution.drain_timeout,
             auto_ack_after: self.config.execution.auto_ack_after,
             command_auto_ack_after: self.config.execution.command_auto_ack_after,
+            dm_commands: self.config.execution.dm_commands,
             ingress,
             telemetry: crate::diagnostics::Telemetry::new(self.config.transport.mode),
             availability_telemetry: Default::default(),
@@ -2078,10 +2083,10 @@ impl Bot {
                 .inner
                 .command_auto_ack_after
                 .filter(|_| data.interaction.kind.as_deref() == Some("command"))
-                .map(|after| (data.interaction.clone(), after));
+                .and_then(|after| self.client().auto_ack(data.interaction.clone(), after));
             let result = self.handle_ui_interaction(data, event.id).await;
-            if let Some((interaction, after)) = acknowledgement.filter(|_| result.is_ok()) {
-                self.client().auto_ack(interaction, after);
+            if let Some(cancel) = acknowledgement.filter(|_| result.is_err()) {
+                let _ = cancel.send(());
             }
             return result;
         }
@@ -2097,33 +2102,20 @@ impl Bot {
         };
 
         match parsed {
-            EventData::Message(msg) => self.handle_message(msg, me, event.id).await?,
+            EventData::Message(msg) => self.handle_message(msg, me, event.id, false).await?,
+            EventData::DmMessage(message) if self.handle.inner.dm_commands => {
+                self.handle_message(message.0, me, event.id, true).await?;
+            }
             EventData::DmMessage(message) => {
-                let message = message.0;
-                if self.handle.inner.ignore_bots && message.author_bot == Some(true) {
-                    return Ok(());
-                }
-                let ctx = MessageContext::new(
-                    self.handle.inner.client.clone(),
-                    message,
-                    None,
-                    String::new(),
-                    Some(self.handle.clone()),
-                );
-                if let Some(handler) = &self.handle.inner.event_handler {
-                    handler.on_dm(&ctx).await?;
-                }
-                let cogs: Vec<_> = self
-                    .handle
-                    .inner
-                    .cogs
-                    .read()
-                    .await
-                    .values()
-                    .cloned()
-                    .collect();
-                for cog in cogs {
-                    cog.on_dm(&ctx).await?;
+                if !self.handle.inner.ignore_bots || message.author_bot != Some(true) {
+                    let ctx = MessageContext::new(
+                        self.handle.inner.client.clone(),
+                        message.0,
+                        None,
+                        String::new(),
+                        Some(self.handle.clone()),
+                    );
+                    self.notify_dm(&ctx).await?;
                 }
             }
             EventData::Interaction(inter) => self.handle_interaction(inter, event.id).await?,
@@ -2298,11 +2290,31 @@ impl Bot {
         Ok(())
     }
 
+    async fn notify_dm(&self, ctx: &MessageContext) -> Result<()> {
+        if let Some(handler) = &self.handle.inner.event_handler {
+            handler.on_dm(ctx).await?;
+        }
+        let cogs: Vec<_> = self
+            .handle
+            .inner
+            .cogs
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect();
+        for cog in cogs {
+            cog.on_dm(ctx).await?;
+        }
+        Ok(())
+    }
+
     async fn handle_message(
         &self,
         msg: MessageEvent,
         me: &BotProfile,
         event_id: u64,
+        dm: bool,
     ) -> Result<()> {
         if self.handle.inner.ignore_bots && msg.author_bot == Some(true) {
             return Ok(());
@@ -2335,7 +2347,7 @@ impl Bot {
         invocation::with_origin(
             &self.handle,
             &msg,
-            self.handle_allowed_message(msg.clone(), me, event_id),
+            self.handle_allowed_message(msg.clone(), me, event_id, dm),
         )
         .await
     }
@@ -2345,6 +2357,7 @@ impl Bot {
         msg: MessageEvent,
         me: &BotProfile,
         event_id: u64,
+        dm: bool,
     ) -> Result<()> {
         let mut matched_command: Option<String> = None;
         let mut matched_args = String::new();
@@ -2437,6 +2450,9 @@ impl Bot {
                     .await?;
                 }
             }
+        }
+        if dm {
+            return self.notify_dm(&ctx).await;
         }
         if let Some(h) = &self.handle.inner.event_handler {
             let result = failure::catch(h.on_message(&ctx)).await;

@@ -91,9 +91,11 @@ pub struct ExecutionConfig {
     pub max_event_age: Option<u32>,
     /// Optional early interaction acknowledgement delay.
     pub auto_ack_after: Option<Duration>,
-    /// Delay before acknowledging a slash command that has not sent a callback.
+    /// Delay from slash command delivery before acknowledging an unanswered interaction.
     /// Set to None to let the handler own acknowledgement entirely.
     pub command_auto_ack_after: Option<Duration>,
+    /// Enable local prefix commands in direct messages.
+    pub dm_commands: bool,
 }
 impl Default for ExecutionConfig {
     fn default() -> Self {
@@ -104,6 +106,7 @@ impl Default for ExecutionConfig {
             max_event_age: None,
             auto_ack_after: None,
             command_auto_ack_after: Some(Duration::from_secs(10)),
+            dm_commands: false,
         }
     }
 }

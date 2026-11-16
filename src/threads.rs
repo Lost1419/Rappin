@@ -2,7 +2,7 @@
 
 use crate::{Error, Message, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -105,15 +105,6 @@ pub enum ReactionTarget<'a> {
         /// User whose reaction is targeted.
         user: Uuid,
     },
-}
-
-pub(crate) fn decode<T: serde::de::DeserializeOwned>(mut response: Value, key: &str) -> Result<T> {
-    Ok(serde_json::from_value(
-        response
-            .get_mut(key)
-            .map(Value::take)
-            .unwrap_or(Value::Null),
-    )?)
 }
 
 pub(crate) fn thread_name(name: Option<&str>) -> Result<()> {

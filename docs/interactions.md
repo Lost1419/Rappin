@@ -168,32 +168,33 @@ Yapin still lists typed command options and forms as testing features. Set `Comm
 or worker. Use the same `SlashOption` values on `Command::options` when
 publishing metadata directly. `ctx.parse_slash_options()` accepts positional
 arguments and named form submissions such as `query="release notes"` and
-returns a map keyed by option name. Use `CommandSpec::<Arguments>` to give
-the handler ownership of the full argument cursor when it uses this parser.
-Use `Command::parse_options` with standalone publication metadata.
+returns a map keyed by option name. Use `CommandSpec::<()>::bind_raw` when
+prefix input is free text or JSON. The handler owns parsing and can use
+`ctx.parse_slash_options()` for slash form submissions. Use
+`Command::parse_options` with standalone publication metadata.
 
 ```rust,no_run
-use rappin::{Arguments, Bot, CommandSpec, SlashOption, SlashOptionKind};
+use rappin::{Bot, CommandSpec, SlashOption, SlashOptionKind};
 
-let bot = Bot::builder("example").command_spec(
-    CommandSpec::<Arguments>::new("find", "Find items")
-        .slash_options([SlashOption::new("query", SlashOptionKind::String)]),
-    |ctx, args| async move {
+let command = CommandSpec::<()>::new("find", "Find items")
+    .slash_options([SlashOption::new("query", SlashOptionKind::String)])
+    .bind_raw(|ctx| async move {
         let query = if ctx.message().is_some() {
-            let mut args = args;
-            args.rest()
+            ctx.args().to_owned()
         } else {
             ctx.parse_slash_options()?.get("query").and_then(|value| value.as_str()).unwrap_or("").to_owned()
         };
         ctx.reply(format!("Searching for {query}")).await
-    },
-).build()?;
+    });
+let bot = Bot::builder("example").registered_command(command).build()?;
 # Ok::<(), rappin::Error>(())
 ```
 
-A completed slash command with no callback is acknowledged after 10 seconds by default.
-Set `ExecutionConfig::command_auto_ack_after` to change the delay or disable
-it. A prior callback or uncertain callback outcome prevents a duplicate ack.
+Rappin arms automatic acknowledgement before slash dispatch. An unanswered
+interaction is acknowledged after 10 seconds by default, with the delay
+bounded by the callback deadline. Set `ExecutionConfig::command_auto_ack_after`
+to change it or disable it. The response coordinator suppresses the ack if
+a handler responds first. A failed dispatch cancels an ack that is still waiting.
 Use an explicit reply to attach the response to the invocation. The default
 failure handler sends a generic ephemeral error when an unexpected command
 failure still has an eligible callback and the handler has no partial or

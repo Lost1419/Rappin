@@ -191,17 +191,19 @@ impl crate::Client {
         }
         Ok(tracked.state)
     }
-    pub(crate) fn auto_ack(&self, event: InteractionEvent, after: Duration) {
+    pub(crate) fn auto_ack(
+        &self,
+        event: InteractionEvent,
+        after: Duration,
+    ) -> Option<tokio::sync::oneshot::Sender<()>> {
         let Some(permit) = self.auto_ack_permit() else {
             tracing::warn!("automatic acknowledgement capacity reached");
-            return;
+            return None;
         };
+        let (cancel, cancelled) = tokio::sync::oneshot::channel();
         let client = self.clone();
         let task = tokio::spawn(async move {
             let _permit = permit;
-            if client.track_interaction(&event).await.is_err() {
-                return;
-            }
             let age = event
                 .created_at
                 .map(|time| {
@@ -223,7 +225,13 @@ impl crate::Client {
                 // Leave one second for the API, including time spent in delivery.
                 after.min(Duration::from_secs(2).saturating_sub(age))
             };
-            tokio::time::sleep(delay).await;
+            tokio::select! {
+                biased;
+                Ok(()) = cancelled => return,
+                _ = tokio::time::sleep(delay) => {},
+            }
+            // The response registry is the final arbiter if a handler and this
+            // timer try to submit a callback concurrently.
             if let Err(error) = client
                 .respond_interaction(&event.id, &event.token, &crate::InteractionCallback::ack())
                 .await
@@ -235,5 +243,6 @@ impl crate::Client {
             }
         });
         self.track_auto_ack(task.abort_handle());
+        Some(cancel)
     }
 }

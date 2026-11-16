@@ -434,11 +434,11 @@ impl BotHandle {
         let commands = self.inner.commands.read().await;
         let mut path = name.to_lowercase();
         let mut best = commands.contains_key(&path).then_some((path.clone(), 0));
-        let tokens = crate::commands::tokenize(arguments).unwrap_or_default();
-        for token in tokens
-            .iter()
-            .take(8usize.saturating_sub(path.split(' ').count()))
-        {
+        let mut tokens = crate::commands::tokens(arguments);
+        while commands.groups.contains(&path) {
+            let Some(Ok(token)) = tokens.next() else {
+                break;
+            };
             path.push(' ');
             path.push_str(&token.value.to_lowercase());
             if commands.contains_key(&path) {

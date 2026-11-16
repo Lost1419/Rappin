@@ -187,3 +187,23 @@ from a listener. Operation IDs and message identity retain their existing scope.
 Duplicate command/alias definitions fail at build/registration before network I/O.
 Worker protocol 13 carries slash option declarations and change events. It separates resolved interaction command metadata from its raw
 source. Upgrade and rebuild parent and all workers together.
+
+
+## Free-form commands and direct messages
+
+Use `CommandSpec::<()>::bind_raw` with `registered_command` on a bot, cog or
+worker to keep advertised slash options and checks while parsing `ctx.args()`
+yourself. Typed command specs continue to tokenize their arguments.
+
+Message-origin and interaction-origin handlers share `ApiExt` methods for
+`get_server`, `get_member`, `get_roles`, `get_channel` and `delete_message`.
+The typed reads expose resources visible to the bot. Requester authorization
+belongs to the handler or an operation binding.
+
+DMs go to `on_dm` by default. Opt in to prefix command dispatch with
+`config.execution.dm_commands`. The bot uses the same installed routes
+and check chain for DM commands and preserves the original DM identity.
+Read availability reports expose a credential-safe `transport_kind` for HTTP
+failures. A connection failure or timeout is represented as a failed read in
+the nested cause, while handler and mutation errors keep their existing
+workflow and write-outcome semantics.

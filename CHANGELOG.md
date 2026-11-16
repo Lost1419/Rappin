@@ -20,6 +20,13 @@
 - Publish typed slash options from command specs, parse positional and named form submissions, acknowledge unanswered slash commands, and support classic ephemeral button updates.
 - Dispatch typed message edits/deletions and bot membership notifications through native, cog and worker listeners. Update the bundled contract and capability availability.
 
+### Migration feedback
+
+- Arm slash acknowledgement before dispatch. Reuse callback coordination to suppress redundant responses.
+- Bind raw argument handlers with CommandSpec metadata and checks. Resolve grouped routes without parsing the remaining argument text.
+- Share typed server, member, role, channel and message deletion operations across native and worker API transports.
+- Add opt-in prefix command dispatch for direct messages and retain credential-safe transport diagnostics in read availability reports.
+
 ### Development cleanup
 
 - Require worker protocol 13. Remove older protocol negotiation, capability-switch builders and string-only IPC errors. Rebuild parent and workers together.

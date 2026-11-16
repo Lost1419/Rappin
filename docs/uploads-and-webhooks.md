@@ -79,7 +79,12 @@ that own their authorization layer.
 `EventData::DmMessage` carries `DmMessageEvent`, which exposes a `MessageEvent`
 through `.0`/Deref. It preserves `attachments`, `author_name`, `dm`, `is_dm` and
 `dm_channel_id`. Typed DM decoding rejects server scope and clears any command
-metadata. DMs never invoke the bot's server commands or prefix resolver.
+metadata. By default messages go to `on_dm`. Set
+`config.execution.dm_commands = true` through `BotBuilder::configure` to route
+DM prefixes through the registered command pipeline, including the message
+gate, configured prefixes, checks, cooldowns and command failure callbacks.
+DM commands keep their original channel and absent server ID. Use
+`Check::server_only()` on commands that require a server.
 
 ```rust,no_run
 use rappin::*;

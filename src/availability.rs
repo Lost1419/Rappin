@@ -296,6 +296,27 @@ impl Telemetry {
     }
 }
 
+fn read_error_details(error: &Error) -> serde_json::Value {
+    fn classify(value: &mut serde_json::Value) {
+        if matches!(value["outcome"].as_str(), Some("unknown")) {
+            value["outcome"] = "read_failed".into();
+        }
+        if matches!(
+            value["retry_safety"].as_str(),
+            Some("unknown_write_outcome" | "do_not_replay_workflow")
+        ) {
+            value["retry_safety"] = "read_only".into();
+        }
+        if let Some(source) = value.get_mut("source").filter(|source| source.is_object()) {
+            classify(source);
+        }
+    }
+
+    let mut details = error.to_json();
+    classify(&mut details);
+    details
+}
+
 pub(crate) fn retryable_read(error: &Error) -> bool {
     match error {
         Error::Http(e) => {
@@ -503,7 +524,7 @@ impl Episode {
             error = self.wait_budget.exceeded(error);
         }
         self.last_error = Some(
-            serde_json::from_value(self.client.redact_credentials(error.to_json()))
+            serde_json::from_value(self.client.redact_credentials(read_error_details(&error)))
                 .expect("structured cause"),
         );
         self.update(|s| {

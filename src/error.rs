@@ -589,13 +589,27 @@ impl Error {
             Self::Io(_) => "io",
             _ => "api",
         };
-        let message = if matches!(self, Self::Http(_)) {
-            "HTTP transport failed".into()
-        } else {
-            self.to_string()
+        let transport = match self {
+            Self::Http(error) if error.is_timeout() => Some(("timeout", "HTTP request timed out")),
+            Self::Http(error) if error.is_connect() => {
+                Some(("connection", "HTTP connection failed"))
+            }
+            Self::Http(error) if error.is_body() => Some(("body", "HTTP body transfer failed")),
+            Self::Http(error) if error.is_decode() => {
+                Some(("decode", "HTTP response decoding failed"))
+            }
+            Self::Http(error) if error.is_builder() => {
+                Some(("request_builder", "HTTP request construction failed"))
+            }
+            Self::Http(_) => Some(("transport", "HTTP transport failed")),
+            _ => None,
         };
+        let message = transport.map_or_else(|| self.to_string(), |(_, message)| message.to_owned());
         let mut value = serde_json::json!({"kind": kind, "message": message,
             "status": self.status_code(), "retry_after": self.retry_after().map(|d| d.as_secs_f64())});
+        if let Some((classification, _)) = transport {
+            value["transport_kind"] = classification.into();
+        }
         if let Self::Validation { field, .. } = self {
             value["field"] = field.clone().into();
         }

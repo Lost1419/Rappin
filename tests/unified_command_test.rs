@@ -317,6 +317,10 @@ impl FromArgs for Count{fn parse(a:&mut Arguments)->std::result::Result<Self,Com
     assert_eq!(values["query"], "two words");
     ctx.reply("found").await
  })
+ .registered_command(CommandSpec::<()>::new("report", "Report").bind_raw(|ctx| async move {
+    assert_eq!(ctx.args(), "can't reproduce this");
+    ctx.reply("raw").await
+ }))
  .listen(Listener::ChangeEvent, |ctx| async move {
     assert!(matches!(ctx.event, CogEvent::ChangeEvent { event: ChangeEvent::ServerRemove(_) }));
     Ok(())
@@ -353,6 +357,7 @@ impl FromArgs for Count{fn parse(a:&mut Arguments)->std::result::Result<Self,Com
         (callback(4), vec![support::response(200, json!({}))]),
         (callback(6), vec![support::response(200, json!({}))]),
         (callback(7), vec![support::response(200, json!({}))]),
+        (callback(9), vec![support::response(200, json!({}))]),
     ])
     .await;
     let failures = Arc::new(AtomicUsize::new(0));
@@ -424,6 +429,9 @@ impl FromArgs for Count{fn parse(a:&mut Arguments)->std::result::Result<Self,Com
     )
     .await
     .unwrap();
+    bot.process_event(interaction("report", "can't reproduce this", 9))
+        .await
+        .unwrap();
     assert_eq!(failures.load(Ordering::SeqCst), 3);
     assert_eq!(bot.client().read_availability_status().recoveries, 1);
     http.await.unwrap();
@@ -440,8 +448,9 @@ impl FromArgs for Count{fn parse(a:&mut Arguments)->std::result::Result<Self,Com
             .count(),
         1
     );
-    assert!(writes[writes.len() - 2].contains("counted 1"));
-    assert!(writes.last().unwrap().contains("found"));
+    assert!(writes[writes.len() - 3].contains("counted 1"));
+    assert!(writes[writes.len() - 2].contains("found"));
+    assert!(writes.last().unwrap().contains("raw"));
 }
 
 #[tokio::test]
@@ -468,4 +477,87 @@ async fn disabling_startup_recovery_does_not_inherit_handler_read_retries() {
     assert_eq!(client.request_metrics().attempts, 1);
     assert_eq!(client.read_availability_status().episodes, 0);
     http.await.unwrap();
+}
+
+#[tokio::test]
+async fn dm_dispatch_is_opt_in_and_reuses_command_admission_and_failure_callbacks() {
+    struct Dms(Arc<AtomicUsize>);
+    #[async_trait::async_trait]
+    impl EventHandler for Dms {
+        async fn on_dm(&self, ctx: &MessageContext) -> Result<()> {
+            assert!(ctx.event.is_dm && ctx.server_id().is_none());
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn on_message(&self, _: &MessageContext) -> Result<MessageDisposition> {
+            panic!("DM entered the server message listener")
+        }
+    }
+
+    for enabled in [false, true] {
+        let observed = Arc::new(AtomicUsize::new(0));
+        let gated = Arc::new(AtomicUsize::new(0));
+        let handled = Arc::new(AtomicUsize::new(0));
+        let rejected = Arc::new(AtomicUsize::new(0));
+        let bot = Bot::builder("fixture")
+            .base_url("http://127.0.0.1:1")
+            .configure(|config| config.execution.dm_commands = enabled)
+            .prefixes(["!"])
+            .event_handler(Dms(observed.clone()))
+            .message_gate({
+                let gated = gated.clone();
+                move |ctx| {
+                    let gated = gated.clone();
+                    async move {
+                        assert!(ctx.event.is_dm && ctx.server_id().is_none());
+                        gated.fetch_add(1, Ordering::SeqCst);
+                        Ok(MessageDisposition::Continue)
+                    }
+                }
+            })
+            .command("report", "", {
+                let handled = handled.clone();
+                move |ctx| {
+                    let handled = handled.clone();
+                    async move {
+                        assert_eq!(ctx.args(), "can't reproduce this");
+                        assert!(ctx.server_id().is_none());
+                        handled.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    }
+                }
+            })
+            .command_spec(
+                CommandSpec::<()>::new("server", "").check(Check::server_only()),
+                |_, ()| async { panic!("server-only command reached from DM") },
+            )
+            .on_command_failure({
+                let rejected = rejected.clone();
+                move |ctx, failure| {
+                    let rejected = rejected.clone();
+                    async move {
+                        assert!(ctx.server_id().is_none());
+                        assert_eq!(failure.class, FailureClass::Rejected);
+                        rejected.fetch_add(1, Ordering::SeqCst);
+                        Ok(FailureDisposition::Handled)
+                    }
+                }
+            })
+            .build()
+            .unwrap();
+        seed(&bot).await;
+        for (id, content) in [(1, "!report can't reproduce this"), (2, "!server")] {
+            let event = serde_json::from_value(json!({"id":id,"type":"dm_message","data":{
+                "id":Uuid::from_u128(id),"channel_id":Uuid::nil(),"author_id":Uuid::nil(),
+                "content":content,"command":"forged","command_for":[Uuid::from_u128(5)]
+            }}))
+            .unwrap();
+            bot.process_event(event).await.unwrap();
+        }
+        assert_eq!(observed.load(Ordering::SeqCst), 2);
+        assert_eq!(gated.load(Ordering::SeqCst), 2 * usize::from(enabled));
+        assert_eq!(handled.load(Ordering::SeqCst), usize::from(enabled));
+        assert_eq!(rejected.load(Ordering::SeqCst), usize::from(enabled));
+    }
 }

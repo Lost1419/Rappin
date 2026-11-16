@@ -4,8 +4,9 @@
 and server-message listeners. It runs on `EventData::Message`, after bot/target
 filters and before prefix resolution, generated group help, cog checks or command
 handlers. It also runs for ordinary natural-language messages with no command.
-DMs use the separate `on_dm` contract. A missing `server_id` does not bypass the
-gate; an application that requires server scope should reject that case itself.
+DMs use `on_dm` by default. When `config.execution.dm_commands` is enabled,
+the gate runs before DM prefix routing. Check the optional server ID when
+the application requires a server.
 
 The gate receives an owned `MessageContext`; `command`, `args` and `argv` have not
 been resolved yet. Read the original event for platform-supplied command metadata.
