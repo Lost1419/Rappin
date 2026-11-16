@@ -76,6 +76,9 @@ jobs:
           source = Path("target/release", binary).resolve()
           version = subprocess.check_output([source, "--version"], encoding="utf-8").strip()
           capabilities = json.loads(subprocess.check_output([source, "capabilities"], encoding="utf-8"))
+          crate_version = capabilities["data"]["version"]
+          short_commit = os.environ["SOURCE_SHA"][:7]
+          assert version == f"rappin {crate_version} ({short_commit})", version
           assert all(capabilities["data"]["features"][feature] for feature in ("cli", "gateway", "voice"))
           assert capabilities["data"]["tools"], "tool catalogue is empty"
 
@@ -86,6 +89,7 @@ jobs:
           (out / "SHA256SUMS").write_text(f"{digest}  {binary}\n", encoding="utf-8")
           build = {
               "version": version,
+              "crate_version": crate_version,
               "source_commit": os.environ["SOURCE_SHA"],
               "date_utc": os.environ["BUILD_DATE"],
               "platform": os.environ["PLATFORM"],

@@ -4,8 +4,8 @@ An async Rust SDK and bot framework for [Yapin](https://www.yapin.gg).
 Build commands, buttons and forms, organize them into cogs, and use the API from
 native Rust handlers or reloadable Rust workers.
 
-**This branch contains the 2.0 development preview.** Follow the
-[migration guide](docs/migration-2.0.md) when moving an existing bot to this branch.
+**This branch contains the Rappin 0.2.0 development preview.** Follow the
+[migration guide](docs/migration-0.2.md) when moving an existing bot to this branch.
 The [published release](https://crates.io/crates/rappin-rs) has its own versioned reference.
 
 ## Dev preview builds
@@ -13,8 +13,11 @@ The [published release](https://crates.io/crates/rappin-rs) has its own versione
 Pushes to `dev` that change files other than Markdown build a new preview.
 Download the CLI for Linux x86-64, macOS ARM64 or Windows x86-64 from a successful
 **Dev preview build** run in [GitHub Actions](https://github.com/Lost1419/Rappin/actions).
-Each artifact includes its source commit, build date and SHA-256 checksum, and
-GitHub retains it for 14 days. To try one alongside an existing installation,
+The Cargo version identifies the preview milestone (currently `0.2.0-dev.1`).
+`rappin --version` shows the checkout's short Git commit when available. For
+example, `rappin 0.2.0-dev.1 (6791d9c)` identifies one build of that milestone.
+GitHub retains the artifacts for 14 days. Each includes the full source commit,
+build date and SHA-256 checksum. To try one alongside an existing installation,
 extract the artifact and run the executable by its full path. On Unix, give the
 extracted executable permission to run with `chmod +x rappin`.
 
@@ -124,4 +127,4 @@ See the [development guide](docs/development.md) for tests, documentation checks
 minimum Rust verification and smaller local builds. Technical release notes live
 in the [changelog](CHANGELOG.md).
 
-Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
+Licensed under [MIT](LICENSE-MIT) or [Apache-0.2.0](LICENSE-APACHE).

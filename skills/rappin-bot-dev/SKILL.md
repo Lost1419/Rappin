@@ -8,7 +8,7 @@ examples to the selected Rappin version; do not upgrade dependencies merely to
 fit an example. Preserve application-owned storage, caches, state and prefixes.
 For a new bot, copy the bundled [starter](assets/starter), rename
 `Cargo.toml.template` to `Cargo.toml`, set `YAPPER_BOT_TOKEN` in the environment,
-and run `cargo run`. The starter uses the 2.0 preview on `dev`. Do not overwrite
+and run `cargo run`. The starter uses the 0.2.0 preview on `dev`. Do not overwrite
 an existing project with the starter.
 
 The package is `rappin-rs`; imports use `rappin`. Rust 1.89+ is required. Ordinary

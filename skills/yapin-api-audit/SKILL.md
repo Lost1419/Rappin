@@ -18,7 +18,7 @@ The scripts require Python 3.11+, use only its standard library, and need no Rus
 compiler. For a version-pinned source download and support matrix, read
 [release comparison and report usage](references/reports.md). The downloader
 verifies the crates.io checksum without building or executing the crate. For the
-unpublished 2.0 preview, record the checkout's commit, compare its `docs/openapi.json`
+unpublished 0.2.0 preview, record the checkout's commit, compare its `docs/openapi.json`
 with a fresh snapshot, and review the source at that commit. Published-crate
 coverage assertions require matching registry and snapshot evidence.
 

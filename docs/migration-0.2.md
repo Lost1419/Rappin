@@ -1,4 +1,4 @@
-# Migrate from 0.1 to 2.0
+# Migrate from 0.1 to 0.2.0
 
 This development branch contains breaking changes. Keep an existing deployment's
 dependency and worker binaries pinned while updating a separate checkout. Use
@@ -6,7 +6,7 @@ the `dev` branch for the preview. Published 0.1 references remain version-specif
 
 ## Public API changes
 
-| 0.1 usage | 2.0 usage |
+| 0.1 usage | 0.2.0 usage |
 |---|---|
 | `Bot::builder(token).build()` | `Bot::builder(token).build()?` validates definitions and configuration before startup |
 | Manual environment lookup and `Config` conversion | `Bot::from_env()?` returns a builder using `YAPPER_BOT_TOKEN` |

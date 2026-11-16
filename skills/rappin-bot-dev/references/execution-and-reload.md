@@ -1,6 +1,6 @@
 # Event completion, recovery and reload
 
-These instructions target the 2.0 development branch. Use version-matched docs
+These instructions target the 0.2.0 development branch. Use version-matched docs
 for an existing 0.1 dependency. Bounded read availability recovery is enabled by default. Do not change transport,
 retry settings or failure completion policy as an unrelated implementation choice.
 

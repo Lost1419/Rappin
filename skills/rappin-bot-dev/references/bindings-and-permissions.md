@@ -2,7 +2,7 @@
 
 Use the public APIs provided by the application's selected dependency. The
 catalogue/bindings require no optional Cargo features; the hierarchy and
-single-attempt helpers below are available in the 2.0 development version. Keep model selection,
+single-attempt helpers below are available in the 0.2.0 development version. Keep model selection,
 prompts, inference, conversation state and persistence in the application.
 
 ## Discover and validate once

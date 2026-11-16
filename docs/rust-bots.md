@@ -165,7 +165,7 @@ Polling is the default and needs no public HTTP endpoint. To prefer WebSocket
 delivery, enable the `gateway` feature and select the default gateway:
 
 ```toml
-rappin-rs = { git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "2.0.0-dev.1", features = ["gateway"] }
+rappin-rs = { git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "0.2.0-dev.1", features = ["gateway"] }
 ```
 
 ```rust,no_run
@@ -277,7 +277,7 @@ work. Waits count toward the 128 requests per invocation budget. In-flight old
 workers can finish their existing waits during reload; subscriptions do not migrate
 into the new process. Structured errors and parent-owned permission lookups are
 available in protocol 13. Rebuild the parent and all workers together when migrating
-from 0.1 or an earlier 2.0 preview. Other versions fail during candidate startup.
+from 0.1 or an earlier 0.2.0 preview. Other versions fail during candidate startup.
 All worker routes support structured errors, operation identities, UI callbacks
 and single-attempt API requests. The old capability-switch methods are removed.
 

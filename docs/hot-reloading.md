@@ -38,7 +38,7 @@ edition = "2021"
 default-run = "my-bot"
 
 [dependencies]
-rappin = { package = "rappin-rs", git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "2.0.0-dev.1", features = ["hot-reload"] }
+rappin = { package = "rappin-rs", git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "0.2.0-dev.1", features = ["hot-reload"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -265,7 +265,7 @@ errors, message completion and operation identities. It also supports
 permission lookups, UI callbacks, public reads and bounded uploads. Upload chunks
 are 64 KiB, total upload data is bounded to 12 MiB and ordinary frames to 1 MiB.
 Rebuild the parent and every worker together when migrating from 0.1 or an earlier
-2.0 preview. Unsupported versions fail before routes are published.
+0.2.0 preview. Unsupported versions fail before routes are published.
 
 Use `command_spec` for typed definitions, `command_typed` for its single-call
 convenience form, or `dynamic_command` for a runtime schema. They share registration,

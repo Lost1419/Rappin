@@ -17,7 +17,7 @@ mod server_features;
 #[derive(Parser)]
 #[command(
     name = "rappin",
-    version,
+    version = env!("RAPPIN_CLI_VERSION"),
     about = "Yapin API for agents: discover, resolve, read, write, and resume events"
 )]
 struct Args {

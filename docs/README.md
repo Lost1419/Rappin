@@ -31,7 +31,7 @@ Start with the [tutorial](tutorial.md), then select a task guide.
 - [CLI and agents](agents.md)
 - [CLI and MCP workflows](cli-mcp.md)
 - [Project templates](project-templates.md)
-- [Migration to 2.0](migration-2.0.md)
+- [Migration to 0.2.0](migration-0.2.md)
 - [SDK development and build size](development.md)
 - [API support audits](api-support.md)
 

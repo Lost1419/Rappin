@@ -1,6 +1,6 @@
 # Troubleshooting paths
 
-These instructions describe the 2.0 preview. For a deployment on 0.1, use the
+These instructions describe the 0.2.0 preview. For a deployment on 0.1, use the
 contract for its installed version.
 
 ## Slow replies
