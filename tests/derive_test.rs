@@ -81,3 +81,74 @@ fn derives_support_renamed_dependencies_and_report_definition_errors_at_compile_
         }
     }
 }
+
+mod properties {
+    use proptest::prelude::*;
+    use rappin::{Arguments, CommandError, CommandSpec, FromArgs};
+
+    #[derive(FromArgs)]
+    struct Label {
+        /// Display label.
+        #[arg(min = 2, max = 4, rest)]
+        text: String,
+    }
+
+    #[derive(FromArgs)]
+    struct Limits {
+        #[arg(min = -9223372036854775807, max = 9223372036854775806)]
+        value: i64,
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(96))]
+
+        #[test]
+        fn derived_string_bounds_count_scalars(
+            chars in proptest::collection::vec(prop::sample::select(vec!['a', 'é', '\u{301}', '🦀']), 0..8)
+        ) {
+            let text: String = chars.into_iter().collect();
+            let input = format!(r#""{text}""#);
+            let mut arguments = Arguments::new(&input).unwrap();
+            match Label::parse(&mut arguments) {
+                Ok(label) => {
+                    prop_assert!((2..=4).contains(&text.chars().count()));
+                    prop_assert_eq!(label.text, text);
+                    arguments.finish().unwrap();
+                }
+                Err(error) => {
+                    prop_assert!(!(2..=4).contains(&text.chars().count()));
+                    prop_assert!(matches!(error, CommandError::Invalid { .. }), "unexpected error: {error}");
+                }
+            }
+        }
+
+        #[test]
+        fn derived_integer_bounds_are_exact_near_i64_limits(
+            value in prop_oneof![i64::MIN..=i64::MIN + 8, i64::MAX - 8..=i64::MAX]
+        ) {
+            let mut arguments = Arguments::new(&value.to_string()).unwrap();
+            match Limits::parse(&mut arguments) {
+                Ok(args) => {
+                    prop_assert!(value != i64::MIN && value != i64::MAX);
+                    prop_assert_eq!(args.value, value);
+                }
+                Err(_) => prop_assert!(value == i64::MIN || value == i64::MAX),
+            }
+        }
+    }
+
+    #[test]
+    fn rest_uses_quote_aware_tokens_and_emits_help() {
+        let mut arguments = Arguments::new(r#"a "é🦀""#).unwrap();
+        assert_eq!(Label::parse(&mut arguments).unwrap().text, "a é🦀");
+        assert!(matches!(
+            Arguments::new(r#"a "é🦀"#),
+            Err(CommandError::Quoting)
+        ));
+        let spec = CommandSpec::<Label>::new("label", "Label a record");
+        assert!(spec
+            .info()
+            .help()
+            .contains("Display label. (minimum 2) (maximum 4)"));
+    }
+}

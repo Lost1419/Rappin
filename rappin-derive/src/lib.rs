@@ -1,4 +1,38 @@
-//! Generate Rappin argument parsing, help and read-only validation metadata.
+//! Derive argument parsing, help and read-only validation metadata for Rappin.
+//!
+//! Enable `rappin-rs`'s `derive` feature and use `#[derive(rappin::FromArgs)]`
+//! on a concrete struct with named fields. Fields are positional in declaration
+//! order. Required arguments precede `Option<T>` or defaulted fields.
+//!
+//! | Attribute | Behavior |
+//! | --- | --- |
+//! | `#[arg(default = value)]` | Use a literal when the argument is omitted. Use this on a plain field such as `u32` or `String`. |
+//! | `#[arg(min = value, max = value)]` | Apply inclusive numeric or string-length bounds. Either bound can be supplied alone. |
+//! | `#[arg(rest)]` | Consume the remaining decoded tokens in the final `String` or `Option<String>` field, joining them with single spaces. |
+//! | `#[arg(crate = "sdk_alias")]` | Select the SDK path on the struct when the dependency name cannot be inferred. |
+//!
+//! String bounds count Unicode scalar values with `str::chars()`. For example,
+//! a decomposed letter followed by a combining accent counts as two. Argument
+//! quoting and escaping apply to rest fields as well. Use
+//! `CommandSpec::<()>::bind_raw` when a command accepts unparsed text.
+//!
+//! ```text
+//! #[derive(rappin::FromArgs)]
+//! struct Roll {
+//!     /// Number of sides.
+//!     #[arg(default = 6, min = 2, max = 100)]
+//!     sides: u32,
+//!     /// Optional label.
+//!     #[arg(rest)]
+//!     label: Option<String>,
+//! }
+//! ```
+//!
+//! A command named `roll` advertises `/roll [sides] [label]`. The field comment
+//! becomes the help description, followed by `(default 6) (minimum 2) (maximum 100)`
+//! for `sides`. The SDK tutorial contains a compiling command registration example.
+//! Fields parsed with custom `FromStr` implementations can defer validation
+//! during checked-invocation preparation.
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as Tokens;
 use quote::quote;

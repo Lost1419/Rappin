@@ -4,6 +4,35 @@ This development branch contains breaking changes. Keep an existing deployment's
 dependency and worker binaries pinned while updating a separate checkout. Use
 the `dev` branch for the preview. Published 0.1 references remain version-specific.
 
+## Update bot construction
+
+In 0.1 a raw command handler received a message context and `build()` returned
+the bot directly.
+
+```text
+let bot = Bot::builder("example")
+    .command("ping", "Check the bot", |ctx| async move {
+        ctx.reply("pong").await?;
+        Ok(())
+    })
+    .build();
+```
+
+In 0.2 the handler receives a `CommandContext` and construction validates
+the configuration and command definitions.
+
+```rust
+use rappin::{Bot, CommandContext, Result};
+
+fn configure() -> Result<Bot> {
+    Bot::builder("example")
+        .command("ping", "Check the bot", |ctx: CommandContext| async move {
+            ctx.reply("pong").await
+        })
+        .build()
+}
+```
+
 ## Public API changes
 
 | 0.1 usage | 0.2.0 usage |

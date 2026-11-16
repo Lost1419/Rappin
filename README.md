@@ -14,11 +14,20 @@ The [published release](https://crates.io/crates/rappin-rs) has its own versione
 ## Dev preview builds
 
 Pushes to `dev` that change files other than Markdown build a new preview.
-Download the CLI for Linux x86-64, macOS ARM64 or Windows x86-64 from a successful
-**Dev preview build** run in [GitHub Actions](https://github.com/Lost1419/Rappin/actions).
+Open the latest successful **Preview binaries** run on the
+[dev preview workflow page](https://github.com/Lost1419/Rappin/actions/workflows/dev-preview.yml?query=branch%3Adev).
+The run summary links to the Linux x86-64, macOS ARM64 and Windows x86-64 downloads.
+With an authenticated GitHub CLI, download all three from the latest successful run.
+
+```sh
+run_id=$(gh run list --repo Lost1419/Rappin --workflow dev-preview.yml \
+  --branch dev --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+test -n "$run_id" && gh run download "$run_id" --repo Lost1419/Rappin --dir rappin-preview
+```
+
 The Cargo version identifies the preview milestone (currently `0.2.0-dev.1`).
 `rappin --version` shows the checkout's short Git commit when available. For
-example, `rappin 0.2.0-dev.1 (6791d9c)` identifies one build of that milestone.
+example, `rappin 0.2.0-dev.1 (3322694)` identifies one build of that milestone.
 GitHub retains the artifacts for 14 days. Each includes the full source commit,
 build date and SHA-256 checksum. To try one alongside an existing installation,
 extract the artifact and run the executable by its full path. On Unix, give the
@@ -62,6 +71,22 @@ async fn main() -> Result<()> {
 
 The example requires the `gateway` feature. The generated project enables it.
 Keep the token in the process environment and out of source control and logs.
+
+## Cargo features
+
+The default feature set is empty. Basic HTTP and polling, prefix commands, and
+slash interactions are available in the base SDK.
+
+| To use | Enable |
+| --- | --- |
+| Gateway event delivery with polling fallback | `gateway` |
+| Derive argument parsing and help with `#[derive(FromArgs)]` | `derive` |
+| Build the `rappin` CLI and MCP server | `cli` |
+| Run commands in reloadable Rust workers | `hot-reload` |
+| Use the voice playback bridge | `voice` |
+| Use the webhook middleware for Axum | `webhook-middleware` |
+| Export metrics over HTTP | `metrics-http` |
+| Export metrics over HTTP and use Pushgateway | `metrics` |
 
 ## Learn in order
 

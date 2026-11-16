@@ -77,9 +77,19 @@ fn add_button(builder: BotBuilder) -> BotBuilder {
 }
 ```
 
-Send `!menu`, click Apple and expect a private confirmation. Command handlers receive `CommandContext` for either prefix messages or slash
-interactions. Buttons, selects and forms receive `InteractionContext`. Natural-language
-message listeners retain `MessageContext`.
+Send `!menu`, click Apple and expect a private confirmation.
+
+```mermaid
+flowchart TD
+    A{Which handler ran?}
+    A -->|Registered prefix or slash command| B[CommandContext]
+    A -->|Button, select, modal, or general interaction listener| C[InteractionContext]
+    A -->|Message or DM listener| D[MessageContext]
+```
+
+In a command, use `ctx.message()` or `ctx.interaction()` when you need the
+original native event or transport-specific functionality. For an opt-in DM
+command the handler receives `CommandContext` with an absent server ID.
 Interaction replies have deadlines and shared acknowledgement ownership.
 See the [interaction guide](interactions.md) for defer, update, follow-up and modal flows.
 

@@ -99,8 +99,30 @@ jobs:
           (out / "build.json").write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
           PYTHON
       - uses: actions/upload-artifact@v4
+        id: upload
         with:
           name: rappin-dev-${{ needs.source.outputs.date }}-${{ matrix.platform }}-${{ needs.source.outputs.sha }}
           path: preview/
           if-no-files-found: error
           retention-days: 14
+      - name: List preview download in the run summary
+        shell: bash
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          python - <<'PYTHON'
+          import json
+          import os
+          from pathlib import Path
+
+          preview = Path("preview")
+          build = json.loads((preview / "build.json").read_text(encoding="utf-8"))
+          checksum = (preview / "SHA256SUMS").read_text(encoding="utf-8").split()[0]
+          artifact_url = os.environ["ARTIFACT_URL"]
+          assert artifact_url.startswith("https://"), "artifact link is unavailable"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(f"### {build['platform']}\n\n")
+              summary.write(f"[Download {build['version']}]({artifact_url})\n\n")
+              summary.write(f"Commit `{build['source_commit']}`\n\n")
+              summary.write(f"SHA-256 `{checksum}`\n")
+          PYTHON
