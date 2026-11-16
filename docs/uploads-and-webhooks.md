@@ -113,7 +113,7 @@ raw unknown-event delivery for that newly supported event type.
 
 With `hot-reload`, workers use `Listener::DmMessage`, `ReactionAdd` and
 `ReactionRemove`, with corresponding `CogEvent` variants. `WorkerContext` keeps
-its parent proxy and gains the same `ApiExt` helpers. Protocol 12 supports public
+its parent proxy and gains the same `ApiExt` helpers. Protocol 13 supports public
 reads and uploads. Files cross fixed 64 KiB chunks, bounded to the same 12 MiB
 total; ordinary frames remain limited to 1 MiB. Incomplete/invalid transfers do
 not start the HTTP upload. Cancelled exchanges remain unusable and require

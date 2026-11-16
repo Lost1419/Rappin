@@ -36,6 +36,11 @@
 - Compare signed/unsigned JSON integer bounds exactly, including mixed floating-point limits. Reduce message serialization passes and owned response/component clones.
 - Exclude historical guides and integration-only fixtures from crate archives. Keep focused public-item examples and the current OpenAPI contract.
 
+## Published 0.1 releases
+
+Worker protocol notes below describe the behavior of each 0.1 release. For the
+0.2.0 requirement and rebuild steps, see the [migration guide](docs/migration-0.2.md#rebuild-workers).
+
 ## 0.1.33 — 2026-11-13
 
 - Raise the declared minimum Rust version to 1.89 to match UUID 1.29.2. Test locked builds and fresh consumer dependency resolution on that compiler.

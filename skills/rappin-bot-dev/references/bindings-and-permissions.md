@@ -51,7 +51,7 @@ checks with application policy. Check endpoint rollout and keep platform 403
 causes. See [API 1.4 resources](https://github.com/Lost1419/Rappin/blob/dev/docs/resources.md).
 
 Resource lifecycle listeners use `on_resource_event` natively or
-`Listener::ResourceEvent` in workers. That worker opt-in needs a protocol 13 parent.
+`Listener::ResourceEvent` in workers. Both the parent and worker use protocol 13.
 Return structured errors for incomplete work so the event checkpoint stays blocked.
 
 ## Establish authority separately for each principal

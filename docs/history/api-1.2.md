@@ -1,5 +1,8 @@
 # Files, emojis, bot webhooks and DMs
 
+> Historical guide for Rappin 0.1. Worker protocol notes apply to that release
+> series. For 0.2.0, see [Rebuild workers](../migration-0.2.md#rebuild-workers).
+
 Rappin supports the public Yapin API 1.2 specification. Message uploads, custom
 emojis, bot-owned webhooks and DM delivery remain subject to Yapin's test-server
 or tester rollout. The SDK preserves availability and permission failures; it

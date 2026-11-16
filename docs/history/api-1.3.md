@@ -1,5 +1,8 @@
 # API 1.3: selects, modals and message emojis
 
+> Historical guide for Rappin 0.1. Worker protocol notes apply to that release
+> series. For 0.2.0, see [Rebuild workers](../migration-0.2.md#rebuild-workers).
+
 Rappin 0.1.21 adds the public API 1.3 contracts checked on 4 November 2026.
 The current bundled OpenAPI snapshot is 1.4.0. Platform flags/permissions still determine
 availability; a successful local validation or preview does not grant access.

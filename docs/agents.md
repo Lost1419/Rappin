@@ -58,7 +58,7 @@ Native `reload_cog` replaces linked instances. Source recompilation uses a worke
 Start with the [tutorial](tutorial.md) for setup, commands, typed arguments,
 buttons, state, checks, cogs and persistence. The [Rust workflow guide](rust-bots.md)
 covers custom parsing, aliases/subcommands, collectors, diagnostics and worker
-protocols. Enable `derive` to generate `FromArgs` parsing, help and preparation
+protocol requirements. Enable `derive` to generate `FromArgs` parsing, help and preparation
 schemas. Advanced transport, execution, persistence and cache settings live in
 `BotBuilder::configure`. Application-owned storage and dynamic prefixes remain
 supported. Register collectors before sending prompts and handle timeout,

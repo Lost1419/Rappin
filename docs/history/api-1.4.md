@@ -1,5 +1,8 @@
 # API 1.4 resources and computed access
 
+> Historical guide for Rappin 0.1. Worker protocol notes apply to that release
+> series. For 0.2.0, see [Rebuild workers](../migration-0.2.md#rebuild-workers).
+
 Rappin supports the public API 1.4 contract captured on 12 November 2026. The new
 resource endpoints and lifecycle events require the platform's `bot_api_round2`
 rollout. The developer guide limits this to test servers and eligible test bot

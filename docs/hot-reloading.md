@@ -260,9 +260,10 @@ protocol compatibility. The worker example includes `roll` and `question`.
 
 ### Worker transport and command definitions
 
-Protocol 13 carries slash option declarations, typed change events, structured
-errors, message completion and operation identities. It also supports
-permission lookups, UI callbacks, public reads and bounded uploads. Upload chunks
+Rappin 0.2.0 requires protocol 13 for both the parent and every worker. It carries
+slash option declarations, typed change events, structured errors, message
+completion and operation IDs for checked message-command invocations. It also
+supports permission lookups, UI callbacks, public reads and bounded uploads. Upload chunks
 are 64 KiB, total upload data is bounded to 12 MiB and ordinary frames to 1 MiB.
 Rebuild the parent and every worker together when migrating from 0.1 or an earlier
 0.2.0 preview. Unsupported versions fail before routes are published.

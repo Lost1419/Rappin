@@ -80,8 +80,8 @@ composition preserves this bound; detached execution is rejected.
 
 The API requires no optional feature for native commands. Targets installed with
 `hot-reload` use the existing parent-owned worker proxy, authorization context and
-structured error protocol 13; gateway event intake remains optional. Rebuild the
-parent and workers together. Worker metadata can supply a pure argument schema
+structured errors over protocol 13. Gateway event intake remains optional. Rebuild
+the parent and workers together. Worker metadata can supply a pure argument schema
 for preparation. Worker checks and unavailable parsers are reported as deferred
 and run inside the worker at execution. Command specs support aliases and groups.
 This API is on `BotHandle`
@@ -180,9 +180,9 @@ async fn worker() -> Result<()> {
 
 The ID travels in the private parent invocation envelope; the public
 `CogEvent::Command` layout is unchanged. `WorkerContext::operation_id()` reads an
-invocation snapshot. Protocol 12 accepts it only on message-command frames.
-Older workers are rejected at candidate startup before routes are published;
-IDs are never silently dropped. Prepared plans cannot bypass installed binding
+invocation snapshot. Protocol 13 accepts an operation ID only on message-command
+frames. The parent rejects other protocol versions at candidate startup before
+publishing routes. IDs are never silently dropped. Prepared plans cannot bypass installed binding
 and execution checks after reload. Parent-side checked invocation can
 target workers; there is still no worker-to-parent nested invocation RPC.
 

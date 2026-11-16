@@ -145,9 +145,9 @@ WorkerCog::new("forms").on_interaction(|ctx| async move {
 Legacy `Listener::Interaction` retains button-only routing. Use
 `WorkerCog::on_interaction` for the unified typed interaction listener.
 
-Protocol 12 supplies UI callbacks, single-attempt requests and operation identities
-on every worker route. Rebuild parent and workers together when migrating. Workers
-and build scripts execute trusted code. Keep stdout for IPC.
+Protocol 13 supports UI callbacks and single-attempt API requests. Operation IDs
+travel with checked message-command invocations. Rebuild the parent and workers
+together when migrating. Workers and build scripts execute trusted code. Keep stdout for IPC.
 
 ## Discover message emojis
 

@@ -79,8 +79,9 @@ restarting the parent, put a cog in a separate `WorkerCog` executable and use
 `WorkerProject` / `HotReload`. Parent credentials stay in the parent. Worker state
 resets; preserve durable state in the application's storage.
 
-Protocol 12 is required by the parent and every worker. Rebuild both together.
-All routes support UI callbacks, operation identities and single-attempt requests.
+The parent and every worker require protocol 13. Rebuild both together. Workers
+support UI callbacks and single-attempt API requests. Operation IDs travel with
+checked message-command invocations.
 Keep worker stdout for IPC and sanitized diagnostics on stderr.
 
 Keep the watcher guard alive. Inspect `WatchGuard::status()` fields `scan_error`,
@@ -104,8 +105,7 @@ select menus and modal forms. Native `on_select`, `on_modal` and
 `on_command_interaction` receive the shared `InteractionContext`. Cog and worker
 listeners use `on_interaction`. The parent enables UI delivery and slash commands
 by default. Registered slash commands use the same `CommandContext` as message
-commands and dispatch before generic interaction listeners. Protocol 12 provides UI,
-single-attempt requests and operation identities on every worker route.
+commands and dispatch before generic interaction listeners.
 Derive authorization from the original event and its available identity facts. A modal must precede
 acknowledgement or another response. Propagate incomplete work through the
 explicit failure policy. See `interactions_guide` and the included forms example.
