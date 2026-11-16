@@ -18,7 +18,7 @@ let bot = Bot::builder("example")
     .build();
 ```
 
-In 0.2 the handler receives a `CommandContext` and construction validates
+In 0.2.0 the handler receives a `CommandContext` and construction validates
 the configuration and command definitions.
 
 ```rust

@@ -139,4 +139,4 @@ See the [development guide](docs/development.md) for tests, documentation checks
 minimum Rust verification and smaller local builds. Technical release notes live
 in the [changelog](CHANGELOG.md).
 
-Licensed under [MIT](LICENSE-MIT) or [Apache-0.2.0](LICENSE-APACHE).
+Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
