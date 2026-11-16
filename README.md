@@ -8,6 +8,15 @@ native Rust handlers or reloadable Rust workers.
 [migration guide](docs/migration-2.0.md) when moving an existing bot to this branch.
 The [published release](https://crates.io/crates/rappin-rs) has its own versioned reference.
 
+## Dev preview builds
+
+Download the CLI for Linux x86-64, macOS ARM64 or Windows x86-64 from a successful
+[dev preview build](https://github.com/Lost1419/Rappin/actions?query=workflow%3A%22Dev+preview+build%22).
+Each artifact includes its source commit, build date and SHA-256 checksum, and
+GitHub retains it for 14 days. To try one alongside an existing installation,
+extract the artifact and run the executable by its full path. On Unix, give the
+extracted executable permission to run with `chmod +x rappin`.
+
 ## Start a bot
 
 Requires **Rust 1.89+** and a bot token created in Yapin's developer settings.
