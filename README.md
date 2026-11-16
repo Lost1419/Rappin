@@ -1,5 +1,8 @@
 # Rappin 🦀
 
+[![Dev test suite](https://github.com/Lost1419/Rappin/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/Lost1419/Rappin/actions/workflows/ci.yml?query=branch%3Adev)
+[![Dev preview binaries](https://github.com/Lost1419/Rappin/actions/workflows/dev-preview.yml/badge.svg?branch=dev)](https://github.com/Lost1419/Rappin/actions/workflows/dev-preview.yml?query=branch%3Adev)
+
 An async Rust SDK and bot framework for [Yapin](https://www.yapin.gg).
 Build commands, buttons and forms, organize them into cogs, and use the API from
 native Rust handlers or reloadable Rust workers.
