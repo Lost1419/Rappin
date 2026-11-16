@@ -88,6 +88,10 @@ slash interactions are available in the base SDK.
 | Export metrics over HTTP | `metrics-http` |
 | Export metrics over HTTP and use Pushgateway | `metrics` |
 
+Use `rappin init my-bot --template basic` for a polling starter, or
+`--template worker` for hot reloading. Generation is offline. Building can access
+the registry and bot execution contacts Yapin.
+
 ## Learn in order
 
 The [tutorial](docs/tutorial.md) assumes basic Rust, async functions and `Result`.
@@ -128,26 +132,6 @@ Rust handlers and manual `FromArgs` implementations support custom behavior.
 The [guide index](docs/README.md) includes advanced invocation, shared ingress,
 recovery, authorization and SDK development. Applications select their own state,
 databases, cache backends, prefix resolvers and approval policies.
-
-## Optional features
-
-The library's default feature set is empty. Generated gateway projects enable
-`gateway` and `derive` explicitly.
-
-| Feature | Adds |
-|---|---|
-| `derive` | Argument parsing and help derives |
-| `gateway` | WebSocket event delivery and optional gateway API requests |
-| `hot-reload` | Rebuildable Rust worker cogs |
-| `cli` | JSON CLI, project creation and MCP over stdio |
-| `webhook-middleware` | Verified Axum webhook intake |
-| `metrics-http` | Prometheus HTTP export |
-| `metrics` | Prometheus HTTP and push-gateway export |
-| `voice` | Encrypted playback through the Node/ffmpeg bridge |
-
-Use `rappin init my-bot --template basic` for a polling starter, or
-`--template worker` for hot reloading. Generation is offline. Building can access
-the registry and bot execution contacts Yapin.
 
 ## Contributing
 
