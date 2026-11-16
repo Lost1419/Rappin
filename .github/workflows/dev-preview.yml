@@ -3,16 +3,15 @@ name: Dev preview build
 on:
   push:
     branches: [dev]
-    paths:
-      - .github/workflows/dev-nightly.yml
-  workflow_call:
+    paths-ignore:
+      - "**/*.md"
 
 permissions:
   contents: read
 
 concurrency:
   group: dev-preview-build
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   source:
@@ -23,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref == 'refs/heads/dev' && github.sha || 'refs/heads/dev' }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Pin the preview source
         id: source

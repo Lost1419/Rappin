@@ -10,9 +10,9 @@ The [published release](https://crates.io/crates/rappin-rs) has its own versione
 
 ## Dev preview builds
 
+Pushes to `dev` that change files other than Markdown build a new preview.
 Download the CLI for Linux x86-64, macOS ARM64 or Windows x86-64 from a successful
-**Dev preview build** or **Dev nightly** run in
-[GitHub Actions](https://github.com/Lost1419/Rappin/actions).
+**Dev preview build** run in [GitHub Actions](https://github.com/Lost1419/Rappin/actions).
 Each artifact includes its source commit, build date and SHA-256 checksum, and
 GitHub retains it for 14 days. To try one alongside an existing installation,
 extract the artifact and run the executable by its full path. On Unix, give the
