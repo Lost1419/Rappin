@@ -1,4 +1,5 @@
 name: CI
+run-name: 'Test suite · ${{ github.head_ref || github.ref_name }} · #${{ github.run_number }}'
 
 on:
   push:

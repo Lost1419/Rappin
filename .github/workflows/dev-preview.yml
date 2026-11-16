@@ -1,4 +1,5 @@
 name: Dev preview build
+run-name: 'Preview binaries · ${{ github.ref_name }} · #${{ github.run_number }}'
 
 on:
   push:
