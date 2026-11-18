@@ -160,15 +160,16 @@ impl std::io::Write for TraceCapture {
 }
 
 impl TraceCapture {
-    pub fn subscribe(&self) -> tracing::subscriber::DefaultGuard {
+    pub fn subscribe(&self) {
         let capture = self.clone();
-        tracing::subscriber::set_default(
+        tracing::subscriber::set_global_default(
             tracing_subscriber::fmt()
                 .with_writer(move || capture.clone())
                 .with_max_level(tracing::Level::DEBUG)
                 .with_ansi(false)
                 .finish(),
         )
+        .expect("one tracing capture per test executable");
     }
 
     pub fn text(&self) -> String {

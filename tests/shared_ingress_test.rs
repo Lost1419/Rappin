@@ -1110,7 +1110,7 @@ async fn gateway_preferred_keeps_polling_after_invalid_frames() {
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
     let capture = support::TraceCapture::default();
-    let _subscriber = capture.subscribe();
+    capture.subscribe();
     for shared in [false, true] {
         for requests in [false, true] {
             for invalid in ["{", r#"{"op":"event","s":99,"d":{"id":"bad"}}"#] {
