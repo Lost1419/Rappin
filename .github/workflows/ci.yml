@@ -183,10 +183,11 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: fuzz
+          key: fuzz-x86_64-unknown-linux-gnu-address
       - run: cargo install cargo-fuzz --locked --version 0.13.2
       - run: mkdir -p fuzz/corpus/events fuzz/corpus/arguments
-      - run: cargo fuzz run events fuzz/corpus/events fuzz/seeds/events -- -max_total_time=15 -max_len=8192 -rss_limit_mb=1024
-      - run: cargo fuzz run arguments fuzz/corpus/arguments fuzz/seeds/arguments -- -max_total_time=15 -max_len=8192 -rss_limit_mb=1024
+      - run: cargo fuzz run --target x86_64-unknown-linux-gnu --sanitizer address events fuzz/corpus/events fuzz/seeds/events -- -max_total_time=15 -max_len=8192 -rss_limit_mb=1024
+      - run: cargo fuzz run --target x86_64-unknown-linux-gnu --sanitizer address arguments fuzz/corpus/arguments fuzz/seeds/arguments -- -max_total_time=15 -max_len=8192 -rss_limit_mb=1024
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: failure()
         with:
@@ -282,8 +283,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Identify cargo-audit build toolchain
+        id: audit-toolchain
+        run: echo "rustc=$(rustc --version | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Cache cargo-audit executable
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/rappin-cargo-audit/bin/cargo-audit
+          key: cargo-audit-0.23.0-${{ runner.os }}-${{ runner.arch }}-${{ steps.audit-toolchain.outputs.rustc }}
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        shell: bash
+        run: |
+          audit_root="$RUNNER_TEMP/rappin-cargo-audit"
+          if [[ "$("$audit_root/bin/cargo-audit" --version 2>/dev/null)" != "cargo-audit 0.23.0" ]]; then
+            cargo install cargo-audit --locked --version 0.23.0 --root "$audit_root" --force
+          fi
+          echo "$audit_root/bin" >> "$GITHUB_PATH"
       - name: Run security audit
         run: |
           status=0
