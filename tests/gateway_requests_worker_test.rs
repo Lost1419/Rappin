@@ -29,6 +29,7 @@ async fn worker_single_attempt_requests_keep_partial_and_unknown_outcomes_withou
     let root =
         Project(std::env::temp_dir().join(format!("rappin-gateway-worker-{}", Uuid::new_v4())));
     std::fs::create_dir_all(root.0.join("src")).unwrap();
+    let _build_cache = support::WorkerBuildCache::attach(&root.0);
     std::fs::write(root.0.join("Cargo.toml"),format!("[package]\nname=\"gateway-request-worker\"\nversion=\"0.0.0\"\nedition=\"2021\"\n[workspace]\n[dependencies]\nrappin={{package=\"rappin-rs\",path={},features=[\"hot-reload\"]}}\ntokio={{version=\"1\",features=[\"macros\",\"rt-multi-thread\"]}}\nserde_json=\"1\"\n",json!(env!("CARGO_MANIFEST_DIR")))).unwrap();
     std::fs::write(
         root.0.join("src/main.rs"),

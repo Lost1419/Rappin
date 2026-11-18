@@ -970,6 +970,7 @@ async fn worker_gates_duplicate_delivery_and_handled_failures_share_ingress() {
     use rappin::hot_reload::{HotReload, WorkerProject};
     let root = std::env::temp_dir().join(format!("rappin-ingress-worker-{}", Uuid::new_v4()));
     std::fs::create_dir_all(root.join("src")).unwrap();
+    let build_cache = support::WorkerBuildCache::attach(&root);
     std::fs::write(root.join("Cargo.toml"),format!("[package]\nname=\"shared-ingress-worker\"\nversion=\"0.0.0\"\nedition=\"2021\"\n[workspace]\n[dependencies]\nrappin={{package=\"rappin-rs\",path={},features=[\"hot-reload\"]}}\ntokio={{version=\"1\",features=[\"macros\",\"rt-multi-thread\"]}}\n",json!(env!("CARGO_MANIFEST_DIR")))).unwrap();
     std::fs::write(root.join("src/main.rs"),r#"
 use rappin::{*, hot_reload::WorkerCog};
@@ -1083,6 +1084,7 @@ use rappin::{*, hot_reload::WorkerCog};
     assert_eq!(http.posts.load(Ordering::SeqCst), 2);
     handle.stop();
     run.await.unwrap().unwrap();
+    drop(build_cache);
     // Unload releases the generation; its asynchronous shutdown must finish
     // before Windows can remove the worker's current working directory.
     tokio::time::timeout(Duration::from_secs(5), async {

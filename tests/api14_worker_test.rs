@@ -18,6 +18,7 @@ async fn worker_resource_listener_uses_shared_api_and_preserves_partial_failure(
     let project =
         Project(std::env::temp_dir().join(format!("rappin-api14-worker-{}", Uuid::new_v4())));
     std::fs::create_dir_all(project.0.join("src")).unwrap();
+    let _build_cache = support::WorkerBuildCache::attach(&project.0);
     let sdk = serde_json::to_string(env!("CARGO_MANIFEST_DIR")).unwrap();
     std::fs::write(
         project.0.join("Cargo.toml"),

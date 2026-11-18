@@ -45,6 +45,7 @@ impl Drop for Project {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_worker_failures_preserve_class_causes_and_keep_the_worker_alive_when_handled() {
     let project = Project::new().await;
+    let _build_cache = crate::support::WorkerBuildCache::attach(&project.0);
     for is_button in [false, true] {
         for mode in [0, 1, 2, 3, 4] {
             // expected default/callback, unexpected handled/unhandled

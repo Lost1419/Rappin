@@ -29,6 +29,7 @@ async fn parent_gate_and_worker_message_outcomes_preserve_failures_and_active_ro
     let project =
         Project(std::env::temp_dir().join(format!("rappin-message-worker-{}", Uuid::new_v4())));
     std::fs::create_dir_all(project.0.join("src")).unwrap();
+    let _build_cache = support::WorkerBuildCache::attach(&project.0);
     let sdk = serde_json::to_string(env!("CARGO_MANIFEST_DIR")).unwrap();
     std::fs::write(
         project.0.join("Cargo.toml"),
@@ -205,6 +206,7 @@ async fn missing_worker_message_outcome_is_uncertain_and_cannot_be_reused() {
     let project =
         Project(std::env::temp_dir().join(format!("rappin-message-protocol-{}", Uuid::new_v4())));
     std::fs::create_dir_all(project.0.join("src")).unwrap();
+    let _build_cache = support::WorkerBuildCache::attach(&project.0);
     std::fs::write(
         project.0.join("Cargo.toml"),
         "[package]\nname=\"message-protocol\"\nversion=\"0.0.0\"\nedition=\"2021\"\n[workspace]\n",

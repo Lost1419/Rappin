@@ -241,6 +241,8 @@ jobs:
         run: cargo clippy --workspace --all-features --all-targets -- -D warnings
 
       - name: Run tests
+        env:
+          RAPPIN_TEST_WORKER_TARGET: ${{ runner.temp }}/rappin-test-workers
         run: cargo test --workspace --all-features --all-targets
 
       - name: Check examples

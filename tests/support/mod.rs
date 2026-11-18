@@ -175,3 +175,49 @@ impl TraceCapture {
         String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
     }
 }
+
+// Each attached fixture must use a unique Cargo binary target name. Source,
+// runtime state, and the worker's running executable remain project-specific.
+pub struct WorkerBuildCache(std::path::PathBuf);
+
+impl WorkerBuildCache {
+    pub fn attach(project: &std::path::Path) -> Option<Self> {
+        let cache = std::path::PathBuf::from(std::env::var_os("RAPPIN_TEST_WORKER_TARGET")?);
+        let target = project.join("target");
+        let link = target.join("rappin-hot");
+        if !cache.is_absolute() {
+            return None;
+        }
+        std::fs::create_dir_all(&cache).ok()?;
+        std::fs::create_dir_all(&target).ok()?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&cache, &link).ok()?;
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("powershell.exe")
+                .args([
+                    "-NoProfile", "-NonInteractive", "-Command",
+                    "New-Item -ItemType Junction -Path $env:RAPPIN_TEST_WORKER_LINK -Target $env:RAPPIN_TEST_WORKER_TARGET -ErrorAction Stop | Out-Null",
+                ])
+                .env("RAPPIN_TEST_WORKER_LINK", &link)
+                .env("RAPPIN_TEST_WORKER_TARGET", &cache)
+                .output().ok()?;
+            if !status.status.success() {
+                return None;
+            }
+        }
+        #[cfg(any(unix, windows))]
+        return Some(Self(link));
+        #[cfg(not(any(unix, windows)))]
+        None
+    }
+}
+
+impl Drop for WorkerBuildCache {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(&self.0);
+        #[cfg(windows)]
+        let _ = std::fs::remove_dir(&self.0);
+    }
+}

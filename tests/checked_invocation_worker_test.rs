@@ -26,6 +26,7 @@ async fn installed_worker_targets_reuse_parsing_gate_replies_and_structured_caus
     let project =
         Project(std::env::temp_dir().join(format!("rappin-checked-worker-{}", Uuid::new_v4())));
     std::fs::create_dir_all(project.0.join("src")).unwrap();
+    let _build_cache = support::WorkerBuildCache::attach(&project.0);
     let sdk = serde_json::to_string(env!("CARGO_MANIFEST_DIR")).unwrap();
     std::fs::write(
         project.0.join("Cargo.toml"),

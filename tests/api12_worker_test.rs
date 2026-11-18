@@ -20,6 +20,7 @@ async fn worker_chunked_upload_public_metadata_and_dm_reactions_use_parent_trans
     let directory = std::env::temp_dir().join(format!("rappin-api12-worker-{}", Uuid::new_v4()));
     std::fs::create_dir_all(directory.join("src")).unwrap();
     let project = Project(directory);
+    let _build_cache = support::WorkerBuildCache::attach(&project.0);
     let sdk = serde_json::to_string(env!("CARGO_MANIFEST_DIR")).unwrap();
     std::fs::write(project.0.join("Cargo.toml"),format!("[package]\nname=\"api12-worker\"\nversion=\"0.0.0\"\nedition=\"2021\"\n[workspace]\n[dependencies]\nrappin={{package=\"rappin-rs\",path={sdk},features=[\"hot-reload\"]}}\ntokio={{version=\"1\",features=[\"macros\",\"rt-multi-thread\"]}}\n")).unwrap();
     std::fs::write(project.0.join("src/main.rs"),r#"
