@@ -1,5 +1,6 @@
 # Rappin 🦀
 
+[![crates.io prerelease 0.2.0-dev.1](https://img.shields.io/badge/crates.io-0.2.0--dev.1-orange)](https://crates.io/crates/rappin-rs/0.2.0-dev.1)
 [![Dev test suite](https://github.com/Lost1419/Rappin/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/Lost1419/Rappin/actions/workflows/ci.yml?query=branch%3Adev)
 [![Dev preview binaries](https://github.com/Lost1419/Rappin/actions/workflows/dev-preview.yml/badge.svg?branch=dev)](https://github.com/Lost1419/Rappin/actions/workflows/dev-preview.yml?query=branch%3Adev)
 
