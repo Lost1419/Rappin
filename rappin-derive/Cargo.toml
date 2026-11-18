@@ -1,6 +1,6 @@
 [package]
 name = "rappin-rs-derive"
-version = "0.2.0-dev.2"
+version = "0.2.0-dev.3"
 edition = "2024"
 rust-version = "1.89"
 description = "Optional command argument derives for Rappin"
