@@ -314,7 +314,10 @@ impl Bot {
                             let wait = match error.gateway_close_code() {
                                 Some(4003) => Some(300),
                                 Some(4008 | 4029) => Some(60),
-                                _ if crate::availability::retryable_read(&error) => {
+                                // A bad frame ends this connection. Polling continues
+                                // from its own cursor while the socket reconnects.
+                                _ if matches!(error, Error::Gateway(crate::GatewayError::InvalidFrame))
+                                    || crate::availability::retryable_read(&error) => {
                                     failures = failures.saturating_add(1);
                                     Some((1u64 << failures.min(5)).min(30))
                                 },

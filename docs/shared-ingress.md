@@ -69,7 +69,9 @@ be compared, and it is discarded under the authoritative committed cursor.
 
 Webhook and gateway IDs do not advance polling checkpoints. Shared ingress always
 runs authoritative polling recovery; optional GatewayPreferred delivery joins the
-same claims. GatewayOnly is rejected with shared ingress because it cannot provide
+same claims. A malformed WebSocket frame interrupts the gateway connection and
+polling continues while the gateway waits to reconnect. GatewayOnly is rejected
+with shared ingress because it cannot provide
 that polling authority. Sparse IDs are allowed: no assumption of consecutive IDs
 is made. A higher webhook can complete while earlier polling events remain unseen;
 it stays completed-but-uncommitted until polling covers it. A lower unfinished

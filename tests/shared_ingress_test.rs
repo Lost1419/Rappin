@@ -1102,6 +1102,114 @@ use rappin::{*, hot_reload::WorkerCog};
 
 #[cfg(feature = "gateway")]
 #[tokio::test]
+async fn gateway_preferred_keeps_polling_after_invalid_frames() {
+    use futures_util::{SinkExt, StreamExt};
+    use rappin::gateway::GatewayRequestConfig;
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+    for shared in [false, true] {
+        for requests in [false, true] {
+            for invalid in ["{", r#"{"op":"event","s":99,"d":{"id":"bad"}}"#] {
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let (send_invalid, wait_invalid) = oneshot::channel();
+                let server = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let mut ws = accept_async(stream).await.unwrap();
+                    ws.send(Message::Text(
+                        json!({"op":"hello","heartbeat_interval":60000})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+                    ws.next().await.unwrap().unwrap();
+                    ws.send(Message::Text(
+                        json!({"op":"ready","seq":0,"requests":requests})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+                    wait_invalid.await.unwrap();
+                    ws.send(Message::Text(invalid.into())).await.unwrap();
+                    while ws.next().await.is_some() {}
+                });
+                let mut http = Http::new(vec![]).await;
+                let calls = Arc::new(AtomicUsize::new(0));
+                let called = calls.clone();
+                let bot = builder(&http)
+                    .configure(|settings| {
+                        settings.persistence.ingress = shared.then(IngressConfig::default);
+                        settings.transport.gateway_url = Some(format!("ws://{address}"));
+                        settings.transport.mode = TransportMode::GatewayPreferred;
+                    })
+                    .command("ping", "record", move |_| {
+                        let called = called.clone();
+                        async move {
+                            called.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        }
+                    })
+                    .build()
+                    .unwrap();
+                let handle = bot.handle();
+                if requests {
+                    handle
+                        .client()
+                        .configure_gateway_requests(Some(GatewayRequestConfig::default()))
+                        .unwrap();
+                }
+                let run = tokio::spawn(bot.run());
+                if !shared {
+                    http.next()
+                        .await
+                        .send(json!({"events":[],"last":0}))
+                        .unwrap();
+                }
+                until(|| handle.transport_status().active == Some(EventTransport::Gateway)).await;
+                if requests {
+                    until(|| handle.client().gateway_request_status().connected).await;
+                }
+                let pending_poll = if shared {
+                    Some(http.next().await)
+                } else {
+                    None
+                };
+                send_invalid.send(()).unwrap();
+                until(|| handle.transport_status().fallback == Some(FallbackReason::Unavailable))
+                    .await;
+                assert_eq!(
+                    handle.transport_status().active,
+                    Some(EventTransport::Polling)
+                );
+                assert_eq!(handle.transport_status().committed_cursor, 0);
+                let poll = match pending_poll {
+                    Some(poll) => poll,
+                    None => http.next().await,
+                };
+                assert_eq!(http.poll_after.lock().unwrap().last(), Some(&0));
+                poll.send(json!({"events":[event(10, "ping")],"last":10}))
+                    .unwrap();
+                until(|| handle.transport_status().committed_cursor == 10).await;
+                assert_eq!(calls.load(Ordering::SeqCst), 1);
+                handle.stop();
+                tokio::time::timeout(Duration::from_secs(3), run)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                tokio::time::timeout(Duration::from_secs(3), server)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+        }
+    }
+}
+
+#[cfg(feature = "gateway")]
+#[tokio::test]
 async fn webhook_gateway_and_polling_share_claims_and_report_gateway_payload_conflicts() {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::{accept_async, tungstenite::Message};

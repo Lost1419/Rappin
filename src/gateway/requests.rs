@@ -509,7 +509,7 @@ impl Pump {
                                 Message::Close(frame) => return Err(close(frame.map(|f| u16::from(f.code)))),
                                 Message::Ping(payload) => send_frame(&mut socket, Message::Pong(payload)).await?,
                                 Message::Text(text) => {
-                                    let value: Value = serde_json::from_str(&text).map_err(|_| protocol_failure())?;
+                                    let mut value: Value = serde_json::from_str(&text).map_err(|_| protocol_failure())?;
                                     match value["op"].as_str() {
                                         Some("heartbeat_ack") => {
                                             if let Some(started) = awaiting.take() {
@@ -517,7 +517,8 @@ impl Pump {
                                             }
                                         },
                                         Some("event") => {
-                                            let event = serde_json::from_value(value["d"].clone())?;
+                                            let event = serde_json::from_value(value["d"].take())
+                                                .map_err(|_| protocol_failure())?;
                                             if !event_delivery.paused.load(Ordering::SeqCst) && events.try_send(Ok(event)).is_err() {
                                                 // Preserve response correlations and heartbeat. Lost
                                                 // event coverage is explicit; never checkpoint it.

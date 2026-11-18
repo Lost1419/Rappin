@@ -45,6 +45,7 @@ and rebuild instructions, including changes since 0.1.34 and 0.1.35.
 - Prune expired cooldown buckets during command use. Server-scoped cooldowns use one bucket per requester in DMs.
 - Cover every bundled OpenAPI operation with a redacted rate-limit route template and enforce that coverage with a spec-driven test.
 - Report WebSocket failures as `Error::Gateway` and carry the gateway close code separately from the HTTP status through request and worker diagnostics.
+- Keep polling active after a malformed WebSocket frame in gateway-preferred mode, including with shared ingress. Reconnect the gateway after a backoff.
 - Pin GitHub Actions, grant read-only contents access and audit workspace and fuzz lockfiles weekly.
 
 ### Development cleanup

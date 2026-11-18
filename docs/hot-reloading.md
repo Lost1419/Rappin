@@ -38,7 +38,7 @@ edition = "2021"
 default-run = "my-bot"
 
 [dependencies]
-rappin = { package = "rappin-rs", git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "0.2.0-dev.1", features = ["hot-reload"] }
+rappin = { package = "rappin-rs", git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "0.2.0-dev.2", features = ["hot-reload"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

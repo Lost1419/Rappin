@@ -1,6 +1,6 @@
 # Rappin 🦀
 
-[![crates.io prerelease 0.2.0-dev.1](https://img.shields.io/badge/crates.io-0.2.0--dev.1-orange)](https://crates.io/crates/rappin-rs/0.2.0-dev.1)
+[![crates.io prerelease 0.2.0-dev.2](https://img.shields.io/badge/crates.io-0.2.0--dev.2-orange)](https://crates.io/crates/rappin-rs/0.2.0-dev.2)
 [![Dev test suite](https://github.com/Lost1419/Rappin/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/Lost1419/Rappin/actions/workflows/ci.yml?query=branch%3Adev)
 [![Dev preview binaries](https://github.com/Lost1419/Rappin/actions/workflows/dev-preview.yml/badge.svg?branch=dev)](https://github.com/Lost1419/Rappin/actions/workflows/dev-preview.yml?query=branch%3Adev)
 
@@ -26,7 +26,7 @@ run_id=$(gh run list --repo Lost1419/Rappin --workflow dev-preview.yml \
 test -n "$run_id" && gh run download "$run_id" --repo Lost1419/Rappin --dir rappin-preview
 ```
 
-The Cargo version identifies the preview milestone (currently `0.2.0-dev.1`).
+The Cargo version identifies the preview milestone (currently `0.2.0-dev.2`).
 `rappin --version` shows the checkout's short Git commit when available. For
 example, `rappin 0.2.0-dev.1 (3322694)` identifies one build of that milestone.
 GitHub retains the artifacts for 14 days. Each includes the full source commit,

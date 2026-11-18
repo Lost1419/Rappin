@@ -173,7 +173,7 @@ Polling is the default and needs no public HTTP endpoint. To prefer WebSocket
 delivery, enable the `gateway` feature and select the default gateway:
 
 ```toml
-rappin-rs = { git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "0.2.0-dev.1", features = ["gateway"] }
+rappin-rs = { git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "0.2.0-dev.2", features = ["gateway"] }
 ```
 
 ```rust,no_run
@@ -200,7 +200,9 @@ async fn main() -> Result<()> {
 
 Run the same flow with `cargo run --features gateway --example gateway_bot`.
 `.configure(|settings| { settings.transport.gateway_url = Some(url); settings.transport.mode = rappin::TransportMode::GatewayPreferred; })` selects preferred mode: Rappin resumes WebSocket delivery and
-falls back to polling when needed. Use `.configure(|settings| { settings.transport.gateway_url = Some(url); settings.transport.mode = rappin::TransportMode::GatewayOnly; })` only when polling
+falls back to polling when needed. A malformed WebSocket frame or event envelope
+closes the current connection. Polling covers event delivery while the gateway
+waits to reconnect. Use `.configure(|settings| { settings.transport.gateway_url = Some(url); settings.transport.mode = rappin::TransportMode::GatewayOnly; })` only when polling
 fallback is unsuitable. You do not need to configure gateway API requests to
 receive events; JSON API calls remain on HTTPS unless that separate option is
 enabled. `BotHandle::transport_status()` reports the active transport and

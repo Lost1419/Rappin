@@ -278,7 +278,7 @@ impl Gateway {
                         Message::Close(f)=>return Err(close(f.map(|f|u16::from(f.code)))),
                         Message::Ping(p)=>{socket.send(Message::Pong(p)).await.map_err(transport_cause)?;},
                         Message::Text(t)=>{
-                            let v:serde_json::Value=serde_json::from_str(&t).map_err(|_| protocol_failure())?;
+                            let mut v:serde_json::Value=serde_json::from_str(&t).map_err(|_| protocol_failure())?;
                             match v["op"].as_str(){
                                 Some("heartbeat_ack")=>{
                                     self.awaiting_ack=false;
@@ -295,7 +295,18 @@ impl Gateway {
                                     }
                                     if after==0{return Ok(EventsResponse{events:vec![],last:v["seq"].as_u64().unwrap_or(0)});}
                                 },
-                                Some("event")=>{let event:crate::Event=serde_json::from_value(v["d"].clone())?;if self.deliver_duplicates || event.id>after{self.telemetry.update(|s|{s.active=Some(EventTransport::Gateway);s.fallback=None;s.received_cursor=after.max(event.id);});return Ok(EventsResponse{last:after.max(event.id),events:vec![event]});}},
+                                Some("event")=>{
+                                    let event: crate::Event = serde_json::from_value(v["d"].take())
+                                        .map_err(|_| protocol_failure())?;
+                                    if self.deliver_duplicates || event.id > after {
+                                        self.telemetry.update(|s| {
+                                            s.active = Some(EventTransport::Gateway);
+                                            s.fallback = None;
+                                            s.received_cursor = after.max(event.id);
+                                        });
+                                        return Ok(EventsResponse { last: after.max(event.id), events: vec![event] });
+                                    }
+                                },
                                 _=>(),
                             }
                         },_=>(),
@@ -366,12 +377,7 @@ impl Gateway {
                     });
                     if e.is_unauthorized()
                         || (crate::client::single_attempt_active()
-                            && matches!(
-                                e,
-                                Error::Config(_)
-                                    | Error::Json(_)
-                                    | Error::Gateway(crate::GatewayError::InvalidFrame)
-                            ))
+                            && matches!(e, Error::Config(_) | Error::Json(_)))
                     {
                         return Err(e);
                     }
