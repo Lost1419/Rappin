@@ -211,18 +211,19 @@ impl Gateway {
         };
         let (mut ws, _) = timeout(Duration::from_secs(10), connection)
             .await
-            .map_err(|_| transport())?
+            .map_err(|_| crate::GatewayError::Timeout)?
             .map_err(transport_cause)?;
         let hello = timeout(Duration::from_secs(10), ws.next())
             .await
-            .map_err(|_| transport())?
+            .map_err(|_| crate::GatewayError::Timeout)?
             .ok_or_else(transport)?
             .map_err(transport_cause)?;
         if let Message::Close(frame) = hello {
             return Err(close(frame.map(|f| u16::from(f.code))));
         }
         let value: serde_json::Value =
-            serde_json::from_str(hello.to_text().map_err(transport_cause)?)?;
+            serde_json::from_str(hello.to_text().map_err(transport_cause)?)
+                .map_err(|_| protocol_failure())?;
         if value["op"] != "hello" {
             return Err(protocol_failure());
         }
@@ -268,16 +269,16 @@ impl Gateway {
             tokio::select! {
                 _=tokio::time::sleep_until(deadline)=>return Ok(EventsResponse{events:vec![],last:after}),
                 _=tokio::time::sleep_until(self.heartbeat)=>{
-                    if self.awaiting_ack{return Err(transport());}
-                    socket.send(Message::Text("{\"op\":\"heartbeat\"}".into())).await.map_err(|_|transport())?;
+                    if self.awaiting_ack{return Err(crate::GatewayError::HeartbeatTimeout.into());}
+                    socket.send(Message::Text("{\"op\":\"heartbeat\"}".into())).await.map_err(transport_cause)?;
                     self.awaiting_ack=true;self.heartbeat_sent=Some(Instant::now());self.heartbeat=Instant::now()+self.interval;
                 },
                 frame=socket.next()=>{
                     match frame.ok_or_else(transport)?.map_err(transport_cause)?{
                         Message::Close(f)=>return Err(close(f.map(|f|u16::from(f.code)))),
-                        Message::Ping(p)=>{socket.send(Message::Pong(p)).await.map_err(|_|transport())?;},
+                        Message::Ping(p)=>{socket.send(Message::Pong(p)).await.map_err(transport_cause)?;},
                         Message::Text(t)=>{
-                            let v:serde_json::Value=serde_json::from_str(&t)?;
+                            let v:serde_json::Value=serde_json::from_str(&t).map_err(|_| protocol_failure())?;
                             match v["op"].as_str(){
                                 Some("heartbeat_ack")=>{
                                     self.awaiting_ack=false;
@@ -365,20 +366,25 @@ impl Gateway {
                     });
                     if e.is_unauthorized()
                         || (crate::client::single_attempt_active()
-                            && matches!(e, Error::Config(_) | Error::Json(_)))
+                            && matches!(
+                                e,
+                                Error::Config(_)
+                                    | Error::Json(_)
+                                    | Error::Gateway(crate::GatewayError::InvalidFrame)
+                            ))
                     {
                         return Err(e);
                     }
                     if !self.allow_fallback {
                         return Err(e);
                     }
-                    let delay = match e.status_code() {
+                    let delay = match e.gateway_close_code() {
                         Some(4003) => 300,
                         Some(4029) | Some(4008) => 60,
                         _ => 5,
                     };
                     self.fallback_until = Some(Instant::now() + Duration::from_secs(delay));
-                    let reason = match e.status_code() {
+                    let reason = match e.gateway_close_code() {
                         Some(4003) => FallbackReason::AccessDenied,
                         Some(4008 | 4029) => FallbackReason::RateLimited,
                         _ if wire_trace_enabled() => FallbackReason::WireLogging,
@@ -404,43 +410,18 @@ impl Gateway {
     }
 }
 fn transport() -> Error {
-    if crate::client::single_attempt_active() {
-        return Error::Remote(crate::RemoteError {
-            kind: "gateway_transport".into(),
-            message: "gateway disconnected during an availability read".into(),
-            status: None,
-            retry_after: None,
-            details: Default::default(),
-        });
-    }
-
-    Error::Config("gateway disconnected; resume with the last handled event ID".into())
+    crate::GatewayError::Disconnected.into()
 }
 fn close(code: Option<u16>) -> Error {
-    if code == Some(4004) {
-        Error::Unauthorized
-    } else {
-        Error::Api {
-            status: code.unwrap_or(1006),
-            message: "gateway closed".into(),
-            retry_after: None,
-        }
-    }
+    crate::GatewayError::Closed { code }.into()
 }
 
 fn protocol_failure() -> Error {
-    if crate::client::single_attempt_active() {
-        Error::Config("gateway returned an invalid protocol frame".into())
-    } else {
-        transport()
-    }
+    crate::GatewayError::InvalidFrame.into()
 }
 
 fn transport_cause(error: tokio_tungstenite::tungstenite::Error) -> Error {
     use tokio_tungstenite::tungstenite::Error;
-    if !crate::client::single_attempt_active() {
-        return transport();
-    }
     match error {
         Error::Http(response) => crate::Error::Api {
             status: response.status().as_u16(),
@@ -452,9 +433,12 @@ fn transport_cause(error: tokio_tungstenite::tungstenite::Error) -> Error {
                 .and_then(crate::rate_limits::retry_after)
                 .map(|delay| delay.as_secs_f64()),
         },
-        Error::Io(_) | Error::Tls(_) | Error::ConnectionClosed | Error::AlreadyClosed => {
-            transport()
-        }
+        Error::Io(error) => crate::GatewayError::Io { kind: error.kind() }.into(),
+        Error::Tls(_) => crate::GatewayError::Tls.into(),
+        Error::ConnectionClosed | Error::AlreadyClosed => transport(),
+        Error::Protocol(
+            tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
+        ) => crate::GatewayError::ConnectionReset.into(),
         _ => protocol_failure(),
     }
 }

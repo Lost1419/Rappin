@@ -317,6 +317,10 @@ fn read_error_details(error: &Error) -> serde_json::Value {
     details
 }
 
+fn retryable_gateway_close(code: Option<u16>) -> bool {
+    matches!(code, None | Some(1000 | 1001 | 1006 | 1011 | 1012 | 1013))
+}
+
 pub(crate) fn retryable_read(error: &Error) -> bool {
     match error {
         Error::Http(e) => {
@@ -324,8 +328,23 @@ pub(crate) fn retryable_read(error: &Error) -> bool {
         }
         // Exhausting the client's shared/advised wait budget is terminal here.
         Error::RetryWaitExceeded { .. } => false,
+        Error::Gateway(error) => match error {
+            crate::GatewayError::Closed { code } => retryable_gateway_close(*code),
+            crate::GatewayError::InvalidFrame => false,
+            _ => true,
+        },
+        Error::Remote(e) if e.kind == "gateway" => {
+            match e.details.get("reason").and_then(serde_json::Value::as_str) {
+                Some("peer_closed") => retryable_gateway_close(error.gateway_close_code()),
+                Some("invalid_frame") => false,
+                _ => true,
+            }
+        }
         Error::Remote(e) if e.kind == "gateway_transport" && e.status.is_none() => true,
         Error::Remote(e) if e.kind == "gateway_request" && e.status.is_none() => {
+            if let Some(code) = error.gateway_close_code() {
+                return retryable_gateway_close(Some(code));
+            }
             matches!(
                 e.details.get("reason").and_then(serde_json::Value::as_str),
                 Some(
@@ -348,21 +367,7 @@ pub(crate) fn retryable_read(error: &Error) -> bool {
         _ => {
             matches!(
                 error.status_code(),
-                Some(
-                    408 | 500
-                        | 502
-                        | 503
-                        | 504
-                        | 520
-                        | 521
-                        | 522
-                        | 1000
-                        | 1001
-                        | 1006
-                        | 1011
-                        | 1012
-                        | 1013
-                )
+                Some(408 | 500 | 502 | 503 | 504 | 520 | 521 | 522)
             ) || (error.status_code() == Some(429) && error.retry_after().is_some())
         }
     }

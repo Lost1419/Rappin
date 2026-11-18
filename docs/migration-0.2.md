@@ -61,6 +61,12 @@ fn configure() -> Result<Bot> {
 The smaller `prelude` contains common bot types. Import advanced policy, transport,
 collector and persistence types explicitly from their modules or the crate root.
 
+Gateway transport failures surface as `Error::Gateway`. Use
+`gateway_close_code()` to read a WebSocket close code and `status_code()` for an
+HTTP status, including an HTTP handshake rejection. Gateway authentication
+rejections still satisfy `is_unauthorized()`. Server cooldowns now isolate
+DM requesters. Reset a server-scoped DM bucket with `dm:{requester_uuid}`.
+
 ## Move advanced configuration
 
 `BotBuilder::configure` exposes typed transport, execution, persistence and cache

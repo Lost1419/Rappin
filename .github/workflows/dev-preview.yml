@@ -21,7 +21,7 @@ jobs:
       sha: ${{ steps.source.outputs.sha }}
       date: ${{ steps.source.outputs.date }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -44,17 +44,19 @@ jobs:
           - {runner: macos-15, platform: macos-arm64, binary: rappin}
           - {runner: windows-2022, platform: windows-x86_64, binary: rappin.exe}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.source.outputs.sha }}
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@1.89.0
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: 1.89.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: dev-preview-cli
       - name: Build the Rappin CLI
         run: cargo build --locked --release --bin rappin --features cli,gateway,voice
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
       - name: Check and package the preview
@@ -98,7 +100,7 @@ jobs:
           }
           (out / "build.json").write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
           PYTHON
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         id: upload
         with:
           name: rappin-dev-${{ needs.source.outputs.date }}-${{ matrix.platform }}-${{ needs.source.outputs.sha }}

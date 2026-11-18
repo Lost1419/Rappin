@@ -33,6 +33,19 @@ Coverage JSON and normal rustdoc JSON both use `target/doc/rappin.json`; run the
 checker immediately after the coverage command. Nightly is a maintenance tool,
 not a requirement for applications using the SDK.
 
+## Dependency audits
+
+CI pins third-party actions to full commit SHAs and grants read-only repository
+contents access. The weekly scheduled security job audits both lockfiles without
+starting the platform test matrix. GitHub loads schedules from the default
+branch, so the schedule takes effect when this workflow reaches that branch.
+The audit also runs on ordinary code changes to `dev`.
+
+```sh
+cargo audit
+cargo audit --no-fetch --file fuzz/Cargo.lock
+```
+
 ## Offline randomized checks
 
 `tests/properties_test.rs` checks quoted argument round trips and UTF-8 offsets,

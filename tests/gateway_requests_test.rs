@@ -142,7 +142,7 @@ async fn correlated_out_of_order_requests_keep_events_and_heartbeats_responsive(
 
 #[tokio::test]
 async fn uncertain_disconnect_timeout_and_cancellation_never_fallback_or_replay() {
-    for mode in ["disconnect", "timeout", "cancel"] {
+    for mode in ["disconnect", "close", "timeout", "cancel"] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let (seen, received) = oneshot::channel();
@@ -153,8 +153,20 @@ async fn uncertain_disconnect_timeout_and_cancellation_never_fallback_or_replay(
             let request = text(&mut ws).await;
             assert_eq!(request["method"], "POST");
             seen.send(()).unwrap();
-            if mode != "disconnect" {
-                tokio::time::sleep(Duration::from_secs(1)).await;
+            match mode {
+                "disconnect" => {}
+                "close" => {
+                    use tokio_tungstenite::tungstenite::protocol::{
+                        frame::coding::CloseCode, CloseFrame,
+                    };
+                    ws.close(Some(CloseFrame {
+                        code: CloseCode::Restart,
+                        reason: "private reason".into(),
+                    }))
+                    .await
+                    .unwrap();
+                }
+                _ => tokio::time::sleep(Duration::from_secs(1)).await,
             }
         });
         let (base, calls, http) = no_http().await;
@@ -183,6 +195,15 @@ async fn uncertain_disconnect_timeout_and_cancellation_never_fallback_or_replay(
             assert_eq!(error.to_json()["outcome"], "unknown");
             assert_eq!(error.to_json()["submitted"], true);
             assert_eq!(error.to_json()["retry_safety"], "do_not_replay_workflow");
+            if mode == "close" {
+                assert_eq!(error.gateway_close_code(), Some(1012));
+                assert_eq!(error.status_code(), None);
+                assert_eq!(error.to_json()["source"]["kind"], "gateway");
+                assert!(!error.to_json().to_string().contains("private reason"));
+                let cause = client.gateway_request_status().last_disconnect.unwrap();
+                assert_eq!(cause.gateway_close_code(), Some(1012));
+                assert_eq!(cause.status, None);
+            }
         }
         assert_eq!(client.gateway_request_status().submitted, 1);
         assert_eq!(calls.load(Ordering::SeqCst), 0);

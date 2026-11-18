@@ -5,6 +5,10 @@ contract for its installed version.
 
 ## Slow replies
 
+Gateway failures carry a WebSocket `close_code` separately from HTTP `status`.
+A direct peer close appears as `Error::Gateway`. Submitted gateway requests
+keep their own `gateway_request` outcome and replay guidance.
+
 Separate REST header timing, full-call/body decode time, gateway heartbeat RTT,
 event delivery age and handler execution. Doctor's last request measures only its
 own request. Inspect the running application's `transport_status()` and Client

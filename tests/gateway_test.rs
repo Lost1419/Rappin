@@ -170,10 +170,15 @@ async fn gateway_only_returns_denial_without_attempting_rest() {
     )
     .url(format!("ws://{address}"))
     .gateway_only();
-    assert_eq!(
-        gateway.poll(10).await.unwrap_err().status_code(),
-        Some(4003)
-    );
+    let error = gateway.poll(10).await.unwrap_err();
+    assert!(matches!(
+        error,
+        rappin::Error::Gateway(rappin::GatewayError::Closed { .. })
+    ));
+    assert_eq!(error.gateway_close_code(), Some(4003));
+    assert_eq!(error.status_code(), None);
+    assert_eq!(error.to_remote().gateway_close_code(), Some(4003));
+    assert!(!error.to_json().to_string().contains("beta"));
     assert_eq!(gateway.status().mode, rappin::TransportMode::GatewayOnly);
     assert!(gateway.status().active.is_none());
     server.await.unwrap();

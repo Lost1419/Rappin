@@ -173,7 +173,7 @@ pub use diagnostics::{
     EventTransport, FallbackReason, RequestEvent, RequestMetrics, RequestObservation,
     TransportMode, TransportStatus,
 };
-pub use error::{Error, RemoteError, Result};
+pub use error::{Error, GatewayError, RemoteError, Result};
 pub use interactions::{InteractionState, ResponsePhase};
 pub use models::*;
 pub use oauth2::{OAuth2Client, OAuth2Token, OAuth2User, Pkce};

@@ -1,7 +1,9 @@
 //! Execution-time in-memory command cooldown buckets; read-only preparation must not consume them.
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
+use uuid::Uuid;
 
 use tokio::sync::Mutex;
 
@@ -23,13 +25,13 @@ pub enum CooldownType {
     User,
     /// Cooldown applies per-channel.
     Channel,
-    /// Cooldown applies per-server.
+    /// Cooldown applies per-server, or per-requester in direct messages.
     Server,
     /// Cooldown applies globally.
     Global,
 }
 
-/// A rate limiter that tracks cooldown buckets.
+/// A rate limiter that checks active cooldowns and prunes expired buckets on use.
 #[derive(Clone)]
 /// # Example
 ///
@@ -43,7 +45,17 @@ pub enum CooldownType {
 pub struct Cooldown {
     kind: CooldownType,
     duration: Duration,
-    buckets: Arc<Mutex<HashMap<String, Instant>>>,
+    buckets: Arc<Mutex<Buckets>>,
+}
+
+#[derive(Default)]
+struct Buckets {
+    entries: HashMap<String, Instant>,
+    last_sweep: Option<Instant>,
+}
+
+pub(crate) fn server_key(server: Option<Uuid>, author: Uuid) -> String {
+    server.map_or_else(|| format!("dm:{author}"), |server| server.to_string())
 }
 
 impl Cooldown {
@@ -60,7 +72,7 @@ impl Cooldown {
         Self {
             kind,
             duration,
-            buckets: Arc::new(Mutex::new(HashMap::new())),
+            buckets: Arc::new(Mutex::new(Buckets::default())),
         }
     }
 
@@ -95,7 +107,7 @@ impl Cooldown {
         Self::new(CooldownType::Channel, duration)
     }
 
-    /// Creates a per-server cooldown.
+    /// Creates a per-server cooldown with per-requester buckets in direct messages.
     /// # Example
     ///
     /// ```rust
@@ -166,10 +178,7 @@ impl Cooldown {
         let key = match self.kind {
             CooldownType::User => ctx.author_id().to_string(),
             CooldownType::Channel => ctx.channel_id().to_string(),
-            CooldownType::Server => ctx
-                .server_id()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| "dm".to_string()),
+            CooldownType::Server => server_key(ctx.server_id(), ctx.author_id()),
             CooldownType::Global => "global".to_string(),
         };
 
@@ -192,17 +201,31 @@ impl Cooldown {
     /// # }
     /// ```
     pub async fn check_key(&self, key: &str) -> Option<Duration> {
+        if self.duration.is_zero() {
+            return None;
+        }
         let mut buckets = self.buckets.lock().await;
         let now = Instant::now();
+        // Amortize global cleanup while checking the current bucket precisely.
+        let sweep_interval = self.duration.min(Duration::from_secs(60));
+        if buckets
+            .last_sweep
+            .is_none_or(|last| now - last >= sweep_interval)
+        {
+            buckets
+                .entries
+                .retain(|_, last| now - *last < self.duration);
+            buckets.last_sweep = Some(now);
+        }
 
-        if let Some(&last_time) = buckets.get(key) {
+        if let Some(&last_time) = buckets.entries.get(key) {
             let elapsed = now.duration_since(last_time);
             if elapsed < self.duration {
                 return Some(self.duration - elapsed);
             }
         }
 
-        buckets.insert(key.to_string(), now);
+        buckets.entries.insert(key.to_string(), now);
         None
     }
 
@@ -222,6 +245,65 @@ impl Cooldown {
     /// # }
     /// ```
     pub async fn reset_key(&self, key: &str) {
-        self.buckets.lock().await.remove(key);
+        self.buckets.lock().await.entries.remove(key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Client, CommandContext, MessageEvent};
+
+    #[tokio::test]
+    async fn expired_entries_are_pruned_without_resetting_live_buckets() {
+        let cooldown = Cooldown::user(Duration::from_secs(60));
+        assert!(cooldown.check_key("live").await.is_none());
+        {
+            let mut buckets = cooldown.buckets.lock().await;
+            let past = Instant::now() - Duration::from_secs(120);
+            buckets.last_sweep = Some(past);
+            buckets.entries.insert("expired".into(), past);
+        }
+        assert!(cooldown.check_key("live").await.is_some());
+        assert!(!cooldown
+            .buckets
+            .lock()
+            .await
+            .entries
+            .contains_key("expired"));
+        assert!(cooldown.check_key("expired").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn direct_message_server_cooldowns_share_per_requester_buckets_across_contexts() {
+        fn dm(author: u128, channel: u128) -> MessageContext {
+            let event: MessageEvent = serde_json::from_value(serde_json::json!({
+                "id": Uuid::from_u128(1),
+                "author_id": Uuid::from_u128(author),
+                "channel_id": Uuid::from_u128(channel),
+                "is_dm": true,
+                "content": "!example",
+            }))
+            .unwrap();
+            MessageContext::new(
+                Arc::new(Client::new("fixture")),
+                event,
+                None,
+                String::new(),
+                None,
+            )
+        }
+        let cooldown = Cooldown::server(Duration::from_secs(60));
+        assert!(cooldown.check(&dm(2, 3)).await.is_none());
+        assert!(CommandContext::from(dm(2, 4))
+            .check_cooldown(&cooldown)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(CommandContext::from(dm(5, 3))
+            .check_cooldown(&cooldown)
+            .await
+            .unwrap()
+            .is_none());
     }
 }

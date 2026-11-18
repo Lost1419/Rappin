@@ -195,12 +195,15 @@ fn interrupted(submitted: bool, reason: &str, cause: Option<&crate::RemoteError>
     if let Some(cause) = cause {
         error.status = cause.status;
         error.retry_after = cause.retry_after;
+        if let Some(code) = cause.details.get("close_code") {
+            error.details.insert("close_code".into(), code.clone());
+        }
         error.details.insert("source".into(), cause.to_json());
     }
     error.into()
 }
 fn termination(reason: &str, source: Option<&Error>) -> crate::RemoteError {
-    let mut error = disconnected().to_remote();
+    let mut error = source.map_or_else(|| transport().to_remote(), Error::to_remote);
     error.details.insert("reason".into(), reason.into());
     if let Some(source) = source {
         error.status = source.status_code();
@@ -208,37 +211,6 @@ fn termination(reason: &str, source: Option<&Error>) -> crate::RemoteError {
         error.details.insert("source".into(), source.to_json());
     }
     error
-}
-// Pump tasks do not inherit the caller's availability task-local context.
-// Keep transient I/O distinguishable from terminal protocol/configuration errors.
-fn disconnected() -> Error {
-    Error::Remote(crate::RemoteError {
-        kind: "gateway_transport".into(),
-        message: "gateway connection was interrupted".into(),
-        status: None,
-        retry_after: None,
-        details: Default::default(),
-    })
-}
-fn socket_error(error: tokio_tungstenite::tungstenite::Error) -> Error {
-    use tokio_tungstenite::tungstenite::Error;
-    match error {
-        Error::Io(error) => {
-            let mut cause = termination("io_error", None);
-            cause
-                .details
-                .insert("io_kind".into(), format!("{:?}", error.kind()).into());
-            cause.into()
-        }
-        Error::Tls(_) => termination("tls_error", None).into(),
-        Error::ConnectionClosed | Error::AlreadyClosed => {
-            termination("peer_disconnected", None).into()
-        }
-        Error::Protocol(
-            tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
-        ) => termination("connection_reset", None).into(),
-        _ => crate::Error::Config("gateway returned an invalid protocol frame".into()),
-    }
 }
 impl RequestRouter {
     pub(crate) fn configure(&self, config: Option<GatewayRequestConfig>) -> Result<()> {
@@ -527,17 +499,17 @@ impl Pump {
                 loop {
                     tokio::select! {
                         _ = tokio::time::sleep_until(heartbeat) => {
-                            if awaiting.is_some() { return Err(termination("heartbeat_timeout",None).into()); }
+                            if awaiting.is_some() { return Err(crate::GatewayError::HeartbeatTimeout.into()); }
                             send_frame(&mut socket, Message::Text("{\"op\":\"heartbeat\"}".into())).await?;
                             awaiting = Some(Instant::now());
                             heartbeat = Instant::now() + interval;
                         },
                         frame = socket.next() => {
-                            match frame.ok_or_else(disconnected)?.map_err(socket_error)? {
+                            match frame.ok_or_else(transport)?.map_err(transport_cause)? {
                                 Message::Close(frame) => return Err(close(frame.map(|f| u16::from(f.code)))),
                                 Message::Ping(payload) => send_frame(&mut socket, Message::Pong(payload)).await?,
                                 Message::Text(text) => {
-                                    let value: Value = serde_json::from_str(&text)?;
+                                    let value: Value = serde_json::from_str(&text).map_err(|_| protocol_failure())?;
                                     match value["op"].as_str() {
                                         Some("heartbeat_ack") => {
                                             if let Some(started) = awaiting.take() {
@@ -614,18 +586,13 @@ impl Pump {
             }.await;
             let final_cause = match &result {
                 Err(error) => {
-                    let reason = if error.status_code().is_some() {
-                        "peer_closed".to_owned()
-                    } else {
-                        error
-                            .to_remote()
-                            .details
-                            .get("reason")
-                            .and_then(Value::as_str)
-                            .unwrap_or("transport_failure")
-                            .to_owned()
-                    };
-                    termination(&reason, Some(error))
+                    let remote = error.to_remote();
+                    let reason = remote
+                        .details
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("transport_failure");
+                    termination(reason, Some(error))
                 }
                 Ok(()) => termination("request_channel_closed", None),
             };
@@ -721,7 +688,7 @@ impl Pump {
                 }
                 Ok(Some(Ok(_))) => continue,
                 Ok(Some(Err(error))) => return Err(error),
-                Ok(None) => return Err(disconnected()),
+                Ok(None) => return Err(transport()),
             }
         }
     }
@@ -732,8 +699,8 @@ async fn send_frame(
 ) -> Result<()> {
     timeout(Duration::from_secs(1), socket.send(frame))
         .await
-        .map_err(|_| Error::from(termination("send_timeout", None)))?
-        .map_err(socket_error)
+        .map_err(|_| crate::GatewayError::SendTimeout)?
+        .map_err(transport_cause)
 }
 fn response(value: &Value) -> Result<reqwest::Response> {
     let status = value["status"]

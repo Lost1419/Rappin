@@ -31,6 +31,13 @@
 
 - Add an opt-in parent-side continuation for a proven unfinished step of a durable event originally handled by a native or worker command. Claim one recovery attempt atomically before effects. Archive the original receipt and persist completion before normal polling checkpoint advancement.
 
+### SDK and CI hardening
+
+- Prune expired cooldown buckets during command use. Server-scoped cooldowns use one bucket per requester in DMs.
+- Cover every bundled OpenAPI operation with a redacted rate-limit route template and enforce that coverage with a spec-driven test.
+- Report WebSocket failures as `Error::Gateway` and carry the gateway close code separately from the HTTP status through request and worker diagnostics.
+- Pin GitHub Actions, grant read-only contents access and audit workspace and fuzz lockfiles weekly.
+
 ### Development cleanup
 
 - Require worker protocol 13. Remove older protocol negotiation, capability-switch builders and string-only IPC errors. Rebuild parent and workers together.

@@ -140,6 +140,8 @@ a monotonic sequence, logical request ID, individual attempt duration and the
 existing cumulative RequestObservation. Slow readers receive `RecvError::Lagged`;
 sequence gaps also reveal loss. Counters stay exact regardless of notification
 loss. Routes remain sanitized templates, never raw credentials or query strings.
+A test checks that every operation in the bundled OpenAPI specification matches
+its exact template. Unknown routes use `/:unknown`.
 The existing `subscribe_requests()` watch API remains **latest-value only**;
 do not count notifications from it to derive traffic totals.
 

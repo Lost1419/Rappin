@@ -78,6 +78,17 @@ impl RemoteError {
             None
         }
     }
+    /// Return a gateway close code carried across a worker or callback boundary.
+    ///
+    /// ```rust
+    /// use rappin::{Error, GatewayError};
+    /// let error = Error::from(GatewayError::Closed { code: Some(1012) }).to_remote();
+    /// assert_eq!(error.gateway_close_code(), Some(1012));
+    /// assert_eq!(error.status, None);
+    /// ```
+    pub fn gateway_close_code(&self) -> Option<u16> {
+        u16::try_from(self.details.get("close_code")?.as_u64()?).ok()
+    }
     /// Encode original classification/status/retry and extra structured fields.
     ///
     /// # Example
@@ -126,6 +137,9 @@ impl serde::Serialize for RemoteError {
 /// // A retry hint does not authorize replaying a handler or uncertain mutation.
 /// ```
 pub enum Error {
+    /// WebSocket gateway connection or protocol failure.
+    #[error(transparent)]
+    Gateway(#[from] GatewayError),
     #[error("conflicting event payload for event {event_id}", event_id = .conflict.event_id)]
     /// Conflicting payloads were delivered for the same event identity; original receipts remain retained.
     IngressConflict {
@@ -583,6 +597,7 @@ impl Error {
             Self::Wait(_) => "event_wait",
             Self::Validation { .. } => "validation",
             Self::Config(_) => "configuration",
+            Self::Gateway(_) => "gateway",
             Self::Unauthorized => "unauthorized",
             Self::Http(_) => "transport",
             Self::Json(_) => "json",
@@ -609,6 +624,17 @@ impl Error {
             "status": self.status_code(), "retry_after": self.retry_after().map(|d| d.as_secs_f64())});
         if let Some((classification, _)) = transport {
             value["transport_kind"] = classification.into();
+        }
+        if let Self::Gateway(error) = self {
+            value["reason"] = error.reason().into();
+            match error {
+                GatewayError::Closed { code } => value["close_code"] = serde_json::json!(code),
+                GatewayError::Io { kind } => value["io_kind"] = format!("{kind:?}").into(),
+                _ => {}
+            }
+            value["retry_safety"] = "read_only".into();
+            value["outcome"] = "read_failed".into();
+            return value;
         }
         if let Self::Validation { field, .. } = self {
             value["field"] = field.clone().into();
@@ -697,7 +723,31 @@ impl Error {
         }
     }
 
-    /// Checks if this error is an authorization failure (HTTP 401).
+    /// Return the WebSocket close code when the peer supplied one.
+    ///
+    /// ```rust
+    /// use rappin::{Error, GatewayError};
+    /// let error = Error::from(GatewayError::Closed { code: Some(4003) });
+    /// assert_eq!(error.gateway_close_code(), Some(4003));
+    /// assert_eq!(error.status_code(), None);
+    /// ```
+    pub fn gateway_close_code(&self) -> Option<u16> {
+        match self {
+            Self::Gateway(GatewayError::Closed { code }) => *code,
+            Self::Remote(error) => error.gateway_close_code(),
+            Self::IdentifiedInvocation { source, .. }
+            | Self::RetryWaitExceeded { source, .. }
+            | Self::FailureHandling { source, .. }
+            | Self::PartialWrite { source, .. } => source.gateway_close_code(),
+            Self::Invocation { source, .. } | Self::HandlerInterrupted { source, .. } => {
+                source.as_ref()?.gateway_close_code()
+            }
+            Self::EventProcessing { report } => report.primary()?.gateway_close_code(),
+            _ => None,
+        }
+    }
+
+    /// Checks for HTTP 401 or a gateway authentication rejection (close code 4004).
     /// # Example
     ///
     /// ```rust
@@ -705,7 +755,9 @@ impl Error {
     /// assert!(error.is_unauthorized());
     /// ```
     pub fn is_unauthorized(&self) -> bool {
-        matches!(self, Self::Unauthorized) || self.status_code() == Some(401)
+        matches!(self, Self::Unauthorized)
+            || self.status_code() == Some(401)
+            || self.gateway_close_code() == Some(4004)
     }
     /// Whether this is a direct typed command error or a structured remote command error.
     ///
@@ -826,4 +878,65 @@ pub(crate) fn platform_error(
         }
     }
     Error::Remote(remote)
+}
+
+/// Sanitized WebSocket gateway failure. HTTP handshake rejections remain HTTP errors.
+///
+/// ```rust
+/// use rappin::{Error, GatewayError};
+/// let error = Error::from(GatewayError::Closed { code: Some(1012) });
+/// assert_eq!(error.to_json()["close_code"], 1012);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum GatewayError {
+    /// The gateway connection ended without a close frame.
+    #[error("gateway disconnected")]
+    Disconnected,
+    /// The peer reset the connection without completing a WebSocket close handshake.
+    #[error("gateway connection reset")]
+    ConnectionReset,
+    /// The gateway socket reported an I/O failure.
+    #[error("gateway socket I/O failed ({kind:?})")]
+    Io {
+        /// Credential-safe I/O classification.
+        kind: std::io::ErrorKind,
+    },
+    /// The gateway TLS connection failed.
+    #[error("gateway TLS connection failed")]
+    Tls,
+    /// The gateway sent a WebSocket close frame.
+    #[error("gateway closed the WebSocket (code: {code:?})")]
+    Closed {
+        /// Code from the close frame, when supplied.
+        code: Option<u16>,
+    },
+    /// A gateway connection or handshake timed out.
+    #[error("gateway timed out")]
+    Timeout,
+    /// The gateway missed the heartbeat response deadline.
+    #[error("gateway heartbeat timed out")]
+    HeartbeatTimeout,
+    /// Sending a frame exceeded the gateway sink deadline.
+    #[error("gateway frame send timed out")]
+    SendTimeout,
+    /// The gateway returned an invalid protocol frame.
+    #[error("gateway returned an invalid protocol frame")]
+    InvalidFrame,
+}
+
+impl GatewayError {
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::Disconnected => "peer_disconnected",
+            Self::ConnectionReset => "connection_reset",
+            Self::Io { .. } => "io_error",
+            Self::Tls => "tls_error",
+            Self::Closed { .. } => "peer_closed",
+            Self::Timeout => "timeout",
+            Self::HeartbeatTimeout => "heartbeat_timeout",
+            Self::SendTimeout => "send_timeout",
+            Self::InvalidFrame => "invalid_frame",
+        }
+    }
 }

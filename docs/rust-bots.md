@@ -90,6 +90,14 @@ let spec = CommandSpec::<()>::new("maintain", "Owner maintenance")
     }));
 ```
 
+### Cooldown scope and lifetime
+
+Command cooldowns support per-user, per-channel, per-server and global scope.
+A server-scoped cooldown uses the original requester's ID in DMs, independent of
+server buckets. For custom resets of a server-scoped DM bucket, pass
+`dm:{requester_uuid}` to `reset_key`. Contexts without a requester cannot use
+that fallback. Expired entries are pruned on subsequent use of the same cooldown.
+
 ## Waiters and component collectors
 
 Register **before** posting a prompt. `subscribe()` is synchronous; a builder's

@@ -512,10 +512,18 @@ impl CommandContext {
                     )
                 })?
                 .to_string(),
-            crate::CooldownType::Server => self
-                .server_id()
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| "dm".into()),
+            crate::CooldownType::Server => match self.server_id() {
+                Some(server) => server.to_string(),
+                None => crate::cooldown::server_key(
+                    None,
+                    self.author_id().ok_or_else(|| {
+                        crate::Error::validation(
+                            "command.author",
+                            "direct-message cooldown requires the original requester",
+                        )
+                    })?,
+                ),
+            },
             crate::CooldownType::Global => "global".into(),
         };
         Ok(cooldown.check_key(&key).await)

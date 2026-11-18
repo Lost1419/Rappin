@@ -54,7 +54,7 @@ ledger. A cancelled handler alone gives no authority to rerun it.
 
 With feature `gateway`, `GatewayRequestStatus::last_disconnect` retains a structured
 connection cause. Request error JSON keeps `kind: gateway_request`, `submitted`,
-`outcome`, `retry_safety`, `reason`, HTTP/close status and retry hints where available,
+`outcome`, `retry_safety`, `reason`, HTTP `status`, WebSocket `close_code` and retry hints where available,
 plus a structured `source`. Reasons distinguish request/response/queue deadlines,
 local `pipeline_shutdown`, `drain_timeout`, `run_cancelled`, `gateway_dropped`, peer
 closure, I/O/TLS/reset, send failure and heartbeat timeout. A deadline is not a

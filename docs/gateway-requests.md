@@ -52,6 +52,13 @@ when application handlers await requests. Socket writes are bounded to one secon
 Do not enable dependency wire tracing: the gateway refuses credential submission
 when those trace targets are active.
 
+A direct gateway transport failure is `Error::Gateway`. Use
+`Error::gateway_close_code()` or `RemoteError::gateway_close_code()` for the
+WebSocket code on the error or disconnect snapshot. HTTP handshake rejection
+and gateway API response status remain HTTP status values. The SDK omits
+peer-supplied close text from diagnostics. An interrupted submitted request
+still carries the `gateway_request` outcome and replay guidance.
+
 ## Workers and example
 
 Workers use protocol 13 to send API requests through the parent's selected transport.

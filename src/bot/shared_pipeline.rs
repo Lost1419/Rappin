@@ -311,7 +311,7 @@ impl Bot {
                             }
                         },
                         Err(error) => {
-                            let wait = match error.status_code() {
+                            let wait = match error.gateway_close_code() {
                                 Some(4003) => Some(300),
                                 Some(4008 | 4029) => Some(60),
                                 _ if crate::availability::retryable_read(&error) => {
@@ -326,7 +326,7 @@ impl Bot {
                             }
                             bot.inner.telemetry.update(|status| {
                                 status.active = Some(crate::EventTransport::Polling);
-                                status.fallback = Some(if error.status_code() == Some(4003) {
+                                status.fallback = Some(if error.gateway_close_code() == Some(4003) {
                                     crate::FallbackReason::AccessDenied
                                 } else if error.to_json()["reason"] == "event_backpressure" {crate::FallbackReason::Backpressure} else { crate::FallbackReason::Unavailable });
                             });

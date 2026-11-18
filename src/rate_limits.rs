@@ -15,6 +15,13 @@ struct State {
 }
 // Only literal API templates enter diagnostics. Even IDs equal to route keywords stay hidden.
 const ROUTES: &[&str] = &[
+    "/categories/:id/overrides",
+    "/categories/:id/overrides/:id",
+    "/channels/:id/messages/:id/emojis",
+    "/channels/:id/overrides",
+    "/channels/:id/overrides/:id",
+    "/resolve/:id",
+    "/servers/:id/members/:id/permissions",
     "/version",
     "/changelog",
     "/webhooks",
@@ -197,6 +204,37 @@ impl RateLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn every_openapi_operation_has_its_exact_redacted_route() {
+        let specification: serde_json::Value =
+            serde_json::from_str(include_str!("../docs/openapi.json")).unwrap();
+        let paths = specification["paths"].as_object().unwrap();
+        for (path, operations) in paths {
+            let segments = path.trim_start_matches('/').split('/');
+            let mut expected = String::new();
+            let mut example = String::new();
+            for segment in segments {
+                expected.push('/');
+                example.push('/');
+                if segment.starts_with('{') && segment.ends_with('}') {
+                    expected.push_str(":id");
+                    example.push_str("private-id");
+                } else {
+                    expected.push_str(segment);
+                    example.push_str(segment);
+                }
+            }
+            for method in operations.as_object().unwrap().keys() {
+                if matches!(
+                    method.as_str(),
+                    "get" | "post" | "put" | "patch" | "delete" | "head" | "options" | "trace"
+                ) {
+                    assert_eq!(matching_route(&example), expected, "{method} {path}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn route_classification_preserves_bucket_scope_and_redaction() {
         for template in ROUTES {
