@@ -232,8 +232,27 @@ jobs:
           toolchain: stable
           components: clippy, rustfmt
 
+      - name: Configure LLD for Windows tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $llvm = (Get-Command lld-link.exe -ErrorAction SilentlyContinue).Source
+          if (!$llvm) { $llvm = Join-Path $env:ProgramFiles 'LLVM/bin/lld-link.exe' }
+          if (!(Test-Path $llvm)) { throw 'LLVM lld-link.exe unavailable' }
+          $linker = $llvm.Replace('\', '/')
+          # Worker builds inherit Cargo home through their filtered environment.
+          @"
+
+          [target.x86_64-pc-windows-msvc]
+          linker = "$linker"
+          rustdocflags = ["-Clinker=$linker"]
+          "@ | Add-Content -Path (Join-Path $env:CARGO_HOME 'config.toml')
+          & $llvm --version
+
       - name: Cache dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: ${{ runner.os == 'Windows' && 'msvc-lld' || '' }}
 
       - name: Check format
         run: cargo fmt --all --check
