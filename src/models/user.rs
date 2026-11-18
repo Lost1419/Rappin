@@ -6,7 +6,7 @@
 //! let patch = rappin::UpdateBotProfile::new().display_name("Helper").bio("Server assistant");
 //! assert_eq!(patch.display_name.as_deref(), Some("Helper"));
 //! ```
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -91,7 +91,8 @@ pub struct UserDetail {
     pub banner_path: Option<String>,
     /// Account creation timestamp.
     #[serde(default)]
-    pub created_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub created_at: Option<Timestamp>,
     /// User biography.
     #[serde(default)]
     pub bio: Option<String>,
@@ -170,7 +171,8 @@ pub struct BotProfile {
     pub banner_url: Option<String>,
     #[serde(default)]
     /// UTC creation time of the bot account, when supplied.
-    pub created_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub created_at: Option<Timestamp>,
     #[serde(default)]
     /// Bot owner and publication metadata, when expanded.
     pub bot: Option<BotMetadata>,

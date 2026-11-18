@@ -307,7 +307,7 @@ fn validate_at(
             Some("uuid") if uuid::Uuid::parse_str(text).is_err() => {
                 return Err(invalid("invalid UUID"))
             }
-            Some("date-time") if chrono::DateTime::parse_from_rfc3339(text).is_err() => {
+            Some("date-time") if crate::parse_timestamp(text).is_err() => {
                 return Err(invalid("invalid RFC3339 timestamp"))
             }
             _ => (),

@@ -173,11 +173,14 @@ pub use diagnostics::{
     EventTransport, FallbackReason, RequestEvent, RequestMetrics, RequestObservation,
     TransportMode, TransportStatus,
 };
+mod timestamp;
 pub use error::{Error, GatewayError, RemoteError, Result};
 pub use interactions::{InteractionState, ResponsePhase};
+pub use jiff::Timestamp;
 pub use models::*;
 pub use oauth2::{OAuth2Client, OAuth2Token, OAuth2User, Pkce};
 pub use paginator::{ConfirmDialog, Paginator};
+pub use timestamp::parse_timestamp;
 pub use utils::{
     attachment_url, avatar_url, banner_url, icon_url, DEFAULT_API_BASE, DEFAULT_FILES_BASE,
     DEFAULT_SITE_BASE, IS_COMPONENTS_V2, LEGACY_API_BASE,

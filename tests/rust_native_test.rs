@@ -510,7 +510,7 @@ async fn auto_ack_defers_slow_handlers_but_skips_an_already_answered_interaction
             .expect("valid bot configuration");
         let mut event = json!({"id":1,"type":"interaction","data":{"id":"click","token":"callback-secret","custom_id":"test"}});
         if aged {
-            event["created_at"] = json!(chrono::Utc::now() - chrono::Duration::seconds(2));
+            event["created_at"] = json!(jiff::Timestamp::now() - std::time::Duration::from_secs(2));
         }
         bot.process_event(serde_json::from_value(event).unwrap())
             .await

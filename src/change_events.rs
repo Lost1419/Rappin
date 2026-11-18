@@ -40,7 +40,8 @@ pub struct MessageUpdate {
     /// Edited content.
     pub content: String,
     /// Server edit time, when available.
-    pub edited_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, with = "crate::timestamp::optional")]
+    pub edited_at: Option<jiff::Timestamp>,
     /// Whether the author is a bot.
     pub author_bot: bool,
 }

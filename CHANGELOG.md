@@ -31,6 +31,10 @@
 
 - Add an opt-in parent-side continuation for a proven unfinished step of a durable event originally handled by a native or worker command. Claim one recovery attempt atomically before effects. Archive the original receipt and persist completion before normal polling checkpoint advancement.
 
+### Timestamp migration
+
+- Use Jiff timestamps in models, callbacks, history cursors and recovery receipts. Preserve nanosecond precision, canonical UTC JSON and history query encoding.
+
 ### SDK and CI hardening
 
 - Prune expired cooldown buckets during command use. Server-scoped cooldowns use one bucket per requester in DMs.
@@ -322,7 +326,7 @@ See [transport and cache configuration](docs/transport-and-cache.md) for custom 
 ### Migration
 
 - Requires Rust 1.88 or newer.
-- `Client::get_messages` uses `Option<DateTime<Utc>>` for `before` and `after`, replacing UUID cursors.
+- `Client::get_messages` uses UTC timestamps for `before` and `after`, replacing UUID cursors.
 - Interaction content, embeds, and components use `Option<Option<T>>` to distinguish omission, replacement, and explicit null.
 - `BotProfile` has additional fields; update struct literals accordingly.
 - OAuth identity lookup returns `OAuth2User` and supports only the `identify` scope.

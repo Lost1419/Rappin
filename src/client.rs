@@ -2385,8 +2385,8 @@ impl Client {
         &self,
         channel_id: impl Into<crate::ChannelId> + Send,
         limit: Option<u32>,
-        before: Option<chrono::DateTime<chrono::Utc>>,
-        after: Option<chrono::DateTime<chrono::Utc>>,
+        before: Option<jiff::Timestamp>,
+        after: Option<jiff::Timestamp>,
     ) -> Result<MessagesResponse> {
         let channel_id: crate::ChannelId = channel_id.into();
         let channel_id = Uuid::from(channel_id);

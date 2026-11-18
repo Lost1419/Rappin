@@ -1,5 +1,5 @@
 //! Embed cards, fields and response image metadata with outbound validation.
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// Color representation for an Embed (either a 24-bit integer 0x000000 - 0xFFFFFF or hex string).
@@ -297,7 +297,8 @@ pub struct Embed {
     pub image: Option<EmbedMedia>,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Optional UTC timestamp attached to the card.
-    pub timestamp: Option<DateTime<Utc>>,
+    #[serde(default, with = "crate::timestamp::optional")]
+    pub timestamp: Option<Timestamp>,
 }
 
 impl Embed {
@@ -452,10 +453,10 @@ impl Embed {
     ///
     /// ```rust
     /// use rappin::Embed;
-    /// let card = Embed::new().timestamp(chrono::Utc::now());
+    /// let card = Embed::new().timestamp(jiff::Timestamp::now());
     /// assert_eq!(card.timestamp.is_some(), true);
     /// ```
-    pub fn timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
+    pub fn timestamp(mut self, timestamp: Timestamp) -> Self {
         self.timestamp = Some(timestamp);
         self
     }

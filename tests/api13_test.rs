@@ -17,7 +17,7 @@ fn body() -> CreateMessage {
     CreateMessage::new("Choose").component(menu().row())
 }
 fn interaction(kind: &str) -> Event {
-    let mut data = json!({"id":Uuid::new_v4(),"token":"private_interaction_token","channel_id":Uuid::nil(),"server_id":Uuid::nil(),"user_id":Uuid::nil(),"custom_id":"choice","type":kind,"expires_at":chrono::Utc::now()+chrono::Duration::minutes(15)});
+    let mut data = json!({"id":Uuid::new_v4(),"token":"private_interaction_token","channel_id":Uuid::nil(),"server_id":Uuid::nil(),"user_id":Uuid::nil(),"custom_id":"choice","type":kind,"expires_at":jiff::Timestamp::now()+std::time::Duration::from_secs(900)});
     if kind == "select" {
         data["values"] = json!(["rust"]);
     }
@@ -35,7 +35,7 @@ fn interaction(kind: &str) -> Event {
     .unwrap()
 }
 fn message() -> Value {
-    json!({"id":Uuid::nil(),"channel_id":Uuid::nil(),"author_id":Uuid::nil(),"created_at":chrono::Utc::now(),"content":"Choose","components":body().components.unwrap(),"future_metadata":{"a":1}})
+    json!({"id":Uuid::nil(),"channel_id":Uuid::nil(),"author_id":Uuid::nil(),"created_at":jiff::Timestamp::now(),"content":"Choose","components":body().components.unwrap(),"future_metadata":{"a":1}})
 }
 #[test]
 fn select_bounds_rows_ids_and_structured_emojis_validate_before_io() {
@@ -490,7 +490,7 @@ async fn command_publication_mode_is_opt_in_and_modal_deadlines_are_authoritativ
     let mut event = UiInteraction::from_event(&interaction("button"))
         .unwrap()
         .interaction;
-    event.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    event.expires_at = Some(jiff::Timestamp::now() - std::time::Duration::from_secs(1));
     let error = client
         .show_modal(
             &event,

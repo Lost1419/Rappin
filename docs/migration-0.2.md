@@ -67,6 +67,27 @@ HTTP status, including an HTTP handshake rejection. Gateway authentication
 rejections still satisfy `is_unauthorized()`. Server cooldowns now isolate
 DM requesters. Reset a server-scoped DM bucket with `dm:{requester_uuid}`.
 
+## Migrate timestamps and history cursors
+
+Use `rappin::Timestamp` (Jiff's UTC instant type) for timestamp fields and history
+filters. Use `Timestamp::now()` for the current instant and
+`rappin::parse_timestamp` for an RFC 3339 timestamp from user input.
+
+```rust
+use rappin::{parse_timestamp, Embed, Result, Timestamp};
+
+fn dated_embed() -> Result<Embed> {
+    let at: Timestamp = parse_timestamp("2026-11-18T12:34:56.123456789Z")?;
+    Ok(Embed::new().timestamp(at))
+}
+```
+
+Models preserve up to nine fractional digits with the existing UTC JSON encoding.
+History cursor parameters keep their UTC offset and fractional precision. Durable
+event fingerprints and receipts keep their encoding for supported timestamps.
+Timestamp inputs with leap seconds or more than nine fractional digits return an
+error, which protects against silently changing the instant.
+
 ## Move advanced configuration
 
 `BotBuilder::configure` exposes typed transport, execution, persistence and cache

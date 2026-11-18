@@ -24,9 +24,11 @@ pub struct Thread {
     /// Author, when reported.
     pub created_by: Option<Uuid>,
     /// Creation timestamp.
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    #[serde(with = "crate::timestamp")]
+    pub created_at: jiff::Timestamp,
     /// Most recent message timestamp, when reported.
-    pub last_message_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, with = "crate::timestamp::optional")]
+    pub last_message_at: Option<jiff::Timestamp>,
     /// Archive status, when reported.
     pub archived: Option<bool>,
     /// Lock status.

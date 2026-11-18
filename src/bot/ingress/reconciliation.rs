@@ -1,7 +1,7 @@
 //! Explicit, fingerprint-bound reconciliation of a completed legacy envelope.
 use super::*;
 use crate::{Client, OperationId};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_REPORTS: usize = 1024;
@@ -157,19 +157,24 @@ pub struct TimestampReconciliation {
     /// Canonical digest of fresh polling evidence; absent only for explicit retained-execution coverage.
     pub polling_fingerprint: String,
     /// Outer event timestamp observed in fresh polling evidence, when available.
-    pub polling_created_at: DateTime<Utc>,
+    #[serde(with = "crate::timestamp")]
+    pub polling_created_at: Timestamp,
     /// Fresh polling watermark observed during preparation; not a handler-completion claim.
     pub polling_watermark: u64,
     /// Durable polling checkpoint captured during preparation for compare-and-swap validation.
     pub prepared_checkpoint: u64,
     /// UTC time of read-only preparation.
-    pub prepared_at: DateTime<Utc>,
+    #[serde(with = "crate::timestamp")]
+    pub prepared_at: Timestamp,
     /// UTC time of explicit consumer approval, when approved.
-    pub approved_at: DateTime<Utc>,
+    #[serde(with = "crate::timestamp")]
+    pub approved_at: Timestamp,
     /// UTC expiry of this preparation; approval after expiry is rejected.
-    pub approval_deadline: DateTime<Utc>,
+    #[serde(with = "crate::timestamp")]
+    pub approval_deadline: Timestamp,
     /// UTC time matching normal polling confirmed the approved exception.
-    pub confirmed_at: Option<DateTime<Utc>>,
+    #[serde(default, with = "crate::timestamp::optional")]
+    pub confirmed_at: Option<Timestamp>,
     /// Prepared, Approved or Confirmed audit state.
     pub state: TimestampReconciliationState,
     /// Digest of the full retained receipt (including source and error state).
@@ -232,13 +237,13 @@ impl PreparedTimestampReconciliation {
     /// ```
     pub async fn approve(mut self, approval_id: OperationId) -> Result<TimestampReconciliation> {
         if tokio::time::Instant::now() >= self.expires
-            || Utc::now() > self.decision.approval_deadline
+            || Timestamp::now() > self.decision.approval_deadline
         {
             return Err(rejected("expired_preparation"));
         }
         self.decision.state = TimestampReconciliationState::Approved;
         self.decision.approval_id = approval_id;
-        self.decision.approved_at = Utc::now();
+        self.decision.approved_at = Timestamp::now();
         let snapshot = bounded(self.timeout, "load", self.store.load(self.decision.bot_id)).await?;
         self.decision.validate_write(&snapshot)?;
         bounded(
@@ -350,7 +355,7 @@ async fn prepare_within_budget(
     if fingerprint(&without_timestamp, MAX_BYTES)? != request.retained_fingerprint {
         return Err(rejected("non_metadata_difference"));
     }
-    let now = Utc::now();
+    let now = Timestamp::now();
     let mut decision = TimestampReconciliation {
         decision_id: Uuid::new_v4(),
         approval_id: OperationId::new("unapproved")?,
@@ -366,8 +371,8 @@ async fn prepare_within_budget(
         prepared_at: now,
         approved_at: now,
         approval_deadline: now
-            + chrono::Duration::from_std(options.approval_ttl)
-                .map_err(|_| rejected("invalid_ttl"))?,
+            .checked_add(options.approval_ttl)
+            .map_err(|_| rejected("invalid_ttl"))?,
         confirmed_at: None,
         state: TimestampReconciliationState::Approved,
         receipt_fingerprint: digest(record)?,
@@ -419,7 +424,7 @@ impl TimestampReconciliation {
             (TimestampReconciliationState::Approved, None) => {
                 if current.polling_checkpoint != Some(self.prepared_checkpoint)
                     || self.confirmed_at.is_some()
-                    || Utc::now() > self.approval_deadline
+                    || Timestamp::now() > self.approval_deadline
                     || digest(&self.conflicts)?
                         != digest(
                             &current
@@ -467,7 +472,7 @@ impl TimestampReconciliation {
             || self.approved_at < self.prepared_at
             || self.approved_at > self.approval_deadline
             || self.approval_deadline <= self.prepared_at
-            || self.approval_deadline - self.prepared_at > chrono::Duration::minutes(5)
+            || self.approval_deadline - self.prepared_at > jiff::SignedDuration::from_secs(300)
             || (self.state == TimestampReconciliationState::Confirmed)
                 != self.confirmed_at.is_some()
             || self
@@ -675,7 +680,7 @@ impl EventIngress {
             return Err(report.to_error());
         }
         decision.state = TimestampReconciliationState::Confirmed;
-        decision.confirmed_at = Some(Utc::now());
+        decision.confirmed_at = Some(Timestamp::now());
         let mut guard = ConflictGuard {
             ingress: self.clone(),
             armed: true,

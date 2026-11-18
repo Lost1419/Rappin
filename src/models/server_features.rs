@@ -5,7 +5,7 @@
 //! assert_eq!(rule.deny, ["send_messages"]);
 //! ```
 //! Test-server APIs documented in the Yapin developer guide.
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -196,13 +196,15 @@ pub struct Invite {
     pub max_uses: u64,
     #[serde(default)]
     /// UTC expiration time, when supplied.
-    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub expires_at: Option<Timestamp>,
     #[serde(default)]
     /// Whether the API identifies this as a vanity invite.
     pub vanity: bool,
     #[serde(default)]
     /// UTC creation time, when supplied.
-    pub created_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub created_at: Option<Timestamp>,
 }
 
 /// Scheduled server event. Status and repeat remain strings so new values decode.
@@ -222,10 +224,12 @@ pub struct ServerEvent {
     /// Optional event details.
     pub description: Option<String>,
     /// UTC event start time.
-    pub starts_at: DateTime<Utc>,
+    #[serde(with = "crate::timestamp")]
+    pub starts_at: Timestamp,
     #[serde(default)]
     /// Optional UTC event end time.
-    pub ends_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub ends_at: Option<Timestamp>,
     #[serde(default)]
     /// Associated voice channel, if the event uses one.
     pub channel_id: Option<Uuid>,
@@ -267,7 +271,7 @@ pub enum EventRepeat {
 /// # Example
 ///
 /// ```rust
-/// let mut event = rappin::CreateServerEvent::new("Game night", chrono::Utc::now());
+/// let mut event = rappin::CreateServerEvent::new("Game night", jiff::Timestamp::now());
 /// event.location = Some("https://example.com/game".into());
 /// event.validate().unwrap();
 /// ```
@@ -275,10 +279,12 @@ pub struct CreateServerEvent {
     /// Nonempty event heading.
     pub title: String,
     /// UTC event start time.
-    pub starts_at: DateTime<Utc>,
+    #[serde(with = "crate::timestamp")]
+    pub starts_at: Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Optional end time; validation requires it to be later than starts_at.
-    pub ends_at: Option<DateTime<Utc>>,
+    #[serde(default, with = "crate::timestamp::optional")]
+    pub ends_at: Option<Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Voice channel for the event; mutually exclusive with a nonempty external location.
     pub channel_id: Option<Uuid>,
@@ -304,11 +310,11 @@ impl CreateServerEvent {
     /// # Example
     ///
     /// ```rust
-    /// let mut event = rappin::CreateServerEvent::new("Game night", chrono::Utc::now());
+    /// let mut event = rappin::CreateServerEvent::new("Game night", jiff::Timestamp::now());
     /// event.location = Some("https://example.com/game".into());
     /// event.validate().unwrap();
     /// ```
-    pub fn new(title: impl Into<String>, starts_at: DateTime<Utc>) -> Self {
+    pub fn new(title: impl Into<String>, starts_at: Timestamp) -> Self {
         Self {
             title: title.into(),
             starts_at,
@@ -326,10 +332,10 @@ impl CreateServerEvent {
     /// # Example
     ///
     /// ```rust
-    /// let mut event = rappin::CreateServerEvent::new("Game night", chrono::Utc::now());
+    /// let mut event = rappin::CreateServerEvent::new("Game night", jiff::Timestamp::now());
     /// event.location = Some("https://example.com/game".into());
     /// event.validate().unwrap();
-    /// event.ends_at = Some(event.starts_at - chrono::Duration::seconds(1));
+    /// event.ends_at = Some(event.starts_at - std::time::Duration::from_secs(1));
     /// assert!(event.validate().is_err());
     /// ```
     pub fn validate(&self) -> crate::Result<()> {

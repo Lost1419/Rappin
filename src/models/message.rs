@@ -6,7 +6,7 @@
 //! let patch = rappin::EditMessage::new().clear_embeds();
 //! assert_eq!(serde_json::to_value(patch).unwrap(), serde_json::json!({"embeds":null}));
 //! ```
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -46,10 +46,12 @@ pub struct Message {
     #[serde(default)]
     pub components: Option<Vec<Component>>,
     /// Message post timestamp.
-    pub created_at: DateTime<Utc>,
+    #[serde(with = "crate::timestamp")]
+    pub created_at: Timestamp,
     /// Last edit timestamp, if edited.
     #[serde(default)]
-    pub edited_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub edited_at: Option<Timestamp>,
     /// Path to uploaded file/attachment on CDN.
     #[serde(default)]
     pub attachment_path: Option<String>,
@@ -64,7 +66,8 @@ pub struct Message {
     pub reply_to_id: Option<Uuid>,
     /// Timestamp when message was pinned, if pinned.
     #[serde(default)]
-    pub pinned_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub pinned_at: Option<Timestamp>,
     /// Nonce acknowledged by the platform when this message was sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
@@ -93,7 +96,7 @@ impl Message {
     /// ```rust
     /// let mut message = rappin::Message::default();
     /// assert!(!message.is_pinned());
-    /// message.pinned_at = Some(chrono::Utc::now());
+    /// message.pinned_at = Some(jiff::Timestamp::now());
     /// assert!(message.is_pinned());
     /// ```
     pub fn is_pinned(&self) -> bool {
@@ -461,7 +464,8 @@ pub struct Reaction {
     /// Reaction emoji as returned by the API.
     pub emoji: String,
     /// UTC time when the reaction was added.
-    pub created_at: DateTime<Utc>,
+    #[serde(with = "crate::timestamp")]
+    pub created_at: Timestamp,
 }
 
 /// Request payload for bulk deleting messages.

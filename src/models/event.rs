@@ -7,7 +7,7 @@
 //! assert_eq!(event.id, 10);
 //! assert!(matches!(event.parse_data().unwrap(), rappin::EventData::Test(_)));
 //! ```
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -35,7 +35,8 @@ pub struct Event {
     pub data: serde_json::Value,
     /// Event timestamp.
     #[serde(default)]
-    pub created_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub created_at: Option<Timestamp>,
 }
 
 impl Event {
@@ -382,10 +383,12 @@ pub struct MessageEvent {
     pub components: Option<Vec<Component>>,
     #[serde(default)]
     /// UTC message creation time, when supplied.
-    pub created_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub created_at: Option<Timestamp>,
     #[serde(default)]
     /// UTC last-edit time, when supplied.
-    pub edited_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub edited_at: Option<Timestamp>,
     #[serde(default)]
     /// Legacy stored attachment path, when supplied.
     pub attachment_path: Option<String>,
@@ -394,7 +397,8 @@ pub struct MessageEvent {
     pub reply_to_id: Option<Uuid>,
     #[serde(default)]
     /// UTC pin time, when supplied.
-    pub pinned_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub pinned_at: Option<Timestamp>,
     /// Command name if this message invoked a slash command.
     #[serde(default)]
     pub command: Option<String>,
@@ -446,10 +450,12 @@ pub struct InteractionEvent {
     pub reply_id: Option<Uuid>,
     #[serde(default)]
     /// UTC interaction creation time, when supplied.
-    pub created_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub created_at: Option<Timestamp>,
     /// Server-issued expiration; authoritative when present.
     #[serde(default)]
-    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub expires_at: Option<Timestamp>,
     #[serde(rename = "type", default)]
     /// Platform interaction type such as button, select, command or modal_submit.
     pub kind: Option<String>,
@@ -476,7 +482,8 @@ pub struct MemberJoinEvent {
     pub member_count: Option<u64>,
     #[serde(default)]
     /// UTC join time, when supplied.
-    pub joined_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub joined_at: Option<Timestamp>,
     #[serde(default)]
     /// Invite attribution visible only when the platform supplies it with the required access.
     pub invite_code: Option<String>,
@@ -522,7 +529,8 @@ pub struct MemberLeaveEvent {
     pub username: Option<String>,
     #[serde(default)]
     /// Prior membership join time, when supplied; this field is not a leave timestamp.
-    pub joined_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub joined_at: Option<Timestamp>,
 }
 
 /// Data payload for `reaction_add` and `reaction_remove` events.

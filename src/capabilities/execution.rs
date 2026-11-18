@@ -539,7 +539,7 @@ impl ValidatedOperation {
                     } else {
                         page.messages.iter().map(|m| m.created_at).min()
                     }
-                    .map(|t| t.to_rfc3339());
+                    .map(crate::timestamp::query);
                     for message in page.messages {
                         if seen.insert(message.id) {
                             all.push(message);

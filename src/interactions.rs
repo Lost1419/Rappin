@@ -127,11 +127,11 @@ impl crate::Client {
     /// }
     /// ```
     pub async fn track_interaction(&self, event: &InteractionEvent) -> Result<()> {
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         let deadline = event.expires_at.or_else(|| {
             event
                 .created_at
-                .and_then(|created| created.checked_add_signed(chrono::Duration::seconds(900)))
+                .and_then(|created| created.checked_add(Duration::from_secs(900)).ok())
         });
         // Preserve no-op tracking for legacy partial button events with no
         // server deadline. New kinds need kind/source tracking even without one.
@@ -154,8 +154,7 @@ impl crate::Client {
         tracked.has_message |= event.message_id.is_some() || event.reply_id.is_some();
         tracked.ephemeral_target |= event.reply_id.is_some();
         if let Some(deadline) = deadline {
-            let remaining = (deadline - now)
-                .to_std()
+            let remaining = Duration::try_from(deadline - now)
                 .unwrap_or(Duration::ZERO)
                 .min(Duration::from_secs(900));
             let expires = Instant::now() + remaining;
@@ -207,16 +206,16 @@ impl crate::Client {
             let age = event
                 .created_at
                 .map(|time| {
-                    (chrono::Utc::now() - time)
-                        .to_std()
-                        .unwrap_or(Duration::ZERO)
+                    Duration::try_from(jiff::Timestamp::now() - time).unwrap_or(Duration::ZERO)
                 })
                 .unwrap_or(Duration::ZERO);
             let delay = if event.kind.as_deref() == Some("command") {
                 // Leave time to submit the callback before the command deadline.
                 let deadline = event.expires_at.map_or_else(
                     || Duration::from_secs(15).saturating_sub(age),
-                    |expires| (expires - chrono::Utc::now()).to_std().unwrap_or_default(),
+                    |expires| {
+                        Duration::try_from(expires - jiff::Timestamp::now()).unwrap_or_default()
+                    },
                 );
                 after
                     .saturating_sub(age)

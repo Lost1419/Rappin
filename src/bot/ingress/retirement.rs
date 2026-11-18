@@ -2,7 +2,7 @@
 use super::reconciliation::{bounded_for, digest, fingerprint, valid_hash as hash};
 use super::*;
 use crate::{Client, OperationId};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 /// What the consumer attests. The SDK does not verify remote mutation outcomes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,19 +196,24 @@ pub struct EventRetirement {
     /// Immutable Started or Failed stage being retired, not rewritten as successful.
     pub original_stage: ReceiptStage,
     /// Outer event timestamp observed in fresh polling evidence, when available.
-    pub polling_created_at: Option<DateTime<Utc>>,
+    #[serde(default, with = "crate::timestamp::optional")]
+    pub polling_created_at: Option<Timestamp>,
     /// Fresh polling watermark observed during preparation; not a handler-completion claim.
     pub polling_watermark: u64,
     /// Durable polling checkpoint captured during preparation for compare-and-swap validation.
     pub prepared_checkpoint: u64,
     /// UTC time of read-only preparation.
-    pub prepared_at: DateTime<Utc>,
+    #[serde(with = "crate::timestamp")]
+    pub prepared_at: Timestamp,
     /// UTC expiry of this preparation; approval after expiry is rejected.
-    pub approval_deadline: DateTime<Utc>,
+    #[serde(with = "crate::timestamp")]
+    pub approval_deadline: Timestamp,
     /// UTC time of explicit consumer approval, when approved.
-    pub approved_at: Option<DateTime<Utc>>,
+    #[serde(default, with = "crate::timestamp::optional")]
+    pub approved_at: Option<Timestamp>,
     /// UTC time normal polling confirmed the required evidence or coverage.
-    pub polling_confirmed_at: Option<DateTime<Utc>>,
+    #[serde(default, with = "crate::timestamp::optional")]
+    pub polling_confirmed_at: Option<Timestamp>,
     /// Normal polling coverage used to confirm retirement, when available.
     pub confirmation_watermark: Option<u64>,
     /// Whether confirmation polling returned the target itself, rather than coverage alone.
@@ -282,7 +287,7 @@ impl PreparedEventRetirement {
         evidence: OperationId,
     ) -> Result<EventRetirement> {
         if tokio::time::Instant::now() >= self.expires
-            || Utc::now() > self.decision.approval_deadline
+            || Timestamp::now() > self.decision.approval_deadline
         {
             return Err(reject("expired_preparation"));
         }
@@ -292,7 +297,7 @@ impl PreparedEventRetirement {
             return Err(reject("unknown_assessment_required"));
         }
         self.decision.state = EventRetirementState::Approved;
-        self.decision.approved_at = Some(Utc::now());
+        self.decision.approved_at = Some(Timestamp::now());
         self.decision.approval_reference = Some(reference);
         self.decision.assessment = Some(assessment);
         self.decision.evidence_reference = Some(evidence);
@@ -442,7 +447,7 @@ async fn prepare(
     if response.last < request.event_id {
         return Err(reject("authoritative_coverage_unavailable"));
     }
-    let now = Utc::now();
+    let now = Timestamp::now();
     let decision = EventRetirement {
         decision_id: Uuid::new_v4(),
         bot_id: request.bot_id,
@@ -464,8 +469,8 @@ async fn prepare(
             .ok_or_else(|| reject("checkpoint_missing"))?,
         prepared_at: now,
         approval_deadline: now
-            + chrono::Duration::from_std(options.approval_ttl)
-                .map_err(|_| reject("invalid_ttl"))?,
+            .checked_add(options.approval_ttl)
+            .map_err(|_| reject("invalid_ttl"))?,
         approved_at: None,
         polling_confirmed_at: None,
         confirmation_watermark: None,
@@ -515,7 +520,7 @@ impl EventRetirement {
         match (self.state, prior.first()) {
             (EventRetirementState::Approved, None) => {
                 if current.polling_checkpoint != Some(self.prepared_checkpoint)
-                    || Utc::now() > self.approval_deadline
+                    || Timestamp::now() > self.approval_deadline
                     || digest(&self.conflicts)?
                         != digest(
                             &current
@@ -603,7 +608,7 @@ impl EventRetirement {
                 .polling_checkpoint
                 .is_none_or(|v| v < self.prepared_checkpoint)
             || self.approval_deadline <= self.prepared_at
-            || self.approval_deadline - self.prepared_at > chrono::Duration::minutes(5)
+            || self.approval_deadline - self.prepared_at > jiff::SignedDuration::from_secs(300)
             || self.conflicts.len() > 1024
             || !self
                 .conflicts
@@ -822,7 +827,7 @@ impl EventIngress {
         let id = decision.event_id;
         // checkpoint_fence is held by both callers; stores revalidate atomically.
         decision.state = EventRetirementState::PollingConfirmed;
-        decision.polling_confirmed_at = Some(Utc::now());
+        decision.polling_confirmed_at = Some(Timestamp::now());
         decision.confirmation_watermark = Some(watermark);
         decision.target_observed_at_confirmation = Some(target_seen);
         let mut guard = ConflictGuard {

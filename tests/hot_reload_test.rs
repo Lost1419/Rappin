@@ -1327,7 +1327,7 @@ async fn main()->Result<()> {
     .await
     .unwrap();
     for kind in ["select", "modal_submit", "command"] {
-        let mut data = json!({"id":uuid::Uuid::new_v4(),"token":"interaction_secret","type":kind,"custom_id":"apply","channel_id":uuid::Uuid::nil(),"server_id":uuid::Uuid::nil(),"user_id":uuid::Uuid::nil(),"expires_at":chrono::Utc::now()+chrono::Duration::minutes(15)});
+        let mut data = json!({"id":uuid::Uuid::new_v4(),"token":"interaction_secret","type":kind,"custom_id":"apply","channel_id":uuid::Uuid::nil(),"server_id":uuid::Uuid::nil(),"user_id":uuid::Uuid::nil(),"expires_at":jiff::Timestamp::now()+std::time::Duration::from_secs(900)});
         if kind == "select" {
             data["values"] = json!(["rust"]);
         }

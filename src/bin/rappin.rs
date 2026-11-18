@@ -1,6 +1,6 @@
 //! Composable JSON interface to the Yapin Bot API.
-use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
+use jiff::Timestamp;
 use rappin::{Client, CreateMessage, Error, EventCursor, Result};
 use reqwest::Method;
 use serde_json::{json, Value};
@@ -318,10 +318,10 @@ enum Messages {
         channel: Uuid,
         #[arg(long,default_value_t=50,value_parser=clap::value_parser!(u32).range(1..=100))]
         limit: u32,
-        #[arg(long, conflicts_with = "after")]
-        before: Option<DateTime<Utc>>,
-        #[arg(long, conflicts_with = "before")]
-        after: Option<DateTime<Utc>>,
+        #[arg(long, conflicts_with = "after", value_parser = rappin::parse_timestamp)]
+        before: Option<Timestamp>,
+        #[arg(long, conflicts_with = "before", value_parser = rappin::parse_timestamp)]
+        after: Option<Timestamp>,
         #[arg(long,default_value_t=1,value_parser=clap::value_parser!(u32).range(1..=100))]
         max_pages: u32,
     },

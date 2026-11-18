@@ -112,7 +112,7 @@ one component. The spec calls send/edit payloads inline rather than defining a
 Name resolution rejects ambiguous names. Member resolution searches a bounded
 number of pages and reports no match within that scope; use a UUID for exact lookup.
 
-Message cursors are RFC3339 timestamps, **not message UUIDs**. Specify `--before`
+Message cursors are RFC 3339 timestamps with a UTC offset. Specify `--before`
 to read backward or `--after` to read forward, never both. Returned messages are
 oldest first, with authors. Collections include `next_cursor`, `direction` (messages),
 `page_count`, and `may_have_more`. Pass the cursor with that direction to continue.
@@ -265,7 +265,8 @@ cleanup. No music is downloaded by Rappin.
 
 ## Compatibility changes
 
-History cursor argument types changed from UUID to `DateTime<Utc>`. Interaction
+History cursors changed from UUIDs to timestamps in 0.1.3. Current Rust cursors use
+`rappin::Timestamp`. Interaction
 PATCH-like fields now use `Option<Option<T>>` (omit/set/null). New `BotProfile`
 fields require updates to struct literals; prefer deserialization for API objects.
 OAuth returns `OAuth2User` rather than the broader public-profile model. Command

@@ -17,6 +17,18 @@ fn benchmark(c: &mut Criterion) {
     c.bench_function("event/typed_payload", |b| {
         b.iter(|| black_box(&event).parse_data().unwrap())
     });
+    let timestamped =
+        r#"{"created_at":"2026-11-18T12:34:56.123456780Z","data":{"id":5},"id":42,"type":"test"}"#;
+    let timed: Event = serde_json::from_str(timestamped).unwrap();
+    c.bench_function("timestamped_event/decode", |b| {
+        b.iter(|| serde_json::from_str::<Event>(black_box(timestamped)).unwrap())
+    });
+    c.bench_function("timestamped_event/encode", |b| {
+        b.iter(|| serde_json::to_vec(black_box(&timed)).unwrap())
+    });
+    c.bench_function("timestamped_event/fingerprint", |b| {
+        b.iter(|| rappin::canonical_event_fingerprint(black_box(&timed)).unwrap())
+    });
     let message = CreateMessage::new("benchmark message");
     c.bench_function("message/serialize", |b| {
         b.iter(|| serde_json::to_vec(black_box(&message)).unwrap())

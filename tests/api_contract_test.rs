@@ -9,13 +9,13 @@ use uuid::Uuid;
 async fn timestamps_are_query_encoded_and_limits_validate() {
     let (base, mut requests, task) = mock(vec![response(200, json!({"messages":[]}))]).await;
     let client = Client::builder("secret").base_url(base).build();
-    let time = "2026-10-26T12:34:56+00:00".parse().unwrap();
+    let time = "2026-10-26T10:34:56.123456780-02:00".parse().unwrap();
     client
         .get_messages(Uuid::nil(), Some(50), Some(time), None)
         .await
         .unwrap();
     let request = requests.recv().await.unwrap();
-    assert!(request.contains("before=2026-10-26T12%3A34%3A56%2B00%3A00"));
+    assert!(request.contains("before=2026-10-26T12%3A34%3A56.123456780%2B00%3A00"));
     assert!(client
         .get_messages(Uuid::nil(), Some(101), None, None)
         .await

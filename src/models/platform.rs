@@ -9,7 +9,7 @@
 use crate::{Error, Result};
 use base64::Engine;
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -150,7 +150,8 @@ pub struct CustomEmoji {
     /// Server containing the emoji.
     pub server_id: Uuid,
     /// UTC emoji creation timestamp.
-    pub created_at: DateTime<Utc>,
+    #[serde(with = "crate::timestamp")]
+    pub created_at: Timestamp,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -314,10 +315,12 @@ pub struct BotWebhook {
     /// Owning bot, when returned.
     pub bot_id: Option<Uuid>,
     /// UTC creation time.
-    pub created_at: DateTime<Utc>,
+    #[serde(with = "crate::timestamp")]
+    pub created_at: Timestamp,
     #[serde(default)]
     /// UTC time of the last use, when supplied.
-    pub last_used_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub last_used_at: Option<Timestamp>,
     #[serde(default)]
     /// Number of posts reported by the API.
     pub posts: u64,

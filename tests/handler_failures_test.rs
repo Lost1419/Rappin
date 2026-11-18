@@ -1102,7 +1102,7 @@ async fn definition_errors_are_not_user_rejections_and_default_policy_never_repl
 #[tokio::test]
 async fn preparation_failure_reports_every_undispatched_event_and_received_watermark() {
     let cursor = Cursor::new().await;
-    let expiry = chrono::Utc::now() + chrono::Duration::minutes(15);
+    let expiry = jiff::Timestamp::now() + std::time::Duration::from_secs(900);
     let mut bad = button(3, "capacity:");
     bad["data"]["expires_at"] = json!(expiry);
     let (base, _requests, http) = routed_mock(vec![

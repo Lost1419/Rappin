@@ -6,7 +6,7 @@
 //! let body = rappin::CreateCategoryRequest::new("Information").with_position(0);
 //! assert_eq!(body.position, Some(0));
 //! ```
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -187,7 +187,8 @@ pub struct Member {
     pub nickname: Option<String>,
     /// When the member joined the server.
     #[serde(default)]
-    pub joined_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub joined_at: Option<Timestamp>,
     /// List of role IDs assigned to the member.
     #[serde(default)]
     pub roles: Vec<Uuid>,
@@ -253,7 +254,8 @@ pub struct Ban {
     pub banned_by: Option<Uuid>,
     #[serde(default)]
     /// UTC ban creation time, when supplied.
-    pub created_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::timestamp::optional")]
+    pub created_at: Option<Timestamp>,
     #[serde(default)]
     /// Expanded banned-user profile, when supplied.
     pub user: Option<User>,

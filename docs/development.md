@@ -85,7 +85,8 @@ cargo bench --locked --bench sdk
 cargo bench --locked --bench sdk -- --sample-size 20 --measurement-time 1 --warm-up-time 1
 ```
 
-Criterion measures quoted parsing, raw/typed event decoding, message serialization,
+Criterion measures quoted parsing, raw/typed event decoding, timestamped event
+encoding and fingerprinting, message serialization,
 capability validation, channel cache hit/replacement and native no-effect dispatch.
 Dispatch preloads the bot identity to avoid authentication reads; its handler does
 not reply or mutate remote state. Cache cases include Tokio `block_on` overhead;

@@ -1123,8 +1123,8 @@ pub trait ApiExt: Api {
         &self,
         channel: impl Into<crate::ChannelId> + Send,
         limit: Option<u32>,
-        before: Option<chrono::DateTime<chrono::Utc>>,
-        after: Option<chrono::DateTime<chrono::Utc>>,
+        before: Option<jiff::Timestamp>,
+        after: Option<jiff::Timestamp>,
     ) -> Result<MessagesResponse> {
         let channel: crate::ChannelId = channel.into();
         let channel = Uuid::from(channel);
@@ -1144,10 +1144,10 @@ pub trait ApiExt: Api {
                 query.append_pair("limit", &limit.to_string());
             }
             if let Some(cursor) = before {
-                query.append_pair("before", &cursor.to_rfc3339());
+                query.append_pair("before", &crate::timestamp::query(cursor));
             }
             if let Some(cursor) = after {
-                query.append_pair("after", &cursor.to_rfc3339());
+                query.append_pair("after", &crate::timestamp::query(cursor));
             }
             format!("/channels/{channel}/messages?{}", query.finish())
         };

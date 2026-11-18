@@ -287,7 +287,7 @@ impl Client {
     pub async fn message_history(
         &self,
         channel: uuid::Uuid,
-        before: Option<chrono::DateTime<chrono::Utc>>,
+        before: Option<jiff::Timestamp>,
         max_pages: usize,
     ) -> Result<crate::MessagesResponse> {
         if !(1..=100).contains(&max_pages) {

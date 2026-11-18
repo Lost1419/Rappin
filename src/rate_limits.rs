@@ -142,14 +142,10 @@ pub(crate) fn retry_after(value: &str) -> Option<Duration> {
     if let Ok(seconds) = value.parse::<f64>() {
         return Duration::try_from_secs_f64(seconds).ok();
     }
-    let date = chrono::DateTime::parse_from_rfc2822(value)
-        .ok()?
-        .with_timezone(&chrono::Utc);
-    Some(
-        (date - chrono::Utc::now())
-            .to_std()
-            .unwrap_or(Duration::ZERO),
-    )
+    let date = jiff::fmt::rfc2822::DateTimeParser::new()
+        .parse_timestamp(value)
+        .ok()?;
+    Some(Duration::try_from(date - jiff::Timestamp::now()).unwrap_or_default())
 }
 impl RateLimits {
     pub(crate) async fn wait(&self, key: [u8; 32], message: bool) -> Duration {
@@ -306,9 +302,9 @@ mod tests {
         for bad in ["NaN", "inf", "-1", "invalid"] {
             assert!(retry_after(bad).is_none());
         }
-        let date = (chrono::Utc::now() + chrono::Duration::seconds(30))
-            .format("%a, %d %b %Y %H:%M:%S GMT")
-            .to_string();
+        let date = jiff::fmt::rfc2822::DateTimePrinter::new()
+            .timestamp_to_rfc9110_string(&(jiff::Timestamp::now() + Duration::from_secs(30)))
+            .unwrap();
         let duration = retry_after(&date).unwrap();
         assert!(duration.as_secs() >= 28 && duration.as_secs() <= 30);
         assert_eq!(

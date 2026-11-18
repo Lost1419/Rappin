@@ -229,12 +229,12 @@ fn interaction_event(id: u64, args: &str) -> Event {
         "id":Uuid::from_u128(id as u128),"token":"fixture_interaction_token",
         "command":"shared","args":args,"channel_id":Uuid::nil(),
         "server_id":Uuid::from_u128(3),"user_id":Uuid::from_u128(4),
-        "expires_at":chrono::Utc::now()+chrono::Duration::minutes(15)
+        "expires_at":jiff::Timestamp::now()+std::time::Duration::from_secs(900)
     }}))
     .unwrap()
 }
 fn message_receipt() -> Value {
-    json!({"message":{"id":Uuid::nil(),"channel_id":Uuid::nil(),"author_id":Uuid::nil(),"created_at":chrono::Utc::now()}})
+    json!({"message":{"id":Uuid::nil(),"channel_id":Uuid::nil(),"author_id":Uuid::nil(),"created_at":jiff::Timestamp::now()}})
 }
 struct Count(BoundedU32<1, 10>);
 impl FromArgs for Count {

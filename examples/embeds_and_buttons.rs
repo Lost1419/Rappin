@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
                 .field("Online Members", "42", true)
                 .field("Bot Version", "0.1.0 (Rust)", true)
                 .footer(EmbedFooter::new("Powered by yappin-rs"))
-                .timestamp(chrono::Utc::now());
+                .timestamp(jiff::Timestamp::now());
 
             let row = ActionRow::new(vec![
                 Button::primary("Refresh", "stat:refresh").with_emoji("🔄"),

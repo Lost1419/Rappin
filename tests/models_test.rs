@@ -1,4 +1,4 @@
-use chrono::Utc;
+use jiff::Timestamp;
 use rappin::models::*;
 use serde_json::json;
 use uuid::Uuid;
@@ -63,7 +63,7 @@ fn test_embed_builder_and_serialization() {
         .author(EmbedAuthor::new("Antigravity"))
         .image("https://example.com/image.png")
         .thumbnail("https://example.com/thumb.png")
-        .timestamp(Utc::now());
+        .timestamp(Timestamp::now());
 
     let val = serde_json::to_value(&embed).unwrap();
     assert_eq!(val["title"], "Test Card");
@@ -213,4 +213,41 @@ fn test_voice_ticket_deserialization() {
     assert_eq!(ticket.url, "wss://livekit.yapin.gg");
     assert!(ticket.e2ee);
     assert_eq!(ticket.expires_in, Some(60));
+}
+
+#[test]
+fn timestamps_preserve_json_bytes_and_durable_event_fingerprints() {
+    for (input, canonical, fingerprint) in [
+        (
+            "2026-11-18T10:34:56.10-02:00",
+            "2026-11-18T12:34:56.100Z",
+            "0fa26de5d81ad905b4e364f532511950bf4edd5c8500000d93ed6be60c49fc1d",
+        ),
+        (
+            "2026-11-18T12:34:56.123450Z",
+            "2026-11-18T12:34:56.123450Z",
+            "635f0f8285fb7b330a7c1d2dc688ca29f5e6b61b7261b4e1df94e37840cd2b29",
+        ),
+        (
+            "2026-11-18T12:34:56.123456780Z",
+            "2026-11-18T12:34:56.123456780Z",
+            "3b6cf262988526dbe76b4b3785ff626ddd17cffd1713d1b4a4bec494368439f6",
+        ),
+        (
+            "1969-12-31T23:59:59.5000000Z",
+            "1969-12-31T23:59:59.500Z",
+            "849ece86a96139985b22719f3f813d51fb376af0505d0cc7ae19057967a98226",
+        ),
+    ] {
+        let value = serde_json::json!({"id":42,"type":"test","data":{"id":5},"created_at":input});
+        let event: rappin::Event = serde_json::from_value(value).unwrap();
+        let saved = serde_json::to_value(&event).unwrap();
+        assert_eq!(saved["created_at"], canonical);
+        assert_eq!(
+            rappin::canonical_event_fingerprint(&event).unwrap(),
+            fingerprint
+        );
+        let loaded: rappin::Event = serde_json::from_value(saved).unwrap();
+        assert_eq!(loaded.created_at, event.created_at);
+    }
 }

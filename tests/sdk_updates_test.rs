@@ -248,7 +248,7 @@ async fn static_prefixes_prefer_longest_and_keep_mentions() {
 #[tokio::test]
 async fn server_expiry_blocks_callback_without_network_and_is_not_extended() {
     let client = Client::new("not-used");
-    let deadline = chrono::Utc::now() - chrono::Duration::seconds(1);
+    let deadline = jiff::Timestamp::now() - std::time::Duration::from_secs(1);
     let interaction: InteractionEvent = serde_json::from_value(
         json!({"id":"id","token":"secret","type":"button","expires_at":deadline}),
     )
@@ -262,7 +262,7 @@ async fn server_expiry_blocks_callback_without_network_and_is_not_extended() {
         .await
         .is_err());
     let mut extended = interaction.clone();
-    extended.expires_at = Some(chrono::Utc::now() + chrono::Duration::seconds(900));
+    extended.expires_at = Some(jiff::Timestamp::now() + std::time::Duration::from_secs(900));
     assert_eq!(
         client.interaction_state(&extended).await.unwrap().phase,
         ResponsePhase::Expired
@@ -373,8 +373,8 @@ async fn empty_poll_acknowledgements_do_not_replace_unchanged_checkpoint() {
 #[tokio::test]
 async fn server_deadline_overrides_inferred_age_and_old_events_expire() {
     let client = Client::new("not-used");
-    let now = chrono::Utc::now();
-    let with_deadline:InteractionEvent=serde_json::from_value(json!({"id":"server","token":"test","created_at":now-chrono::Duration::hours(1),"expires_at":now+chrono::Duration::minutes(1)})).unwrap();
+    let now = jiff::Timestamp::now();
+    let with_deadline:InteractionEvent=serde_json::from_value(json!({"id":"server","token":"test","created_at":now-std::time::Duration::from_secs(3600),"expires_at":now+std::time::Duration::from_secs(60)})).unwrap();
     assert_eq!(
         client
             .interaction_state(&with_deadline)
@@ -384,7 +384,7 @@ async fn server_deadline_overrides_inferred_age_and_old_events_expire() {
         ResponsePhase::Unanswered
     );
     let old: InteractionEvent = serde_json::from_value(
-        json!({"id":"old","token":"test","created_at":now-chrono::Duration::minutes(16)}),
+        json!({"id":"old","token":"test","created_at":now-std::time::Duration::from_secs(960)}),
     )
     .unwrap();
     assert_eq!(

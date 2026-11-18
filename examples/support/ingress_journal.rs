@@ -293,7 +293,7 @@ mod tests {
         // durable transition and audit/pruning independently.
         let mut confirmed = approved;
         confirmed.state = TimestampReconciliationState::Confirmed;
-        confirmed.confirmed_at = Some(chrono::Utc::now());
+        confirmed.confirmed_at = Some(jiff::Timestamp::now());
         store
             .commit_timestamp_reconciliation(confirmed)
             .await
@@ -396,7 +396,7 @@ mod tests {
         // adapter's atomic transition and archive independently here.
         let mut confirmed = approved;
         confirmed.state = EventRetirementState::PollingConfirmed;
-        confirmed.polling_confirmed_at = Some(chrono::Utc::now());
+        confirmed.polling_confirmed_at = Some(jiff::Timestamp::now());
         confirmed.confirmation_watermark = Some(100);
         confirmed.target_observed_at_confirmation = Some(true);
         store.commit_event_retirement(confirmed).await.unwrap();

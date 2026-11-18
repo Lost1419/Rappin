@@ -21,11 +21,11 @@ fn interaction(command: &str, args: &str, id: u64) -> Event {
     serde_json::from_value(json!({"id":id,"type":"command","data":{
         "id":Uuid::from_u128(id as u128),"token":"interaction_fixture","command":command,"args":args,
         "server_id":Uuid::from_u128(3),"channel_id":Uuid::nil(),"user_id":Uuid::from_u128(4),
-        "expires_at":chrono::Utc::now()+chrono::Duration::minutes(15)
+        "expires_at":jiff::Timestamp::now()+std::time::Duration::from_secs(900)
     }})).unwrap()
 }
 fn receipt() -> serde_json::Value {
-    json!({"message":{"id":Uuid::nil(),"channel_id":Uuid::nil(),"author_id":Uuid::nil(),"created_at":chrono::Utc::now()}})
+    json!({"message":{"id":Uuid::nil(),"channel_id":Uuid::nil(),"author_id":Uuid::nil(),"created_at":jiff::Timestamp::now()}})
 }
 async fn seed(bot: &Bot) {
     bot.cache()

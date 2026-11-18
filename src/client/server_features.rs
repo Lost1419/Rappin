@@ -303,7 +303,7 @@ impl Client {
     /// use rappin::*;
     /// use uuid::Uuid;
     /// async fn example(client: &Client, server: Uuid) -> Result<()> {
-    ///     let mut event = CreateServerEvent::new("Game night", chrono::Utc::now() + chrono::Duration::hours(1));
+    ///     let mut event = CreateServerEvent::new("Game night", jiff::Timestamp::now() + std::time::Duration::from_secs(3600));
     ///     event.location = Some("https://example.com/game".into());
     ///     let response = client.create_server_event(server, &event).await?;
     ///     Ok(())
