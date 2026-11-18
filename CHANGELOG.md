@@ -42,6 +42,9 @@ and rebuild instructions, including changes since 0.1.34 and 0.1.35.
 
 ### SDK and CI hardening
 
+- Build the SDK and derive crate with Rust edition 2024 and keep Rust 1.89 as the minimum. Rustdoc combines compatible doctests.
+- Emit credential-safe tracing for retry delays, read recovery, and shared gateway fallback.
+
 - Prune expired cooldown buckets during command use. Server-scoped cooldowns use one bucket per requester in DMs.
 - Cover every bundled OpenAPI operation with a redacted rate-limit route template and enforce that coverage with a spec-driven test.
 - Report WebSocket failures as `Error::Gateway` and carry the gateway close code separately from the HTTP status through request and worker diagnostics.

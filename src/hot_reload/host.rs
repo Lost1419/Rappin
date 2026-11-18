@@ -795,30 +795,33 @@ impl Drop for Generation {
             let input = io.input.take();
             let directory = DirectoryCleanup(Some(self.directory.clone()));
             let poisoned = io.poisoned;
-            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                runtime.spawn(async move {
-                    if !poisoned {
-                        if let Some(mut input) = input {
-                            let _ = protocol::write(&mut input, &Wire::Shutdown).await;
-                        }
-                        if tokio::time::timeout(Duration::from_secs(2), child.wait())
-                            .await
-                            .is_err()
-                        {
+            match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => {
+                    runtime.spawn(async move {
+                        if !poisoned {
+                            if let Some(mut input) = input {
+                                let _ = protocol::write(&mut input, &Wire::Shutdown).await;
+                            }
+                            if tokio::time::timeout(Duration::from_secs(2), child.wait())
+                                .await
+                                .is_err()
+                            {
+                                let _ = child.kill().await;
+                            }
+                        } else {
                             let _ = child.kill().await;
                         }
-                    } else {
-                        let _ = child.kill().await;
-                    }
-                    let _ = child.wait().await;
-                    if let Some(path) = &directory.0 {
-                        let _ = tokio::fs::remove_dir_all(path).await;
-                    }
-                });
-            } else {
-                let _ = child.start_kill();
-                drop(child);
-                drop(directory);
+                        let _ = child.wait().await;
+                        if let Some(path) = &directory.0 {
+                            let _ = tokio::fs::remove_dir_all(path).await;
+                        }
+                    });
+                }
+                _ => {
+                    let _ = child.start_kill();
+                    drop(child);
+                    drop(directory);
+                }
             }
         }
     }

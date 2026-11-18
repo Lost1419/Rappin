@@ -527,7 +527,8 @@ impl Pump {
                                         },
                                         Some("response") => {
                                             let id = value["id"].as_str().unwrap_or_default();
-                                            if let Some(completed) = pending.remove(id) {
+                                            let completed = pending.remove(id);
+                                            if let Some(completed) = completed {
                                                 route.update(|s| {
                                                     s.in_flight = pending.len();
                                                     s.completed = s.completed.saturating_add(1);
@@ -679,13 +680,13 @@ impl Pump {
                     return Ok(EventsResponse {
                         events: vec![],
                         last: after,
-                    })
+                    });
                 }
                 Ok(Some(Ok(event))) if deliver_duplicates || event.id > after => {
                     return Ok(EventsResponse {
                         last: after.max(event.id),
                         events: vec![event],
-                    })
+                    });
                 }
                 Ok(Some(Ok(_))) => continue,
                 Ok(Some(Err(error))) => return Err(error),

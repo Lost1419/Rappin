@@ -280,7 +280,10 @@ fn schema_kind(name: &str, opts: &Options, sdk: &Tokens) -> Option<Tokens> {
 
 fn expand(input: DeriveInput) -> syn::Result<Tokens> {
     if !input.generics.params.is_empty() {
-        return Err(syn::Error::new(input.generics.span(), "derive FromArgs on a concrete argument struct; implement FromArgs manually for generic parsers"));
+        return Err(syn::Error::new(
+            input.generics.span(),
+            "derive FromArgs on a concrete argument struct; implement FromArgs manually for generic parsers",
+        ));
     }
     let syn::Data::Struct(data) = input.data else {
         return Err(syn::Error::new(
@@ -448,26 +451,29 @@ fn expand(input: DeriveInput) -> syn::Result<Tokens> {
         reads.push(quote!(let #ident: #field_ty = #read; #checks));
         names.push(ident);
         help.push(quote!(#sdk::ArgumentInfo { name: #name.into(), description: #description.into(), required: #required }));
-        if let Some(kind) = schema_kind(&kind_name, &opts, &sdk) {
-            let canonical = match kind_name.as_str() {
-                "String" => quote!(::std::string::String),
-                "UserId" => quote!(#sdk::UserId),
-                "ChannelId" => quote!(#sdk::ChannelId),
-                "HumanDuration" => quote!(#sdk::HumanDuration),
-                _ => {
-                    let primitive = syn::Ident::new(&kind_name, ty.span());
-                    quote!(::std::primitive::#primitive)
-                }
-            };
-            schema_types.push(quote!(
-                if ::std::any::TypeId::of::<#ty>() != ::std::any::TypeId::of::<#canonical>() {
-                    return None;
-                }
-            ));
-            let rest = opts.rest;
-            schemas.push(quote!(#sdk::ArgumentSchema { name: #name.into(), description: #description.into(), kind: #kind, required: #required, rest: #rest }));
-        } else {
-            complete_schema = false;
+        match schema_kind(&kind_name, &opts, &sdk) {
+            Some(kind) => {
+                let canonical = match kind_name.as_str() {
+                    "String" => quote!(::std::string::String),
+                    "UserId" => quote!(#sdk::UserId),
+                    "ChannelId" => quote!(#sdk::ChannelId),
+                    "HumanDuration" => quote!(#sdk::HumanDuration),
+                    _ => {
+                        let primitive = syn::Ident::new(&kind_name, ty.span());
+                        quote!(::std::primitive::#primitive)
+                    }
+                };
+                schema_types.push(quote!(
+                    if ::std::any::TypeId::of::<#ty>() != ::std::any::TypeId::of::<#canonical>() {
+                        return None;
+                    }
+                ));
+                let rest = opts.rest;
+                schemas.push(quote!(#sdk::ArgumentSchema { name: #name.into(), description: #description.into(), kind: #kind, required: #required, rest: #rest }));
+            }
+            _ => {
+                complete_schema = false;
+            }
         }
     }
     let schema = if complete_schema {

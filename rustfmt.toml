@@ -1,0 +1,2 @@
+# Keep source formatting independent of the crate edition.
+style_edition = "2021"

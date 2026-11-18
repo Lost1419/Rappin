@@ -6,6 +6,9 @@ the `dev` branch for the preview. Published 0.1 references remain version-specif
 If you're upgrading from 0.1.34 or 0.1.35, see the
 [late 0.1 migration notes](#migrate-features-added-in-0134-and-0135).
 
+The SDK and derive crate use edition 2024 and require Rust 1.89 or newer.
+Existing bots can keep their current Rust edition.
+
 ## Update bot construction
 
 In 0.1 a raw command handler received a message context and `build()` returned

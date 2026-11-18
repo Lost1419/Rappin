@@ -557,11 +557,14 @@ impl BotHandle {
                     let command_context =
                         crate::CommandContext::for_message(context.clone(), canonical);
                     for (index, check) in recipe.checks.iter().enumerate() {
-                        if let Some(future) = check.prepare(&command_context) {
-                            failure::catch(future).await?;
-                            report.assessed.push(format!("registered check {index}"));
-                        } else {
-                            report.deferred.push(format!("registered check {index}"));
+                        match check.prepare(&command_context) {
+                            Some(future) => {
+                                failure::catch(future).await?;
+                                report.assessed.push(format!("registered check {index}"));
+                            }
+                            _ => {
+                                report.deferred.push(format!("registered check {index}"));
+                            }
                         }
                     }
                 } else {
@@ -773,7 +776,7 @@ impl BotHandle {
                         )
                         .into(),
                         true,
-                    )
+                    );
                 }
                 Ok(MessageDisposition::Stop) => {
                     return InvocationOutcome::failed(
@@ -783,7 +786,7 @@ impl BotHandle {
                             source: None,
                         },
                         true,
-                    )
+                    );
                 }
                 Err(error) => return InvocationOutcome::failed(&name, error, true),
             }
