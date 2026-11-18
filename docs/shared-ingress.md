@@ -16,7 +16,10 @@ identity. Invalid IDs and conflicting retained payloads fail before event effect
 ## Admission, effects and HTTP acknowledgement
 
 `Admission::{status, receipt, error}` separates admission from handler completion.
-Statuses are `Accepted`, `Duplicate`, `Full`, `Stopped` and `Error`.
+Statuses are `Accepted`, `Duplicate`, `Full`, `Stopped`, `Error` and
+`PollingRequired`. In [`PollingOnly` mode](draining-and-retirement.md#cross-transport-identity),
+verified webhooks return `PollingRequired` and execution waits for polling.
+This status carries no durable receipt or cursor advancement.
 `EventReceipt::{status, wait}` reports event state, durability, commit state and the
 original structured failure. `EventIngress::receipt(id)` retrieves a retained
 receipt, including after an admission error. Handler/check callbacks keep their

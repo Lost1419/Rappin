@@ -266,6 +266,8 @@ needs one attempt still uses `request_once`. Use
 `Client::{read_availability_status, subscribe_read_availability}` for request
 recovery and `BotHandle::{availability_status, subscribe_availability}` for
 startup and intake. See [availability and hierarchy](availability-and-hierarchy.md).
+The [native example](../examples/shared_commands.rs) and
+[worker example](../examples/shared_command_worker.rs) show the shared handler.
 
 ### Yapin API additions from 0.1.35
 

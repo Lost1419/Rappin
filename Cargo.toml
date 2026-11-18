@@ -112,6 +112,10 @@ name = "hot_cog_worker"
 required-features = ["hot-reload"]
 
 [[example]]
+name = "shared_command_worker"
+required-features = ["hot-reload"]
+
+[[example]]
 name = "hot_reload_bot"
 required-features = ["hot-reload"]
 

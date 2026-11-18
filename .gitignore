@@ -3,6 +3,7 @@
 /.rappin-voice/
 /node_modules/
 /AGENTS.md
+/HANDOFF.md
 /.ci-logs/
 /skills/rappin-sdk-dev/
 /skills/yapin-api-audit/**/__pycache__/

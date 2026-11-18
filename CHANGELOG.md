@@ -2,6 +2,11 @@
 
 ## 0.2.0 — Unreleased
 
+See the [0.1 to 0.2.0 migration guide](docs/migration-0.2.md) for updated APIs
+and rebuild instructions, including changes since 0.1.34 and 0.1.35.
+
+### SDK and command framework
+
 - Consolidate typed API extensions, rich message/component models and interaction contexts. Preserve lossless response fields and explicit null edits. Accept resource-specific IDs at typed API boundaries.
 - Make bot construction fallible. Group advanced configuration and add process-local typed state for native and worker handlers.
 - Add optional FromArgs derives for parsing, bounds and help, with pure schema metadata for checked invocation.
@@ -15,7 +20,7 @@
 
 ### Yapin API 1.5.0
 
-- Add native/worker thread management and reaction cleanup, with shared CLI/MCP schemas, permission checks and scoped previews.
+- Expose thread management and reaction cleanup through the common `ApiExt` API for native commands and workers, with shared CLI/MCP schemas, permission checks and scoped previews.
 - Use the existing message and channel APIs for nonce sends and private channel audiences. Retain nonce deduplication receipts, returned allowlists and structured platform errors.
 - Publish typed slash options from command specs, parse positional and named form submissions, acknowledge unanswered slash commands, and support classic ephemeral button updates.
 - Dispatch typed message edits/deletions and bot membership notifications through native, cog and worker listeners. Update the bundled contract and capability availability.
@@ -55,6 +60,26 @@
 
 Worker protocol notes below describe the behavior of each 0.1 release. For the
 0.2.0 requirement and rebuild steps, see the [migration guide](docs/migration-0.2.md#rebuild-workers).
+
+## 0.1.35 — 2026-11-14
+
+- Refresh the bundled Yapin API 1.4.0 contract to build `f136961`. Add thread operations, reaction moderation, private channel allowlists, caller-supplied send nonces, typed slash options and form parsing, ephemeral reply buttons, and typed views of message/server change events.
+- Add opt-in preservation of Yapin error codes, permission fields and allowed methods. Decode unpublished official SDK package names while preserving the existing Rust field types.
+- Observed HTTP 403 with code `feature_off` on both official API hosts on 2026-11-14, using one bot credential and its one visible server:
+  - `GET /channels/{id}/permissions/{target}`
+  - `GET /servers/{id}/members/{uid}/permissions`
+  - `GET /channels/{id}/overrides`
+  - `GET /categories/{id}/overrides`
+  - `GET /servers/{id}/roles/{rid}`
+
+  These results apply to the tested bot and server. Thread listing returned 200 in the same test.
+
+## 0.1.34 — 2026-11-14
+
+- Separate GET/HEAD and mutation retry budgets with `max_read_retries` and `max_write_retries` on ClientBuilder and BotBuilder. Existing ClientBuilder::max_retries sets both. Defaults and known-unapplied mutation rules stay compatible.
+- Add opt-in handler/client read availability recovery, including parent-proxied worker requests. Share the existing bounded backoff, structured exhaustion and server-wait budget. Suppress nested retry loops and preserve single-attempt requests. Keep exact attempt/retry counters and coherent latest-episode telemetry under concurrent reads.
+- Expose `Bot::run_supervised` for in-place startup/intake recovery with existing cogs, checkpoints and cancellation. Handler, publication, storage and uncertain mutation failures retain their existing terminal dispositions.
+- Add `CommandContext` and native/worker `command_shared` registration for one handler across message and interaction commands. Preserve original event scope, typed argument parsing, reply coordination and structured failure callbacks. Existing command registrations and worker wire protocols stay compatible.
 
 ## 0.1.33 — 2026-11-13
 

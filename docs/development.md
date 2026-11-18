@@ -41,6 +41,10 @@ starting the platform test matrix. GitHub loads schedules from the default
 branch, so the schedule takes effect when this workflow reaches that branch.
 The audit also runs on ordinary code changes to `dev`.
 
+Markdown-only pushes and pull requests use the documentation checks when their
+diff is available. A manual CI dispatch also defaults to documentation checks.
+Enable the `full_suite` input to run the platform test matrix manually.
+
 ```sh
 cargo audit
 cargo audit --no-fetch --file fuzz/Cargo.lock

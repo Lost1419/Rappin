@@ -7,6 +7,11 @@ on:
   pull_request:
     branches: [ main, master, dev ]
   workflow_dispatch:
+    inputs:
+      full_suite:
+        description: Run the full test suite instead of documentation checks
+        type: boolean
+        default: false
   schedule:
     - cron: '17 9 * * 1'
 
@@ -25,18 +30,27 @@ jobs:
       guides: ${{ steps.diff.outputs.guides }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'pull_request' && github.base_ref == 'dev')
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
         with:
           fetch-depth: 0
-      - name: Check whether only Markdown changed
+          persist-credentials: false
+      - name: Select documentation checks or the full suite
         id: diff
-        if: (github.event_name == 'push' && github.ref == 'refs/heads/dev') || (github.event_name == 'pull_request' && github.base_ref == 'dev')
+        if: github.event_name != 'schedule'
         shell: bash
         env:
           PUSH_BEFORE: ${{ github.event.before }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          FULL_SUITE: ${{ inputs.full_suite }}
         run: |
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$FULL_SUITE" != "true" ]]; then
+              echo "markdown-only=true" >> "$GITHUB_OUTPUT"
+              echo "guides=true" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
             range="$PR_BASE...$PR_HEAD"
           else

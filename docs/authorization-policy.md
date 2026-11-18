@@ -79,9 +79,10 @@ Paths below are relative to Yapin's bot API base.
 
 The public channel override read is documented as test-server-only. The guide
 groups GET/PUT/DELETE with category-role permission paths but gives no precise
-category-read response contract. Neither Rappin nor the official JavaScript SDK
-has a typed category-override reader. `Api::request` can make raw requests, but
-that does not establish their semantics or completeness.
+category-read response contract for that historical path. The current typed
+`ApiExt::get_category_overrides` reads the configured category rules from
+`/categories/{id}/overrides`. Configured rules alone do not establish a
+member's effective category access.
 
 A bounded live read during validation returned channel overrides successfully
 (an empty list), while `GET
