@@ -179,7 +179,10 @@ file, or pass the same JSON arguments to MCP. Slash publication replaces all
 commands for the configured bot and supports a write preview.
 
 Send a caller-assigned nonce in `send_message.body.nonce` or a body file passed to
-`messages send`. The JSON response preserves any `nonce` and `duplicate` fields.
+`messages send`. The shared tool puts the receipt under `messages[0]`,
+and the direct CLI command returns the receipt directly. Both preserve any
+`nonce` and `duplicate` fields. In 0.1.35 the dedicated operation was
+`send_with_nonce`.
 Nonce sends use one attempt. A caller can reuse the same key for the same message
 and channel within Yapin's ten-minute deduplication window. Use separate keys
 for separate messages. File uploads and split sends use separate workflows.

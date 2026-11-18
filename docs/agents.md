@@ -265,15 +265,10 @@ cleanup. No music is downloaded by Rappin.
 
 ## Compatibility changes
 
-History cursors changed from UUIDs to timestamps in 0.1.3. Current Rust cursors use
-`rappin::Timestamp`. Interaction
-PATCH-like fields now use `Option<Option<T>>` (omit/set/null). New `BotProfile`
-fields require updates to struct literals; prefer deserialization for API objects.
-OAuth returns `OAuth2User` rather than the broader public-profile model. Command
-and button handlers are bounded and awaited rather than detached. All 35 REST path
-templates (51 operations) remain available. Source of truth: bundled
-[OpenAPI](openapi.json), [API reference](https://www.yapin.gg/developers/api), and
-[developer guide](https://www.yapin.gg/developers).
+For current Rust and CLI equivalents of the 0.1 APIs, see the
+[migration guide](migration-0.2.md), including
+[features added in 0.1.34 and 0.1.35](migration-0.2.md#migrate-features-added-in-0134-and-0135).
+The [bundled OpenAPI contract](openapi.json) describes supported platform routes.
 
 ## Credential hardening (0.1.4)
 

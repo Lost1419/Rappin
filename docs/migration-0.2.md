@@ -3,6 +3,8 @@
 This development branch contains breaking changes. Keep an existing deployment's
 dependency and worker binaries pinned while updating a separate checkout. Use
 the `dev` branch for the preview. Published 0.1 references remain version-specific.
+If you're upgrading from 0.1.34 or 0.1.35, see the
+[late 0.1 migration notes](#migrate-features-added-in-0134-and-0135).
 
 ## Update bot construction
 
@@ -245,6 +247,78 @@ Duplicate command/alias definitions fail at build/registration before network I/
 Worker protocol 13 carries slash option declarations and change events. It
 separates resolved interaction command metadata from its raw source.
 
+
+## Migrate features added in 0.1.34 and 0.1.35
+
+### Read recovery and shared commands from 0.1.34
+
+| 0.1.34 | 0.2.0 |
+| --- | --- |
+| `BotBuilder::max_read_retries(n)` / `max_write_retries(n)` | Set `settings.transport.max_read_retries` and `max_write_retries` in `configure` |
+| `BotBuilder::read_availability_policy(policy)` | Set `settings.transport.read_availability = Some(policy)`. Set it to `None` to disable request read recovery |
+| `Bot::run_supervised(policy)` | Set `settings.transport.availability = Some(policy)` before `build()`, then call `run()` |
+| `ClientBuilder` retry and read policy setters | Keep using the setters. `without_read_recovery()` opts out of the new default |
+| Native or worker `command_shared` | Register with `command`, or use `command_spec` for typed arguments. Use `registered_command` with `CommandSpec::<()>::bind_raw` for free text plus slash options |
+| `ctx.api().get_me()` | Import `ApiExt` and call `ctx.get_me()` |
+
+Startup/intake and request read recovery are separate budgets. A handler that
+needs one attempt still uses `request_once`. Use
+`Client::{read_availability_status, subscribe_read_availability}` for request
+recovery and `BotHandle::{availability_status, subscribe_availability}` for
+startup and intake. See [availability and hierarchy](availability-and-hierarchy.md).
+
+### Yapin API additions from 0.1.35
+
+| 0.1.35 | 0.2.0 |
+| --- | --- |
+| `NovemberApiExt` thread operations and `moderate_reactions` | Import `ApiExt` and use the same operation names. Use a `CreateMessage` for a thread's first message |
+| `send_with_nonce(channel, body, nonce)` and `NonceMessage` | Call `ApiExt::send_message(channel, &CreateMessage::new(content).nonce(nonce))`. Read `nonce` and `duplicate` from the returned `Message` |
+| `create_private_channel` | Call `create_channel` with a `CreateChannelRequest` configured using `private_audience(roles, users)` |
+| `edit_channel_audience` and `ChannelAudience` | Call `edit_channel` with `EditChannelRequest::user_ids(users)` and read the returned `Channel::user_ids`. An empty list clears the member allowlist |
+| `SlashCommandApiExt`, `SlashCommand`, and `list_slash_commands` / `publish_slash_commands` | Use `Command` with its `options` and call `ApiExt::get_commands()` / `publish_commands(commands, interactions)` |
+| `BotBuilder::slash_options(command, options)` | Attach declarations to `CommandSpec::slash_options` on the published command root |
+| `parse_slash_options(&options)` in a shared handler | Call `ctx.parse_slash_options()` on the interaction path. It uses the installed command's declarations |
+| `Event::parse_change()` and raw change-event routing | `parse_change()` is still available. `parse_data()` now returns `EventData::Change`; handle it in `on_change_event` or through worker `Listener::ChangeEvent` / `CogEvent::ChangeEvent` |
+| `structured_api_errors(true)` | Remove the setter. Read structured platform fields through `Error::to_remote()` or `Error::to_json()` by default |
+| Unpublished `SdkPackages::npm` / `pypi` represented as empty strings | The fields are `Option<String>`. Check for `None` |
+| Classic ephemeral reply buttons and `reply_id` | Use `InteractionCallback` with the existing ephemeral/update constructors and the shared `EditMessage` payload. The original `reply_id` still identifies the reply |
+
+The following native registration handles message commands and slash forms.
+Workers use the same registration and parser. In a worker handler, test for
+`CogEvent::InteractionCommand` via `ctx.worker()` to identify the slash path.
+
+```rust
+use rappin::{Bot, CommandSpec, Result, SlashOption, SlashOptionKind};
+
+fn configure() -> Result<Bot> {
+    let find = CommandSpec::<()>::new("find", "Find matching items")
+        .slash_options([SlashOption::new("query", SlashOptionKind::String)])
+        .bind_raw(|ctx| async move {
+            if ctx.interaction().is_some() {
+                let values = ctx.parse_slash_options()?;
+                let query = values.get("query").and_then(serde_json::Value::as_str).unwrap_or("");
+                ctx.reply(format!("Query: {query}")).await
+            } else {
+                ctx.reply(format!("Query: {}", ctx.args())).await
+            }
+        });
+    Bot::builder("unused-token").registered_command(find).build()
+}
+```
+
+On the CLI and MCP, use `send_message` with the original nonce inside
+`body.nonce` in place of `send_with_nonce`. The shared tool response contains
+one entry under `messages` for a nonce send. Inspect that entry's `message`,
+`nonce` and `duplicate` fields. The direct `messages send` command also accepts
+a body file with a nonce. Keep the same caller-supplied nonce for the same
+file-free channel send within Yapin's deduplication window. The request uses one
+attempt. See [CLI and MCP workflows](cli-mcp.md#threads-reactions-and-slash-publication).
+
+The CLI/MCP operation names for threads, reaction cleanup, and slash publication
+are unchanged. For private channels, use the existing `create_channel` and
+`edit_channel` operations with audience fields inside `body`. Platform rollout,
+permissions, and the bot's own access still apply. A successful local preview
+does not establish visibility or permission for that server.
 
 ## Free-form commands and direct messages
 
