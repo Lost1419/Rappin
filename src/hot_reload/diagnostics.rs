@@ -304,15 +304,13 @@ pub(crate) fn error(
             if let Some(value) = details
                 .as_object_mut()
                 .and_then(|fields| fields.remove(key))
-            {
-                if value.is_number()
+                && (value.is_number()
                     || value.as_str().is_some_and(|text| {
                         text.len() <= 64
                             && text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                    })
-                {
-                    facts.push((key, value));
-                }
+                    }))
+            {
+                facts.push((key, value));
             }
         }
         clean(

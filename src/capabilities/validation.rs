@@ -25,10 +25,9 @@ fn validate_inner(descriptor: &Capability, args: &Value) -> Result<ValidatedOper
     if matches!(
         entry.name,
         "send_message" | "edit_message" | "send_files" | "post_bot_webhook" | "create_thread"
-    ) {
-        if let Some(body) = args.get_mut("body") {
-            crate::utils::strip_proxy_metadata(body);
-        }
+    ) && let Some(body) = args.get_mut("body")
+    {
+        crate::utils::strip_proxy_metadata(body);
     }
     validate_schema(schema::operation_input_schema(entry), &args).map_err(|error| match error {
         Error::Validation { field, message } => {

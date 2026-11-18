@@ -950,42 +950,42 @@ impl ValidatedOperation {
             .or_else(|| self.args["target"].as_str().filter(|s| *s != "everyone"))
             .into_iter()
             .collect();
-        if matches!(self.name(), "create_channel" | "edit_channel") {
-            if let Some(users) = self.args["body"]["user_ids"].as_array() {
-                for user in users {
-                    let user: Uuid = user
-                        .as_str()
-                        .expect("validated UUID")
-                        .parse()
-                        .expect("validated UUID");
-                    let response = api
-                        .request(
-                            reqwest::Method::GET,
-                            &format!("/servers/{server}/members/{user}"),
+        if matches!(self.name(), "create_channel" | "edit_channel")
+            && let Some(users) = self.args["body"]["user_ids"].as_array()
+        {
+            for user in users {
+                let user: Uuid = user
+                    .as_str()
+                    .expect("validated UUID")
+                    .parse()
+                    .expect("validated UUID");
+                let response = api
+                    .request(
+                        reqwest::Method::GET,
+                        &format!("/servers/{server}/members/{user}"),
+                        None,
+                    )
+                    .await;
+                match response {
+                    Ok(value)
+                        if value["member"]["id"]
+                            .as_str()
+                            .and_then(|id| id.parse::<Uuid>().ok())
+                            == Some(user) => {}
+                    Ok(_) => {
+                        report.record(
+                            "audience_scope",
+                            Principal::Context,
+                            CheckResolution::unknown(
+                                "member identity was not established in the host server",
+                            ),
                             None,
-                        )
-                        .await;
-                    match response {
-                        Ok(value)
-                            if value["member"]["id"]
-                                .as_str()
-                                .and_then(|id| id.parse::<Uuid>().ok())
-                                == Some(user) => {}
-                        Ok(_) => {
-                            report.record(
-                                "audience_scope",
-                                Principal::Context,
-                                CheckResolution::unknown(
-                                    "member identity was not established in the host server",
-                                ),
-                                None,
-                            );
-                            return false;
-                        }
-                        Err(error) => {
-                            report.failure("audience_scope", Principal::Context, error);
-                            return false;
-                        }
+                        );
+                        return false;
+                    }
+                    Err(error) => {
+                        report.failure("audience_scope", Principal::Context, error);
+                        return false;
                     }
                 }
             }

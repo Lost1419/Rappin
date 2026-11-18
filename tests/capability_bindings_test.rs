@@ -67,14 +67,14 @@ impl Api for MockApi {
             .push((method.clone(), path.into(), body.clone()));
         if method != Method::GET {
             let step = self.mutations.fetch_add(1, Ordering::SeqCst) + 1;
-            if let Some(status) = self.mutation_error {
-                if self.fail_step == 0 || step == self.fail_step {
-                    return Err(Error::Api {
-                        status,
-                        message: "fixture failure".into(),
-                        retry_after: None,
-                    });
-                }
+            if let Some(status) = self.mutation_error
+                && (self.fail_step == 0 || step == self.fail_step)
+            {
+                return Err(Error::Api {
+                    status,
+                    message: "fixture failure".into(),
+                    retry_after: None,
+                });
             }
             return Ok(
                 json!({"message":{"id":Uuid::from_u128(step as u128),"content":"confirmed"},"ok":true}),

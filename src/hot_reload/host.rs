@@ -243,10 +243,9 @@ impl WorkerProject {
                     if let Ok(value) = serde_json::from_slice::<Value>(&line) {
                         if value["reason"] == "compiler-artifact"
                             && value["target"]["name"] == self.target
+                            && let Some(path) = value["executable"].as_str()
                         {
-                            if let Some(path) = value["executable"].as_str() {
-                                executable = Some(PathBuf::from(path));
-                            }
+                            executable = Some(PathBuf::from(path));
                         }
                         if value["reason"] == "compiler-message" {
                             report.push(&value["message"]);

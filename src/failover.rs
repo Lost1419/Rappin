@@ -16,10 +16,10 @@ impl Failover {
     }
     pub(crate) fn base(&self, primary: &str) -> String {
         let until = self.until.lock().unwrap_or_else(|p| p.into_inner());
-        if until.is_some_and(|until| until > Instant::now()) {
-            if let Some(fallback) = &self.fallback {
-                return fallback.clone();
-            }
+        if until.is_some_and(|until| until > Instant::now())
+            && let Some(fallback) = &self.fallback
+        {
+            return fallback.clone();
         }
         primary.to_owned()
     }

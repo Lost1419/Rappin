@@ -206,14 +206,12 @@ pub async fn serve(ctx: &Context, cursor: Option<&std::path::Path>) -> Result<()
             finished=tasks.join_next_with_id(),if !tasks.is_empty()=>{
                 match finished {
                     Some(Ok((task_id,result))) => {
-                        if let Some(job)=jobs.remove(&task_id) {
-                            if !job.cancelled { send(&sender,response(job.id,result)).await?; }
-                        }
+                        if let Some(job)=jobs.remove(&task_id)
+                            && !job.cancelled { send(&sender,response(job.id,result)).await?; }
                     }
                     Some(Err(failure)) => {
-                        if let Some(job)=jobs.remove(&failure.id()) {
-                            if !job.cancelled { send(&sender,error(job.id,-32603,"tool execution failed")).await?; }
-                        }
+                        if let Some(job)=jobs.remove(&failure.id())
+                            && !job.cancelled { send(&sender,error(job.id,-32603,"tool execution failed")).await?; }
                     }
                     None => (),
                 }

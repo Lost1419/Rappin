@@ -670,17 +670,17 @@ impl Client {
         }
     }
     pub(crate) async fn receive_event(&self, event: crate::Event) {
-        if matches!(event.kind.as_str(), "member_join" | "member_leave") {
-            if let (Some(server), Some(user)) = (
+        if matches!(event.kind.as_str(), "member_join" | "member_leave")
+            && let (Some(server), Some(user)) = (
                 event.data["server_id"]
                     .as_str()
                     .and_then(|s| Uuid::parse_str(s).ok()),
                 event.data["user_id"]
                     .as_str()
                     .and_then(|s| Uuid::parse_str(s).ok()),
-            ) {
-                self.invalidate_member(server, user).await;
-            }
+            )
+        {
+            self.invalidate_member(server, user).await;
         }
         self.events().publish(event);
     }
@@ -1023,35 +1023,34 @@ impl Client {
             if matches!(
                 status,
                 StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
-            ) {
-                if let Some(delay) = retry_header {
-                    if delay <= Duration::from_secs(60) {
-                        let global = is_message
-                            && (err_json["global"] == true
-                                || msg.to_ascii_lowercase().contains("overall"));
-                        self.inner.rate_limits.delay(key, delay, global).await;
+            ) && let Some(delay) = retry_header
+            {
+                if delay <= Duration::from_secs(60) {
+                    let global = is_message
+                        && (err_json["global"] == true
+                            || msg.to_ascii_lowercase().contains("overall"));
+                    self.inner.rate_limits.delay(key, delay, global).await;
+                }
+                if retries > 0 && delay <= Duration::from_secs(60) {
+                    let source = api_error();
+                    if delay > self.inner.max_retry_wait.saturating_sub(progress.wait) {
+                        return Err(Error::RetryWaitExceeded {
+                            waited: progress.wait,
+                            budget: self.inner.max_retry_wait,
+                            source: Box::new(source),
+                        });
                     }
-                    if retries > 0 && delay <= Duration::from_secs(60) {
-                        let source = api_error();
-                        if delay > self.inner.max_retry_wait.saturating_sub(progress.wait) {
-                            return Err(Error::RetryWaitExceeded {
-                                waited: progress.wait,
-                                budget: self.inner.max_retry_wait,
-                                source: Box::new(source),
-                            });
-                        }
-                        warn!(
-                            method = label,
-                            route = %route,
-                            attempt = progress.attempts,
-                            status = status.as_u16(),
-                            delay_ms = delay.as_millis() as u64,
-                            "API asked us to retry"
-                        );
-                        last_advice = Some(source);
-                        retries -= 1;
-                        continue;
-                    }
+                    warn!(
+                        method = label,
+                        route = %route,
+                        attempt = progress.attempts,
+                        status = status.as_u16(),
+                        delay_ms = delay.as_millis() as u64,
+                        "API asked us to retry"
+                    );
+                    last_advice = Some(source);
+                    retries -= 1;
+                    continue;
                 }
             }
             return Err(api_error());
@@ -1138,10 +1137,11 @@ impl Client {
                     "interaction has no source message to update",
                 ));
             }
-            if kind == Some("update") && entry.ephemeral_target {
-                if let Some(body) = &callback_body {
-                    crate::validation::validate_classic_buttons(body)?;
-                }
+            if kind == Some("update")
+                && entry.ephemeral_target
+                && let Some(body) = &callback_body
+            {
+                crate::validation::validate_classic_buttons(body)?;
             }
             // A cancelled request leaves Uncertain rather than permitting a duplicate initial response.
             entry.state.phase = ResponsePhase::Uncertain;
@@ -1219,10 +1219,9 @@ impl Client {
                     matches!(*part, "members" | "roles" | "kick" | "bans" | "timeouts")
                 }) || (parts.get(2) == Some(&"categories")
                     && parts.get(4) == Some(&"permissions")))
+                && let Some(server) = parts.get(1).and_then(|id| Uuid::parse_str(id).ok())
             {
-                if let Some(server) = parts.get(1).and_then(|id| Uuid::parse_str(id).ok()) {
-                    self.invalidate_server_lookups(server).await;
-                }
+                self.invalidate_server_lookups(server).await;
             }
         }
 

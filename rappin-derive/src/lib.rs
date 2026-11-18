@@ -218,21 +218,20 @@ fn validate_bounds(options: &Options, span: proc_macro2::Span) -> syn::Result<()
     if matches!((&options.min, &options.max), (Some(min), Some(max)) if exceeds(min, max)) {
         return Err(syn::Error::new(span, "argument minimum exceeds maximum"));
     }
-    if let Some(default) = &options.default {
-        if options
+    if let Some(default) = &options.default
+        && (options
             .min
             .as_ref()
             .is_some_and(|min| exceeds(min, default))
             || options
                 .max
                 .as_ref()
-                .is_some_and(|max| exceeds(default, max))
-        {
-            return Err(syn::Error::new(
-                span,
-                "argument default is outside its bounds",
-            ));
-        }
+                .is_some_and(|max| exceeds(default, max)))
+    {
+        return Err(syn::Error::new(
+            span,
+            "argument default is outside its bounds",
+        ));
     }
     Ok(())
 }

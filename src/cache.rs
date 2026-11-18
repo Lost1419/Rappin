@@ -227,14 +227,14 @@ impl<K: Eq + Hash + Clone, V: Clone> Lookup<K, V> {
         if !values.contains_key(&key) && values.len() >= self.policy.capacity {
             values.retain(|_, v| v.age() < self.policy.ttl);
         }
-        if !values.contains_key(&key) && values.len() >= self.policy.capacity {
-            if let Some(oldest) = values
+        if !values.contains_key(&key)
+            && values.len() >= self.policy.capacity
+            && let Some(oldest) = values
                 .iter()
                 .min_by_key(|(_, v)| v.fetched_at)
                 .map(|(k, _)| k.clone())
-            {
-                values.remove(&oldest);
-            }
+        {
+            values.remove(&oldest);
         }
         values.insert(
             key,

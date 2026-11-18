@@ -808,10 +808,10 @@ impl EventIngress {
             let target = events
                 .iter()
                 .find(|event| event.event.id == decision.event_id);
-            if let Some(target) = target {
-                if hex(&target.fingerprint) != decision.retained_fingerprint {
-                    return Err(reject("polling_confirmation_mismatch"));
-                }
+            if let Some(target) = target
+                && hex(&target.fingerprint) != decision.retained_fingerprint
+            {
+                return Err(reject("polling_confirmation_mismatch"));
             }
             self.publish_retirement(decision, watermark, target.is_some())
                 .await?;

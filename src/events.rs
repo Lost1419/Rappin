@@ -257,10 +257,10 @@ impl EventConsumer {
                 "ID was not delivered by this consumer",
             ));
         }
-        if self.last != Some(id) {
-            if let Some(c) = &self.cursor {
-                c.save(id).await?;
-            }
+        if self.last != Some(id)
+            && let Some(c) = &self.cursor
+        {
+            c.save(id).await?;
         }
         self.last = Some(id);
         if id == batch.last {

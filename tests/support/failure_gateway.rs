@@ -129,14 +129,14 @@ async fn gateway(events: Vec<Value>, deny: bool) -> (String, tokio::task::JoinHa
             if message.is_close() {
                 break;
             }
-            if let Ok(text) = message.to_text() {
-                if text.contains("heartbeat") {
-                    let _ = ws
-                        .send(Message::Text(
-                            json!({"op":"heartbeat_ack"}).to_string().into(),
-                        ))
-                        .await;
-                }
+            if let Ok(text) = message.to_text()
+                && text.contains("heartbeat")
+            {
+                let _ = ws
+                    .send(Message::Text(
+                        json!({"op":"heartbeat_ack"}).to_string().into(),
+                    ))
+                    .await;
             }
         }
     });

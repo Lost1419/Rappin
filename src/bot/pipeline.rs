@@ -125,10 +125,10 @@ impl Bot {
                     // Pause event admission at capacity. The independent request
                     // pump keeps responses and heartbeat alive for accepted work.
                     #[cfg(feature = "gateway")]
-                    if sender.capacity() == 0 {
-                        if let Some(gateway) = &mut gateway {
-                            gateway.backpressure();
-                        }
+                    if sender.capacity() == 0
+                        && let Some(gateway) = &mut gateway
+                    {
+                        gateway.backpressure();
                     }
                     let Ok(permit) = sender.reserve().await else {
                         break;
@@ -190,27 +190,25 @@ impl Bot {
                             let mut pending = batch.events.into_iter();
                             while let Some(event) = pending.next() {
                                 let mut prepared = None;
-                                if event.kind == "interaction" {
-                                    if let Ok(crate::EventData::Interaction(mut interaction)) =
+                                if event.kind == "interaction"
+                                    && let Ok(crate::EventData::Interaction(mut interaction)) =
                                         event.parse_data()
+                                {
+                                    interaction.created_at =
+                                        interaction.created_at.or(event.created_at);
+                                    if let Err(error) = client.track_interaction(&interaction).await
                                     {
-                                        interaction.created_at =
-                                            interaction.created_at.or(event.created_at);
-                                        if let Err(error) =
-                                            client.track_interaction(&interaction).await
-                                        {
-                                            let mut unprocessed: Vec<_> =
-                                                events.iter().map(|(event, _)| event.id).collect();
-                                            unprocessed.push(event.id);
-                                            unprocessed.extend(pending.map(|event| event.id));
-                                            permit.send(Err(IntakeFailure { error, unprocessed }));
-                                            return;
-                                        }
-                                        if let Some(after) = auto_ack {
-                                            client.auto_ack(interaction.clone(), after);
-                                        }
-                                        prepared = Some(Box::new(interaction));
+                                        let mut unprocessed: Vec<_> =
+                                            events.iter().map(|(event, _)| event.id).collect();
+                                        unprocessed.push(event.id);
+                                        unprocessed.extend(pending.map(|event| event.id));
+                                        permit.send(Err(IntakeFailure { error, unprocessed }));
+                                        return;
                                     }
+                                    if let Some(after) = auto_ack {
+                                        client.auto_ack(interaction.clone(), after);
+                                    }
+                                    prepared = Some(Box::new(interaction));
                                 }
                                 client.receive_event(event.clone()).await;
                                 events.push((event, prepared));

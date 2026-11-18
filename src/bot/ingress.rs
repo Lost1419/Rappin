@@ -952,13 +952,12 @@ impl EventIngress {
             .collect()
     }
     pub(super) fn recoverable_conflict(&self, error: &Error) -> bool {
-        if let Error::Remote(error) = error {
-            if error.kind == "event_retirement"
-                && error.details.get("reason").and_then(|v| v.as_str())
-                    == Some("awaiting_normal_polling_confirmation")
-            {
-                return true;
-            }
+        if let Error::Remote(error) = error
+            && error.kind == "event_retirement"
+            && error.details.get("reason").and_then(|v| v.as_str())
+                == Some("awaiting_normal_polling_confirmation")
+        {
+            return true;
         }
         matches!(error, Error::IngressConflict{conflict} if matches!(conflict.disposition,ConflictDisposition::AwaitingPolling|ConflictDisposition::PollingConfirmed|ConflictDisposition::AwaitingReconciliationPolling|ConflictDisposition::Reconciled|ConflictDisposition::AwaitingRetirementPolling|ConflictDisposition::Retired))
     }
@@ -1100,16 +1099,15 @@ impl EventIngress {
                 .claims
                 .get(&id)
                 .is_some_and(|c| c.conflict && c.pending_since.is_none())
-            {
-                if let Some(report) = state.conflicts.iter().find(|r| {
+                && let Some(report) = state.conflicts.iter().find(|r| {
                     r.event_id == id
                         && matches!(
                             r.disposition,
                             ConflictDisposition::Stop | ConflictDisposition::TimedOut
                         )
-                }) {
-                    return Err(report.to_error());
-                }
+                })
+            {
+                return Err(report.to_error());
             }
             state
                 .conflicts
@@ -1434,10 +1432,10 @@ impl EventIngress {
     }
     fn ensure_claim_active(&self, id: u64) -> Result<()> {
         let state = self.0.state.lock().unwrap();
-        if state.claims.get(&id).is_some_and(|c| c.conflict) {
-            if let Some(report) = state.conflicts.iter().find(|r| r.event_id == id) {
-                return Err(report.to_error());
-            }
+        if state.claims.get(&id).is_some_and(|c| c.conflict)
+            && let Some(report) = state.conflicts.iter().find(|r| r.event_id == id)
+        {
+            return Err(report.to_error());
         }
         if state.stopped {
             return Err(Error::Config("ingress stopped before event effects".into()));
@@ -1915,15 +1913,15 @@ impl EventIngress {
             .clone()
             .ok_or_else(|| Error::Config("ingress runtime unavailable".into()))?;
         let mut prepared = None;
-        if event.kind == "interaction" {
-            if let Ok(crate::EventData::Interaction(mut interaction)) = event.parse_data() {
-                interaction.created_at = interaction.created_at.or(event.created_at);
-                client.track_interaction(&interaction).await?;
-                if let Some(after) = auto_ack {
-                    client.auto_ack(interaction.clone(), after);
-                }
-                prepared = Some(Box::new(interaction));
+        if event.kind == "interaction"
+            && let Ok(crate::EventData::Interaction(mut interaction)) = event.parse_data()
+        {
+            interaction.created_at = interaction.created_at.or(event.created_at);
+            client.track_interaction(&interaction).await?;
+            if let Some(after) = auto_ack {
+                client.auto_ack(interaction.clone(), after);
             }
+            prepared = Some(Box::new(interaction));
         }
         client.receive_event(event.clone()).await;
         Ok(prepared)
@@ -2076,13 +2074,13 @@ impl EventIngress {
                     report.completed_uncommitted_events.push(id)
                 }
                 ReceiptStage::Failed => {
-                    if !report.failed_events.iter().any(|f| f.event_id == id) {
-                        if let Some(error) = &status.error {
-                            report.failed_events.push(super::EventFailure {
-                                event_id: id,
-                                error: error.clone(),
-                            });
-                        }
+                    if !report.failed_events.iter().any(|f| f.event_id == id)
+                        && let Some(error) = &status.error
+                    {
+                        report.failed_events.push(super::EventFailure {
+                            event_id: id,
+                            error: error.clone(),
+                        });
                     }
                 }
                 _ if !matches!(status.stage, ReceiptStage::Completed) => {

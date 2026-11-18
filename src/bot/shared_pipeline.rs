@@ -183,16 +183,16 @@ impl Bot {
                         intake.fatal(error.to_remote());
                         break;
                     }
-                    if let Ok(response) = &response {
-                        if let Err(error) = intake.raw_pending(&response.events) {
-                            intake.fatal(error.to_remote());
-                            break;
-                        }
+                    if let Ok(response) = &response
+                        && let Err(error) = intake.raw_pending(&response.events)
+                    {
+                        intake.fatal(error.to_remote());
+                        break;
                     }
-                    if response.is_ok() {
-                        if let Some(mut episode) = episode.take() {
-                            episode.success();
-                        }
+                    if response.is_ok()
+                        && let Some(mut episode) = episode.take()
+                    {
+                        episode.success();
                     }
                     // A long poll must not monopolize the only admission slot.
                     // Hold at most one raw response; reserve before any claim or
@@ -624,10 +624,8 @@ impl Bot {
                 }
             }
         }
-        if complete {
-            if let Some(watermark) = batch.watermark {
-                prefix = prefix.max(watermark);
-            }
+        if complete && let Some(watermark) = batch.watermark {
+            prefix = prefix.max(watermark);
         }
         if !*barrier {
             *polling_prefix = (*polling_prefix).max(prefix);

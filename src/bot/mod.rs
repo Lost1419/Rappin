@@ -687,13 +687,13 @@ impl BotHandle {
             }
             let buttons = cog.buttons();
             let _update = self.inner.registry_update.lock().await;
-            if let Some(present) = expected {
-                if self.inner.cogs.read().await.contains_key(&name) != present {
-                    return Err(Error::validation(
-                        "cog.name",
-                        "cog ownership changed before publication",
-                    ));
-                }
+            if let Some(present) = expected
+                && self.inner.cogs.read().await.contains_key(&name) != present
+            {
+                return Err(Error::validation(
+                    "cog.name",
+                    "cog ownership changed before publication",
+                ));
             }
             let mut planned = self.inner.commands.read().await.clone();
             for key in commands.keys() {
@@ -754,10 +754,10 @@ impl BotHandle {
         .await;
         match result {
             Ok(old) => {
-                if let Some(old) = old {
-                    if let Err(error) = old.on_unload(self.client()).await {
-                        warn!("Cog cleanup failed: {error}");
-                    }
+                if let Some(old) = old
+                    && let Err(error) = old.on_unload(self.client()).await
+                {
+                    warn!("Cog cleanup failed: {error}");
                 }
                 if self.inner.log {
                     info!("Cog '{}' installed", name);
@@ -2008,10 +2008,10 @@ impl Bot {
         }
 
         // 3. Register slash commands if enabled
-        if self.handle.inner.sync_commands {
-            if let Err(e) = self.handle.sync_commands().await {
-                warn!("Failed to synchronize commands: {}", e);
-            }
+        if self.handle.inner.sync_commands
+            && let Err(e) = self.handle.sync_commands().await
+        {
+            warn!("Failed to synchronize commands: {}", e);
         }
 
         let saved = match shared_last {
@@ -2036,10 +2036,10 @@ impl Bot {
                 .last
             }
         };
-        if saved != Some(last) {
-            if let Some(c) = &self.handle.inner.cursor {
-                c.save(last).await?;
-            }
+        if saved != Some(last)
+            && let Some(c) = &self.handle.inner.cursor
+        {
+            c.save(last).await?;
         }
         if self.handle.inner.log {
             println!("[rappin] Logged in as {} ({})", me.username, me.id);
@@ -2070,15 +2070,15 @@ impl Bot {
             None => self.client().get_me().await?,
         };
         let mut prepared = None;
-        if event.kind == "interaction" {
-            if let Ok(EventData::Interaction(mut interaction)) = event.parse_data() {
-                interaction.created_at = interaction.created_at.or(event.created_at);
-                self.client().track_interaction(&interaction).await?;
-                if let Some(after) = self.handle.inner.auto_ack_after {
-                    self.client().auto_ack(interaction.clone(), after);
-                }
-                prepared = Some(Box::new(interaction));
+        if event.kind == "interaction"
+            && let Ok(EventData::Interaction(mut interaction)) = event.parse_data()
+        {
+            interaction.created_at = interaction.created_at.or(event.created_at);
+            self.client().track_interaction(&interaction).await?;
+            if let Some(after) = self.handle.inner.auto_ack_after {
+                self.client().auto_ack(interaction.clone(), after);
             }
+            prepared = Some(Box::new(interaction));
         }
         self.client().receive_event(event.clone()).await;
         failure::catch(self.dispatch_event(event, &me, prepared)).await
@@ -2340,10 +2340,10 @@ impl Bot {
         }
 
         // If command_for list is provided, verify whether our bot was targeted
-        if let Some(ref targeted) = msg.command_for {
-            if !targeted.contains(&me.id) {
-                return Ok(());
-            }
+        if let Some(ref targeted) = msg.command_for
+            && !targeted.contains(&me.id)
+        {
+            return Ok(());
         }
 
         if let Some(gate) = &self.handle.inner.message_gate {
@@ -2517,67 +2517,60 @@ impl Bot {
             data,
             Some(self.handle.clone()),
         );
-        if kind == "command" {
-            if let Some((path, args)) = self
+        if kind == "command"
+            && let Some((path, args)) = self
                 .handle
                 .resolve_invocation(
                     ctx.command.as_deref().unwrap_or(""),
                     ctx.args.as_deref().unwrap_or(""),
                 )
                 .await
-            {
-                if let Some(snapshot) = self.handle.invocation_snapshot(&path).await {
-                    let canonical = snapshot
-                        .def
-                        .info
-                        .as_ref()
-                        .map(|info| info.name.clone())
-                        .unwrap_or_else(|| path.clone());
-                    let slash_options = snapshot
-                        .def
-                        .info
-                        .as_ref()
-                        .map(|info| info.slash_options.clone())
-                        .unwrap_or_default();
-                    let command = crate::CommandContext::resolved(
-                        ctx.clone(),
-                        canonical,
-                        args,
-                        slash_options,
+            && let Some(snapshot) = self.handle.invocation_snapshot(&path).await
+        {
+            let canonical = snapshot
+                .def
+                .info
+                .as_ref()
+                .map(|info| info.name.clone())
+                .unwrap_or_else(|| path.clone());
+            let slash_options = snapshot
+                .def
+                .info
+                .as_ref()
+                .map(|info| info.slash_options.clone())
+                .unwrap_or_default();
+            let command =
+                crate::CommandContext::resolved(ctx.clone(), canonical, args, slash_options);
+            let result = failure::catch(async {
+                if let Some(cog) = snapshot.cog
+                    && !cog.check(&command).await?
+                {
+                    return Err(
+                        crate::CommandError::Denied("cog check denied the command".into()).into(),
                     );
-                    let result = failure::catch(async {
-                        if let Some(cog) = snapshot.cog {
-                            if !cog.check(&command).await? {
-                                return Err(crate::CommandError::Denied(
-                                    "cog check denied the command".into(),
-                                )
-                                .into());
-                            }
-                        }
-                        (snapshot.def.handler)(command.clone()).await
-                    })
-                    .await;
-                    return match result {
-                        Ok(()) => Ok(()),
-                        Err(error) => {
-                            self.command_failed(
-                                command,
-                                event_id,
-                                &path,
-                                snapshot.def.info.as_ref().map(|info| info.usage()),
-                                error,
-                            )
-                            .await
-                        }
-                    };
                 }
-            }
+                (snapshot.def.handler)(command.clone()).await
+            })
+            .await;
+            return match result {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    self.command_failed(
+                        command,
+                        event_id,
+                        &path,
+                        snapshot.def.info.as_ref().map(|info| info.usage()),
+                        error,
+                    )
+                    .await
+                }
+            };
         }
-        if let Some(handler) = self.handle.inner.ui_handlers.get(&kind) {
-            if let Err(error) = failure::catch(handler(ctx.clone())).await {
-                self.button_failed(ctx.clone(), event_id, &format!("ui:{kind}"), error)
-                    .await?;
-            }
+        if let Some(handler) = self.handle.inner.ui_handlers.get(&kind)
+            && let Err(error) = failure::catch(handler(ctx.clone())).await
+        {
+            self.button_failed(ctx.clone(), event_id, &format!("ui:{kind}"), error)
+                .await?;
         }
         let cogs: Vec<_> = self
             .handle
@@ -2588,11 +2581,11 @@ impl Bot {
             .values()
             .cloned()
             .collect();
-        if let Some(h) = &self.handle.inner.event_handler {
-            if let Err(error) = failure::catch(h.on_interaction(&ctx)).await {
-                self.button_failed(ctx.clone(), event_id, "interaction listener", error)
-                    .await?;
-            }
+        if let Some(h) = &self.handle.inner.event_handler
+            && let Err(error) = failure::catch(h.on_interaction(&ctx)).await
+        {
+            self.button_failed(ctx.clone(), event_id, "interaction listener", error)
+                .await?;
         }
         for cog in cogs {
             if let Err(error) = failure::catch(cog.on_interaction(&ctx)).await {
@@ -2626,11 +2619,11 @@ impl Bot {
                     .await?;
             }
         }
-        if let Some(h) = &self.handle.inner.event_handler {
-            if let Err(error) = failure::catch(h.on_interaction(&ctx)).await {
-                self.button_failed(ctx.clone(), event_id, "interaction listener", error)
-                    .await?;
-            }
+        if let Some(h) = &self.handle.inner.event_handler
+            && let Err(error) = failure::catch(h.on_interaction(&ctx)).await
+        {
+            self.button_failed(ctx.clone(), event_id, "interaction listener", error)
+                .await?;
         }
         let cogs: Vec<_> = self
             .handle

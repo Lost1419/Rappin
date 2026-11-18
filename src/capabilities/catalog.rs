@@ -43,10 +43,10 @@ pub struct Capability {
 impl Capability {
     fn from_entry(mut entry: Entry) -> Self {
         let (scope, permissions, availability, domain) = metadata(entry.name);
-        if let Some(field) = entry.fields.iter_mut().find(|f| f.name == "body") {
-            if let Some(schema) = schema::body_schema(entry.name) {
-                field.schema = schema;
-            }
+        if let Some(field) = entry.fields.iter_mut().find(|f| f.name == "body")
+            && let Some(schema) = schema::body_schema(entry.name)
+        {
+            field.schema = schema;
         }
         Self {
             name: entry.name,

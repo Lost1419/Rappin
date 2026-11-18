@@ -111,19 +111,17 @@ pub(super) fn body_schema(name: &str) -> Option<Value> {
             if object
                 .get("properties")
                 .is_some_and(|p| p.get("id").is_some() && p.get("type").is_some())
+                && let Some(Value::Array(required)) = object.get_mut("required")
             {
-                if let Some(Value::Array(required)) = object.get_mut("required") {
-                    required.retain(|field| field != "id");
-                }
+                required.retain(|field| field != "id");
             }
             if let Some(emoji) = object
                 .get_mut("properties")
                 .and_then(|p| p.get_mut("emoji"))
+                && emoji["type"] == "string"
             {
-                if emoji["type"] == "string" {
-                    let text = emoji.clone();
-                    *emoji = json!({"anyOf":[text,{"type":"object","properties":{"id":{"type":"string","format":"uuid"},"name":{"type":"string","minLength":1,"maxLength":80},"animated":{"type":"boolean"}},"required":["id","name"],"additionalProperties":false}]});
-                }
+                let text = emoji.clone();
+                *emoji = json!({"anyOf":[text,{"type":"object","properties":{"id":{"type":"string","format":"uuid"},"name":{"type":"string","minLength":1,"maxLength":80},"animated":{"type":"boolean"}},"required":["id","name"],"additionalProperties":false}]});
             }
             for child in object.values_mut() {
                 sending_emojis(child);
@@ -255,10 +253,10 @@ fn validate_at(
             .ok_or_else(|| invalid("unsupported schema reference"))?;
         validate_at(root, target, value, path, partial, depth + 1)?;
     }
-    if let Some(expected) = schema.get("const") {
-        if value != expected {
-            return Err(invalid("unexpected constant"));
-        }
+    if let Some(expected) = schema.get("const")
+        && value != expected
+    {
+        return Err(invalid("unexpected constant"));
     }
     if schema["enum"]
         .as_array()
@@ -314,15 +312,13 @@ fn validate_at(
         }
     }
     if let Some(object) = value.as_object() {
-        if !partial {
-            if let Some(required) = schema["required"].as_array() {
-                for key in required.iter().filter_map(Value::as_str) {
-                    if !object.contains_key(key) {
-                        return Err(Error::validation(
-                            format!("{path}.{key}"),
-                            "required argument",
-                        ));
-                    }
+        if !partial && let Some(required) = schema["required"].as_array() {
+            for key in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(key) {
+                    return Err(Error::validation(
+                        format!("{path}.{key}"),
+                        "required argument",
+                    ));
                 }
             }
         }

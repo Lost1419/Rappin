@@ -109,26 +109,25 @@ pub async fn poll(
         Some(path) => EventCursor::new(path).load().await?,
         None => None,
     };
-    if let Some(path) = cursor {
-        if let Some(mut delivery) = load(path, ctx)? {
-            if !saved.is_some_and(|id| id >= delivery.batch.last) {
-                // Recover a crash between advancing the checkpoint and updating
-                // the receipt. Retain its bot binding even after full acknowledgement.
-                if let Some(saved) = saved.filter(|id| *id > delivery.after) {
-                    delivery.after = saved;
-                    delivery.batch.events.retain(|event| event.id > saved);
-                    delivery.batch_id = Uuid::new_v4().to_string();
-                    save(path, &delivery)?;
-                }
-                if after.is_some_and(|id| id != delivery.after) {
-                    return Err(Error::validation(
-                        "after",
-                        "acknowledge the pending batch before choosing another cursor",
-                    ));
-                }
-                return Ok(result(&delivery));
-            }
+    if let Some(path) = cursor
+        && let Some(mut delivery) = load(path, ctx)?
+        && !saved.is_some_and(|id| id >= delivery.batch.last)
+    {
+        // Recover a crash between advancing the checkpoint and updating
+        // the receipt. Retain its bot binding even after full acknowledgement.
+        if let Some(saved) = saved.filter(|id| *id > delivery.after) {
+            delivery.after = saved;
+            delivery.batch.events.retain(|event| event.id > saved);
+            delivery.batch_id = Uuid::new_v4().to_string();
+            save(path, &delivery)?;
         }
+        if after.is_some_and(|id| id != delivery.after) {
+            return Err(Error::validation(
+                "after",
+                "acknowledge the pending batch before choosing another cursor",
+            ));
+        }
+        return Ok(result(&delivery));
     }
     let start = after.or(saved).unwrap_or(0);
     let batch = ctx

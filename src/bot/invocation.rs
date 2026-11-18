@@ -834,10 +834,10 @@ impl BotHandle {
                         .map(|info| info.name.clone())
                         .unwrap_or_else(|| name.clone());
                     let command = crate::CommandContext::for_message(ctx, canonical);
-                    if let Some(cog) = snapshot.cog {
-                        if !cog.check(&command).await? {
-                            return Ok(false);
-                        }
+                    if let Some(cog) = snapshot.cog
+                        && !cog.check(&command).await?
+                    {
+                        return Ok(false);
                     }
                     (snapshot.def.handler)(command).await?;
                     Ok(true)

@@ -340,11 +340,10 @@ impl Error {
             if remaining == 0 {
                 return None;
             }
-            if let Some(value) = value.get("conflict") {
-                if let Ok(report) = serde_json::from_value::<crate::IngressConflict>(value.clone())
-                {
-                    return Some(report);
-                }
+            if let Some(value) = value.get("conflict")
+                && let Ok(report) = serde_json::from_value::<crate::IngressConflict>(value.clone())
+            {
+                return Some(report);
             }
             for key in ["source", "handling_error", "report", "intake_error"] {
                 if let Some(found) = value.get(key).and_then(|v| find(v, remaining - 1)) {
