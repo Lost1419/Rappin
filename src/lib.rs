@@ -133,10 +133,10 @@ pub use bot::{
     EventReceipt, EventRetirement, EventRetirementAssessment, EventRetirementEvidence,
     EventRetirementOptions, EventRetirementRequest, EventRetirementState, IngressAdmissionPolicy,
     IngressConfig, IngressConflict, IngressConflictPolicy, IngressRecord, IngressRecovery,
-    IngressSource, IngressStatus, IngressStore, PayloadDifference, PayloadType,
-    PreparedEventRetirement, PreparedTimestampReconciliation, ReceiptStage, ReceiptStatus,
-    TimestampReconciliation, TimestampReconciliationOptions, TimestampReconciliationRequest,
-    TimestampReconciliationState,
+    IngressSource, IngressStatus, IngressStepRecovery, IngressStore, PayloadDifference,
+    PayloadType, PreparedEventRetirement, PreparedTimestampReconciliation, ReceiptStage,
+    ReceiptStatus, RecoveryStep, TimestampReconciliation, TimestampReconciliationOptions,
+    TimestampReconciliationRequest, TimestampReconciliationState,
 };
 pub use bot::{
     EventFailure, EventProcessingFailure, FailureClass, FailureDisposition, HandlerFailure,

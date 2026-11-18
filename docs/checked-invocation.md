@@ -159,7 +159,9 @@ Workers require `hot-reload` and protocol 13. Every worker supports operation
 identities, single-attempt API requests and UI callbacks. Rebuild the parent and
 workers together. The old `operation_identity`, `single_attempt_api` and `ui_api`
 capability switches are removed. Consumer operation IDs retain their separate
-authenticated-message provenance and authorization boundaries.
+authenticated-message provenance and authorization boundaries. Durable recovery
+uses a separate [startup continuation](shared-ingress.md#resume-a-proven-unfinished-step)
+tied to the retained event and the application journal.
 
 ```rust,no_run
 use rappin::{hot_reload::WorkerCog, Result};

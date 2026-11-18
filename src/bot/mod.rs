@@ -14,10 +14,10 @@ pub use ingress::{
     EventReceipt, EventRetirement, EventRetirementAssessment, EventRetirementEvidence,
     EventRetirementOptions, EventRetirementRequest, EventRetirementState, IngressAdmissionPolicy,
     IngressConfig, IngressConflict, IngressConflictPolicy, IngressRecord, IngressRecovery,
-    IngressSource, IngressStatus, IngressStore, PayloadDifference, PayloadType,
-    PreparedEventRetirement, PreparedTimestampReconciliation, ReceiptStage, ReceiptStatus,
-    TimestampReconciliation, TimestampReconciliationOptions, TimestampReconciliationRequest,
-    TimestampReconciliationState,
+    IngressSource, IngressStatus, IngressStepRecovery, IngressStore, PayloadDifference,
+    PayloadType, PreparedEventRetirement, PreparedTimestampReconciliation, ReceiptStage,
+    ReceiptStatus, RecoveryStep, TimestampReconciliation, TimestampReconciliationOptions,
+    TimestampReconciliationRequest, TimestampReconciliationState,
 };
 mod message;
 pub use invocation::{
@@ -1585,6 +1585,13 @@ impl BotBuilder {
                 "enable the gateway Cargo feature for WebSocket events".into(),
             ));
         }
+        if self.config.persistence.step_recovery.is_some()
+            && self.config.persistence.store.is_none()
+        {
+            return Err(Error::Config(
+                "step recovery requires a durable ingress store".into(),
+            ));
+        }
         if self.config.persistence.store.is_some() {
             self.config
                 .persistence
@@ -1660,6 +1667,7 @@ impl BotBuilder {
         Ok(Bot {
             handle: BotHandle { inner: state },
             initial_cogs: self.cogs,
+            step_recovery: self.config.persistence.step_recovery,
             availability_policy: self.config.transport.availability,
         })
     }
@@ -1679,6 +1687,7 @@ impl BotBuilder {
 pub struct Bot {
     handle: BotHandle,
     initial_cogs: Vec<Box<dyn Cog>>,
+    step_recovery: Option<Arc<dyn IngressStepRecovery>>,
     availability_policy: Option<crate::AvailabilityPolicy>,
 }
 
@@ -1978,7 +1987,17 @@ impl Bot {
                 Some(cursor) => cursor.load().await?,
                 None => None,
             };
-            Some(ingress.restore(me.id, saved).await?.or(saved).unwrap_or(0))
+            let step_recovery = self
+                .step_recovery
+                .as_deref()
+                .map(|hook| (hook, self.client()));
+            Some(
+                ingress
+                    .restore(me.id, saved, step_recovery)
+                    .await?
+                    .or(saved)
+                    .unwrap_or(0),
+            )
         } else {
             None
         };

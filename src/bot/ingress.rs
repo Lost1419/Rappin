@@ -1,6 +1,8 @@
 //! Opt-in shared admission and durable receipt contract.
 mod conflicts;
 mod reconciliation;
+mod recovery;
+pub use recovery::{IngressStepRecovery, RecoveryStep};
 mod retirement;
 use super::{BotHandle, EventProcessingFailure};
 use crate::{Error, Event, RemoteError, Result};
@@ -442,6 +444,57 @@ pub trait IngressStore: Send + Sync + 'static {
             "atomic event retirement storage is unsupported".into(),
         ))
     }
+    /// Atomically claim the recovery attempt before executing its step. Under the
+    /// bot lease, compare the original bot ID, event ID, canonical fingerprint,
+    /// stage, error and source against durable state. Recheck matching journal
+    /// evidence for the binding and step. Reject stale evidence, any existing
+    /// recovery attempt for this event, conflicting/retired records and records
+    /// covered by the checkpoint. Keep the attempt durable across restarts,
+    /// including when the caller observes cancellation or a storage timeout.
+    /// Keep the original receipt and checkpoint. Before approving retirement
+    /// after a recovery attempt, reconcile its evidence as well as the original
+    /// execution.
+    ///
+    /// ```rust
+    /// # use rappin::{IngressRecord, IngressStore, RecoveryStep, Result};
+    /// async fn claim(store: &dyn IngressStore, original: &IngressRecord, step: &RecoveryStep) -> Result<()> {
+    ///     store.begin_step_recovery(original, step).await
+    /// }
+    /// ```
+    async fn begin_step_recovery(
+        &self,
+        _original: &IngressRecord,
+        _step: &RecoveryStep,
+    ) -> Result<()> {
+        Err(Error::Config(
+            "atomic step recovery storage is unsupported".into(),
+        ))
+    }
+
+    /// Atomically finish the exact claimed attempt and replace the active
+    /// receipt with `completed`. Archive the original receipt and the completed
+    /// attempt in the same transaction. Preserve the polling checkpoint and
+    /// ensure the replacement keeps the original event, bot ID and source.
+    ///
+    /// ```rust
+    /// # use rappin::{IngressRecord, IngressStore, RecoveryStep, Result};
+    /// async fn finish(
+    ///     store: &dyn IngressStore, original: &IngressRecord, step: &RecoveryStep, completed: IngressRecord,
+    /// ) -> Result<()> {
+    ///     store.finish_step_recovery(original, step, completed).await
+    /// }
+    /// ```
+    async fn finish_step_recovery(
+        &self,
+        _original: &IngressRecord,
+        _step: &RecoveryStep,
+        _completed: IngressRecord,
+    ) -> Result<()> {
+        Err(Error::Config(
+            "atomic step recovery storage is unsupported".into(),
+        ))
+    }
+
     /// Atomically persist an authoritative polling checkpoint. Pruning records
     /// at/below it is permitted only once this checkpoint is durable.
     /// # Example
@@ -1502,6 +1555,7 @@ impl EventIngress {
         &self,
         bot: Uuid,
         initial_checkpoint: Option<u64>,
+        step_recovery: Option<(&dyn IngressStepRecovery, &crate::Client)>,
     ) -> Result<Option<u64>> {
         if bot.is_nil() {
             return Err(Error::validation(
@@ -1589,7 +1643,7 @@ impl EventIngress {
             }
         }
         let mut pending = vec![];
-        let mut uncertain = vec![];
+        let mut uncertain = BTreeMap::new();
         for record in recovery.records {
             if record.bot_id != bot || record.status.event_id != record.event.id {
                 return Err(Error::validation(
@@ -1611,19 +1665,23 @@ impl EventIngress {
                 }
                 continue;
             }
-            let mut status = record.status;
-            status.committed = false;
-            status.durability = AdmissionDurability::Durable;
+            let stage = record.status.stage;
             let owner = matches!(
-                status.stage,
+                stage,
                 ReceiptStage::Queued | ReceiptStage::Admitting | ReceiptStage::Unprocessed
             );
-            if !owner && status.stage != ReceiptStage::Completed && !retirements.contains_key(&id) {
-                uncertain.push(id);
+            if !owner && stage != ReceiptStage::Completed && !retirements.contains_key(&id) {
+                let eligible = step_recovery.is_some()
+                    && matches!(stage, ReceiptStage::Started | ReceiptStage::Failed)
+                    && (!self.polling_only() || record.source == Some(IngressSource::Polling));
+                uncertain.insert(id, eligible.then(|| record.clone()));
             }
             if owner && self.polling_only() && record.source != Some(IngressSource::Polling) {
                 return Err(Error::validation("ingress.recovery","unconfirmed early-source claims require assessment before enabling polling-only admission"));
             }
+            let mut status = record.status;
+            status.committed = false;
+            status.durability = AdmissionDurability::Durable;
             if owner {
                 status.stage = ReceiptStage::Queued;
             }
@@ -1686,74 +1744,118 @@ impl EventIngress {
                 });
             }
         }
-        let mut state = self.0.state.lock().unwrap();
-        for mut conflict in recovery.conflicts {
-            if !conflict.validate() || conflict.bot_id != bot {
-                return Err(Error::validation(
-                    "ingress.recovery",
-                    "invalid stored conflict diagnostics",
-                ));
-            }
-            if conflict.disposition == ConflictDisposition::PollingConfirmed {
-                self.remember(&mut state, conflict)?;
-                continue;
-            }
-            let claim = state.claims.get_mut(&conflict.event_id).ok_or_else(|| {
-                Error::validation("ingress.recovery", "conflict requires its retained receipt")
-            })?;
-            if let Some(retirement) = &claim.retirement {
-                // The complete conflict multiset was validated before restoration.
-                conflict.disposition = if retirement.state == EventRetirementState::PollingConfirmed
+        {
+            let mut state = self.0.state.lock().unwrap();
+            for mut conflict in recovery.conflicts {
+                if !conflict.validate() || conflict.bot_id != bot {
+                    return Err(Error::validation(
+                        "ingress.recovery",
+                        "invalid stored conflict diagnostics",
+                    ));
+                }
+                if conflict.disposition == ConflictDisposition::PollingConfirmed {
+                    self.remember(&mut state, conflict)?;
+                    continue;
+                }
+                let claim = state.claims.get_mut(&conflict.event_id).ok_or_else(|| {
+                    Error::validation("ingress.recovery", "conflict requires its retained receipt")
+                })?;
+                if let Some(retirement) = &claim.retirement {
+                    // The complete conflict multiset was validated before restoration.
+                    conflict.disposition =
+                        if retirement.state == EventRetirementState::PollingConfirmed {
+                            ConflictDisposition::Retired
+                        } else {
+                            ConflictDisposition::AwaitingRetirementPolling
+                        };
+                    self.remember(&mut state, conflict)?;
+                    continue;
+                }
+                if hex(&claim.fingerprint) != conflict.existing_fingerprint
+                    || claim.status.borrow().stage != ReceiptStage::Completed
                 {
-                    ConflictDisposition::Retired
+                    return Err(Error::validation(
+                        "ingress.recovery",
+                        "conflict does not match a completed retained receipt",
+                    ));
+                }
+                if let Some(decision) = &claim.reconciliation {
+                    if !decision.covers(&conflict) {
+                        return Err(conflict.to_error());
+                    }
+                    if decision.state == TimestampReconciliationState::Confirmed {
+                        conflict.disposition = ConflictDisposition::Reconciled;
+                    } else {
+                        claim.conflict = true;
+                        claim.pending_since = Some(tokio::time::Instant::now());
+                        conflict.disposition = ConflictDisposition::AwaitingReconciliationPolling;
+                    }
+                    self.remember(&mut state, conflict)?;
+                    continue;
+                }
+                claim.conflict = true;
+                if self.0.config.conflict_policy == IngressConflictPolicy::RetainCompletedAndPoll
+                    && matches!(
+                        conflict.incoming_source,
+                        IngressSource::Webhook | IngressSource::Gateway
+                    )
+                {
+                    claim.pending_since = Some(tokio::time::Instant::now());
+                    conflict.disposition = ConflictDisposition::AwaitingPolling;
                 } else {
-                    ConflictDisposition::AwaitingRetirementPolling
-                };
-                self.remember(&mut state, conflict)?;
-                continue;
-            }
-            if hex(&claim.fingerprint) != conflict.existing_fingerprint
-                || claim.status.borrow().stage != ReceiptStage::Completed
-            {
-                return Err(Error::validation(
-                    "ingress.recovery",
-                    "conflict does not match a completed retained receipt",
-                ));
-            }
-            if let Some(decision) = &claim.reconciliation {
-                if !decision.covers(&conflict) {
                     return Err(conflict.to_error());
                 }
-                if decision.state == TimestampReconciliationState::Confirmed {
-                    conflict.disposition = ConflictDisposition::Reconciled;
-                } else {
-                    claim.conflict = true;
-                    claim.pending_since = Some(tokio::time::Instant::now());
-                    conflict.disposition = ConflictDisposition::AwaitingReconciliationPolling;
-                }
                 self.remember(&mut state, conflict)?;
-                continue;
             }
-            claim.conflict = true;
-            if self.0.config.conflict_policy == IngressConflictPolicy::RetainCompletedAndPoll
-                && matches!(
-                    conflict.incoming_source,
-                    IngressSource::Webhook | IngressSource::Gateway
-                )
-            {
-                claim.pending_since = Some(tokio::time::Instant::now());
-                conflict.disposition = ConflictDisposition::AwaitingPolling;
-            } else {
-                return Err(conflict.to_error());
+            state.recovery = pending;
+            if let Some(cursor) = recovery.polling_checkpoint {
+                state.status.committed_cursor = cursor;
             }
-            self.remember(&mut state, conflict)?;
-        }
-        state.recovery = pending;
-        if let Some(cursor) = recovery.polling_checkpoint {
-            state.status.committed_cursor = cursor;
         }
         if !uncertain.is_empty() {
-            return Err(Error::Remote(RemoteError{kind:"ingress_recovery".into(),message:"stored events have uncertain or failed effects; reconcile receipts before restarting intake".into(),status:None,retry_after:None,details:BTreeMap::from([("event_ids".into(),serde_json::json!(uncertain)),("retry_safety".into(),"do_not_replay_workflow".into()),("outcome".into(),"unknown".into())])}));
+            let blocked = || {
+                Error::Remote(RemoteError {
+                    kind: "ingress_recovery".into(),
+                    message: "stored events have uncertain or failed effects; reconcile receipts before restarting intake".into(),
+                    status: None,
+                    retry_after: None,
+                    details: BTreeMap::from([
+                        ("event_ids".into(), serde_json::json!(uncertain.keys().collect::<Vec<_>>())),
+                        ("retry_safety".into(), "do_not_replay_workflow".into()),
+                        ("outcome".into(), "unknown".into()),
+                    ]),
+                })
+            };
+            let (hook, client) = step_recovery.ok_or_else(blocked)?;
+            let mut steps = Vec::with_capacity(uncertain.len());
+            for record in uncertain.values() {
+                let original = record.as_ref().ok_or_else(blocked)?;
+                let step = hook.plan(original).await?.ok_or_else(blocked)?;
+                step.validate_record(original)?;
+                steps.push((original, step));
+            }
+            for (original, step) in steps {
+                self.ensure_claim_active(original.event.id)?;
+                self.persist(
+                    "begin_step_recovery",
+                    store.begin_step_recovery(original, &step),
+                )
+                .await?;
+                self.ensure_claim_active(original.event.id)?;
+                hook.resume(client, original, &step).await?;
+                let mut completed = original.clone();
+                completed.status.stage = ReceiptStage::Completed;
+                completed.status.error = None;
+                completed.status.durability = AdmissionDurability::Durable;
+                completed.status.committed = false;
+                let status = completed.status.clone();
+                self.persist(
+                    "finish_step_recovery",
+                    store.finish_step_recovery(original, &step, completed),
+                )
+                .await?;
+                self.set_status(original.event.id, status);
+            }
         }
         Ok(recovery.polling_checkpoint)
     }
@@ -2141,7 +2243,7 @@ mod recovery_state_tests {
                 };
                 let ingress =
                     EventIngress::new(Default::default(), Some(Arc::new(Snapshot(recovery))));
-                let loaded = ingress.restore(bot, None).await;
+                let loaded = ingress.restore(bot, None, None).await;
                 assert_eq!(
                     loaded.is_err(),
                     matches!(stage, ReceiptStage::Started | ReceiptStage::Failed)

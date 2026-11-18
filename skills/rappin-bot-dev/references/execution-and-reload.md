@@ -58,7 +58,12 @@ remain terminal. Ordinary read recovery covers response acquisition.
 One episode shares `max_retry_wait` for advised/shared waits. Additional outage
 backoff has its own elapsed budget. Explicit `request_once` bypasses recovery.
 Known-unapplied write retries use `max_write_retries`, independently of reads.
-Never retry handlers, publication, storage or uncertain mutations as recovery.
+Read recovery does not retry handlers, publication, storage or uncertain
+mutations. For shared durable ingress, the parent can opt into
+`PersistenceConfig::step_recovery` for a journal-proven final unfinished step.
+Use the retained event fingerprint and versioned binding, claim one durable
+attempt, and finish it atomically. Use the same parent continuation for events
+from native and worker commands. Uncertain attempts require reconciliation.
 
 Inspect bot `availability_status()` for startup/intake, or client
 `read_availability_status()` for ordinary native/worker reads. Watch notifications

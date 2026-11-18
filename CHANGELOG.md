@@ -27,6 +27,10 @@
 - Share typed server, member, role, channel and message deletion operations across native and worker API transports.
 - Add opt-in prefix command dispatch for direct messages and retain credential-safe transport diagnostics in read availability reports.
 
+### Durable step recovery
+
+- Add an opt-in parent-side continuation for a proven unfinished step of a durable event originally handled by a native or worker command. Claim one recovery attempt atomically before effects. Archive the original receipt and persist completion before normal polling checkpoint advancement.
+
 ### Development cleanup
 
 - Require worker protocol 13. Remove older protocol negotiation, capability-switch builders and string-only IPC errors. Rebuild parent and workers together.

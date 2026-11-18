@@ -126,6 +126,9 @@ pub struct PersistenceConfig {
     pub ingress: Option<crate::IngressConfig>,
     /// Application-owned durable receipts. Supplying this enables shared ingress.
     pub store: Option<Arc<dyn crate::IngressStore>>,
+    /// Optional startup continuation for a proven unfinished step. Requires a
+    /// store that implements the atomic step recovery transactions.
+    pub step_recovery: Option<Arc<dyn crate::IngressStepRecovery>>,
 }
 impl PersistenceConfig {
     /// Use an explicit local checkpoint path.

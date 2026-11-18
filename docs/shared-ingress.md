@@ -85,8 +85,9 @@ promise.
 
 ## Consumer-owned durable receipts
 
-`BotBuilder::ingress_store(Arc<dyn IngressStore>)` enables shared ingress using an
-application-owned implementation. The asynchronous interface is:
+Set `settings.persistence.store = Some(store)` in `BotBuilder::configure` to
+enable shared ingress using an application-owned `IngressStore`.
+The asynchronous interface is:
 
 - `load(bot_id) -> Result<IngressRecovery>` returns the polling checkpoint and
   uncommitted `IngressRecord`s.
@@ -108,11 +109,59 @@ admission opens. Afterwards its checkpoint is authoritative; a cursor file is a
 mirror. A file may advance just before store checkpoint persistence fails, but
 restart still uses the older durable checkpoint and completed records to avoid
 executing them again. Missing checkpoints alongside stored records are rejected.
-Completed records suppress replay; only durable Queued/Unprocessed records known
-to precede Started can resume automatically. Started/Failed records block startup
-until the consumer reconciles them. No uncertain write or handler is retried.
-Persistence cannot atomically transact arbitrary external API effects with a local
-receipt; a crash after Started requires reconciliation.
+Completed records suppress replay. Durable Queued/Unprocessed records known to
+precede Started can reenter normal dispatch automatically. Started/Failed
+records block startup unless an opt-in step continuation or an approved
+[operator retirement](draining-and-retirement.md) resolves the barrier.
+
+## Resume a proven unfinished step
+
+Configure `settings.persistence.step_recovery` with an `Arc<dyn IngressStepRecovery>`
+alongside the durable store. The same parent-side hook serves original events
+handled by native commands and hot-reloaded workers. Keep the journal and
+continuation available to the parent across process and worker restarts. Normal
+command routing, listeners and failure callbacks are bypassed during recovery.
+The worker protocol is unchanged.
+
+1. During ordinary execution, save the authenticated bot ID, event ID,
+   `canonical_event_fingerprint`, a versioned command binding, stable step IDs,
+   and evidence for each effect. Record a submission marker before each external
+   attempt. A missing response after that marker leaves an unknown outcome.
+   The ingress store receives the full event before dispatch. Worker handlers
+   receive typed message or interaction data. Use its identity to join the
+   worker's journal entry to the retained outer event in shared storage. A
+   message UUID and the outer polling event ID are distinct.
+2. Implement read-only `plan` to match the retained event against the journal.
+   Return a `RecoveryStep` for the final unfinished step only when prior work
+   is accounted for and its own durable evidence proves it did not take effect.
+   Return `None` for missing evidence, an unrecognized binding or an ambiguous
+   outcome. Build the plan with `RecoveryStep::new` using the original record.
+   The SDK checks its bot, event ID and canonical fingerprint before attempting
+   recovery. Recovery runs before cogs are installed, commands are published,
+   or intake opens.
+3. Implement `IngressStore::begin_step_recovery` to compare the retained receipt
+   and journal evidence in one durable transaction, then claim one attempt for
+   the event under the same exclusive bot lease used for intake. Reject a
+   pre-existing attempt even if the proposed step or evidence ID changed. Keep
+   the old receipt and checkpoint until the new step is confirmed.
+4. Implement `resume` to recheck application authority and execute only the
+   planned step using the parent's client. On success,
+   `IngressStore::finish_step_recovery` atomically archives the original receipt
+   and the attempt, and replaces the active receipt with Completed. The ordinary
+   ordered polling checkpoint still needs to cover the event.
+
+A crash, callback error or uncertain completion write leaves the attempt for
+explicit reconciliation. Include both the original execution and the recovery
+attempt when assessing retirement. Load the store before deciding whether a
+completion write committed. Repolling or restarting cannot authorize a second attempt.
+Polling-only admission permits these continuations only for events originally
+admitted through polling. Retired/conflicting receipts retain their existing rules.
+
+Yapin JSON message nonces are scoped to a documented 10-minute window. Persist
+the nonce before the original JSON send if your application uses it for separate
+reconciliation. Multipart attachment sends and outgoing webhook posts have
+no equivalent guarantee in the bundled contract. A timeout on either requires
+authoritative evidence or operator assessment before proceeding.
 
 ## Runnable loopback example
 

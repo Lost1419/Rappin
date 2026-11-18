@@ -47,9 +47,10 @@ an asynchronous persistence operation.
 Dropping/aborting the run future is **hard cancellation**, not graceful draining.
 Cancelled futures cannot return a result or run an error callback. Shared in-memory
 receipts retain interruption evidence; durable Started receipts remain uncertain
-and block recovery. Ordinary intake has no durable receipt ledger: the consumer
-must journal effects if it requires crash/restart reconciliation. Never restart a
-process or replay a command solely because a handler was cancelled.
+and block recovery by default. With shared durable ingress, a separately
+journaled final step can use the [startup continuation](shared-ingress.md#resume-a-proven-unfinished-step)
+when the application proves it is safe. Ordinary intake has no durable receipt
+ledger. A cancelled handler alone gives no authority to rerun it.
 
 With feature `gateway`, `GatewayRequestStatus::last_disconnect` retains a structured
 connection cause. Request error JSON keeps `kind: gateway_request`, `submitted`,

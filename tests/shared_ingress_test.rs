@@ -280,6 +280,8 @@ struct Store {
     release_conflict: Notify,
     fail_reconciliation: AtomicUsize,
     fail_retirement: AtomicUsize,
+    recovery_attempt: Mutex<Option<(IngressRecord, RecoveryStep)>>,
+    fail_recovery_finish: AtomicBool,
     retirement_writes: AtomicUsize,
     retirement_audit: Mutex<Vec<(EventRetirement, IngressRecord)>>,
     reconciliation_writes: AtomicUsize,
@@ -304,6 +306,54 @@ impl IngressStore for Store {
         data.records.push(record);
         Ok(())
     }
+    async fn begin_step_recovery(
+        &self,
+        original: &IngressRecord,
+        step: &RecoveryStep,
+    ) -> Result<()> {
+        let mut attempt = self.recovery_attempt.lock().unwrap();
+        if attempt.is_some() {
+            return Err(Error::Config("recovery already attempted".into()));
+        }
+        let data = self.data.lock().unwrap();
+        let saved = data
+            .records
+            .iter()
+            .find(|record| record.event.id == original.event.id)
+            .unwrap();
+        step.validate_record(saved)?;
+        assert_eq!(
+            serde_json::to_value(saved).unwrap(),
+            serde_json::to_value(original).unwrap()
+        );
+        *attempt = Some((original.clone(), step.clone()));
+        Ok(())
+    }
+
+    async fn finish_step_recovery(
+        &self,
+        original: &IngressRecord,
+        step: &RecoveryStep,
+        completed: IngressRecord,
+    ) -> Result<()> {
+        let attempt = self.recovery_attempt.lock().unwrap();
+        let (claimed, claimed_step) = attempt.as_ref().unwrap();
+        assert_eq!(claimed.event.id, completed.event.id);
+        assert_eq!(claimed.status.stage, original.status.stage);
+        assert_eq!(claimed_step, step);
+        if self.fail_recovery_finish.load(Ordering::SeqCst) {
+            return Err(Error::Config("recovery completion failed".into()));
+        }
+        let mut data = self.data.lock().unwrap();
+        let saved = data
+            .records
+            .iter_mut()
+            .find(|record| record.event.id == original.event.id)
+            .unwrap();
+        *saved = completed;
+        Ok(())
+    }
+
     async fn record_conflict(&self, report: IngressConflict) -> Result<AdmissionDurability> {
         if self.block_conflict.load(Ordering::SeqCst) {
             self.conflict_waiting.notify_one();
@@ -740,6 +790,137 @@ async fn uncertain_effects_and_cancelled_started_records_block_restart() {
     }
 }
 
+struct RecoverFollowUp {
+    store: Arc<Store>,
+    fingerprint: String,
+    has_proof: bool,
+    wrong_identity: bool,
+    calls: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl IngressStepRecovery for RecoverFollowUp {
+    async fn plan(&self, original: &IngressRecord) -> Result<Option<RecoveryStep>> {
+        assert_eq!(original.bot_id, bot_id());
+        assert_eq!(
+            canonical_event_fingerprint(&original.event)?,
+            self.fingerprint
+        );
+        assert_eq!(original.status.stage, ReceiptStage::Failed);
+        assert!(original.status.error.is_some());
+        if !self.has_proof {
+            return Ok(None);
+        }
+        let mut record = original.clone();
+        if self.wrong_identity {
+            record.event.data["content"] = json!("different retained event");
+        }
+        RecoveryStep::new(
+            &record,
+            OperationId::new("effect/v1")?,
+            OperationId::new("follow-up")?,
+            OperationId::new(format!("journal/{}", original.event.id))?,
+        )
+        .map(Some)
+    }
+
+    async fn resume(
+        &self,
+        _: &Client,
+        original: &IngressRecord,
+        step: &RecoveryStep,
+    ) -> Result<()> {
+        let attempt = self.store.recovery_attempt.lock().unwrap();
+        let (claimed, claimed_step) = attempt.as_ref().expect("attempt must be durable first");
+        assert_eq!(claimed.event.id, original.event.id);
+        assert_eq!(claimed_step, step);
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn recovery_resumes_only_proven_step_and_never_repeats_an_unfinished_attempt() {
+    for (has_proof, wrong_identity, fail_finish) in [
+        (false, false, false),
+        (true, true, false),
+        (true, false, false),
+        (true, false, true),
+    ] {
+        let mut http = Http::new(vec![]).await;
+        let store = Arc::new(Store::default());
+        let original = event(10, "effect");
+        let bot = builder(&http)
+            .configure(|settings| settings.persistence.store = Some(store.clone()))
+            .command("effect", "make a failed receipt", |_| async {
+                Err(Error::Config("failed original workflow".into()))
+            })
+            .build()
+            .unwrap();
+        let ingress = bot.handle().ingress().unwrap();
+        let run = tokio::spawn(bot.run());
+        ingress.wait_ready().await.unwrap();
+        http.next()
+            .await
+            .send(json!({"events":[original],"last":10}))
+            .unwrap();
+        assert!(run.await.unwrap().is_err());
+
+        store
+            .fail_recovery_finish
+            .store(fail_finish, Ordering::SeqCst);
+        let hook = Arc::new(RecoverFollowUp {
+            store: store.clone(),
+            fingerprint: canonical_event_fingerprint(&original).unwrap(),
+            has_proof,
+            wrong_identity,
+            calls: AtomicUsize::new(0),
+        });
+        let restart = |http: &Http| {
+            builder(http)
+                .configure(|settings| {
+                    settings.persistence.store = Some(store.clone());
+                    settings.persistence.step_recovery = Some(hook.clone());
+                })
+                .command("effect", "never replay", |_| async {
+                    panic!("original command replayed")
+                })
+                .build()
+                .unwrap()
+        };
+        let bot = restart(&http);
+        let handle = bot.handle();
+        let ingress = handle.ingress().unwrap();
+        if !has_proof || wrong_identity || fail_finish {
+            assert!(bot.run().await.is_err());
+            assert!(ingress.wait_ready().await.is_err());
+            assert!(restart(&http).run().await.is_err());
+            assert_eq!(
+                store.data.lock().unwrap().records[0].status.stage,
+                ReceiptStage::Failed
+            );
+        } else {
+            let run = tokio::spawn(bot.run());
+            ingress.wait_ready().await.unwrap();
+            let status = ingress.receipt(10).unwrap().status();
+            assert_eq!(status.stage, ReceiptStage::Completed);
+            assert!(!status.committed);
+            http.next()
+                .await
+                .send(json!({"events":[original],"last":10}))
+                .unwrap();
+            until(|| store.data.lock().unwrap().polling_checkpoint == Some(10)).await;
+            handle.stop();
+            run.await.unwrap().unwrap();
+        }
+        assert_eq!(
+            hook.calls.load(Ordering::SeqCst),
+            usize::from(has_proof && !wrong_identity)
+        );
+        assert_eq!(http.posts.load(Ordering::SeqCst), 0);
+    }
+}
+
 #[tokio::test]
 async fn filesystem_cursor_failure_keeps_completed_evidence_and_durable_receipts() {
     let mut http = Http::new(vec![]).await;
@@ -796,6 +977,7 @@ use rappin::{*, hot_reload::WorkerCog};
  WorkerCog::new("shared-worker")
  .command("worker","reply",|ctx|async move {ctx.reply("worker executed once").await})
  .command("reject","reject",|_|async {Err(CommandError::Denied("worker policy denied".into()).into())})
+ .command("effect","fail before follow-up",|_|async {Err(Error::Config("worker step not submitted".into()))})
  .run().await
 }
 "#).unwrap();
@@ -807,7 +989,9 @@ use rappin::{*, hot_reload::WorkerCog};
     .await;
     let failures = Arc::new(AtomicUsize::new(0));
     let f = failures.clone();
+    let store = Arc::new(Store::default());
     let bot = builder(&http)
+        .configure(|settings| settings.persistence.store = Some(store.clone()))
         .message_gate(|ctx| async move {
             Ok(if ctx.content() == "denied" {
                 MessageDisposition::Handled
@@ -818,8 +1002,11 @@ use rappin::{*, hot_reload::WorkerCog};
         .on_command_failure(move |_, failure| {
             let f = f.clone();
             async move {
-                assert_eq!(failure.error.kind, "command");
-                f.fetch_add(1, Ordering::SeqCst);
+                if failure.error.kind == "command" {
+                    f.fetch_add(1, Ordering::SeqCst);
+                } else {
+                    assert_eq!(failure.error.kind, "configuration");
+                }
                 Ok(FailureDisposition::Default)
             }
         })
@@ -857,9 +1044,45 @@ use rappin::{*, hot_reload::WorkerCog};
     assert_eq!(http.posts.load(Ordering::SeqCst), 2);
     assert_eq!(failures.load(Ordering::SeqCst), 1);
     assert_eq!(reload.process_id().await, pid);
+    let original = event(40, "effect");
+    http.next()
+        .await
+        .send(json!({"events":[original],"last":40}))
+        .unwrap();
+    assert!(run.await.unwrap().is_err());
+    reload.unload().await.unwrap();
+
+    let hook = Arc::new(RecoverFollowUp {
+        store: store.clone(),
+        fingerprint: canonical_event_fingerprint(&original).unwrap(),
+        has_proof: true,
+        wrong_identity: false,
+        calls: AtomicUsize::new(0),
+    });
+    let bot = builder(&http)
+        .configure(|settings| {
+            settings.persistence.store = Some(store.clone());
+            settings.persistence.step_recovery = Some(hook.clone());
+        })
+        .build()
+        .unwrap();
+    let handle = bot.handle();
+    let ingress = handle.ingress().unwrap();
+    let run = tokio::spawn(bot.run());
+    ingress.wait_ready().await.unwrap();
+    assert_eq!(
+        ingress.receipt(40).unwrap().status().stage,
+        ReceiptStage::Completed
+    );
+    http.next()
+        .await
+        .send(json!({"events":[original],"last":40}))
+        .unwrap();
+    until(|| store.data.lock().unwrap().polling_checkpoint == Some(40)).await;
+    assert_eq!(hook.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(http.posts.load(Ordering::SeqCst), 2);
     handle.stop();
     run.await.unwrap().unwrap();
-    reload.unload().await.unwrap();
     // Unload releases the generation; its asynchronous shutdown must finish
     // before Windows can remove the worker's current working directory.
     tokio::time::timeout(Duration::from_secs(5), async {

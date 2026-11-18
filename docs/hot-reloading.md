@@ -268,6 +268,11 @@ are 64 KiB, total upload data is bounded to 12 MiB and ordinary frames to 1 MiB.
 Rebuild the parent and every worker together when migrating from 0.1 or an earlier
 0.2.0 preview. Unsupported versions fail before routes are published.
 
+During durable startup recovery, the parent can
+[resume a proven unfinished step](https://github.com/Lost1419/Rappin/blob/dev/docs/shared-ingress.md#resume-a-proven-unfinished-step)
+from a worker command's journal. The continuation runs in the parent before
+intake opens, without dispatching the worker command again.
+
 Use `command_spec` for typed definitions, `command_typed` for its single-call
 convenience form, or `dynamic_command` for a runtime schema. They share registration,
 alias/group routing and help metadata. Preparation validates available pure
