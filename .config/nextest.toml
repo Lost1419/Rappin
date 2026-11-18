@@ -1,0 +1,6 @@
+[test-groups.worker-builds]
+max-threads = 2
+
+[[profile.default.overrides]]
+filter = 'binary(~worker_test) | binary(hot_reload_test) | binary(handler_failures_test) | binary(shared_ingress_test) | binary(unified_command_test) | binary(sdk_updates_test) | binary(scaffold_test) | binary(derive_test)'
+test-group = 'worker-builds'

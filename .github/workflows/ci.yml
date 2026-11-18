@@ -260,10 +260,31 @@ jobs:
       - name: Clippy check
         run: cargo clippy --workspace --all-features --all-targets -- -D warnings
 
+      - name: Install nextest on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          tool_dir="$RUNNER_TEMP/rappin-nextest"
+          mkdir -p "$tool_dir"
+          archive="$tool_dir/cargo-nextest.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.152/cargo-nextest-0.9.152-universal-apple-darwin.tar.gz \
+            -o "$archive"
+          echo "2fadf57df4243e691f088ee3bff4f4ab9af16da0c95a1db84b5cb1685e098a76  $archive" | shasum -a 256 --check
+          tar -xzf "$archive" -C "$tool_dir" cargo-nextest
+          echo "$tool_dir" >> "$GITHUB_PATH"
+
       - name: Run tests
+        if: runner.os != 'macOS'
         env:
           RAPPIN_TEST_WORKER_TARGET: ${{ runner.temp }}/rappin-test-workers
-        run: cargo test --workspace --all-features --all-targets
+        run: cargo test --locked --workspace --all-features --all-targets
+
+      - name: Run tests with nextest
+        if: runner.os == 'macOS'
+        env:
+          RAPPIN_TEST_WORKER_TARGET: ${{ runner.temp }}/rappin-test-workers
+        run: cargo nextest run --locked --workspace --all-features --all-targets
 
       - name: Check examples
         run: cargo check --examples
