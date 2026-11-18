@@ -317,6 +317,28 @@ fn read_error_details(error: &Error) -> serde_json::Value {
     details
 }
 
+// Keep retry events independent of user input and remote error messages.
+pub(crate) fn retry_trace_cause(error: &Error) -> &'static str {
+    match error {
+        Error::Gateway(error) => error.reason(),
+        Error::Http(error) if error.is_timeout() => "timeout",
+        Error::Http(error) if error.is_connect() => "connection",
+        Error::Http(error) if error.is_body() => "body",
+        Error::Http(_) => "transport",
+        Error::Remote(error)
+            if error
+                .details
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                == Some("event_backpressure") =>
+        {
+            "event_backpressure"
+        }
+        _ if error.status_code().is_some() => "http_status",
+        _ => "other",
+    }
+}
+
 fn retryable_gateway_close(code: Option<u16>) -> bool {
     matches!(code, None | Some(1000 | 1001 | 1006 | 1011 | 1012 | 1013))
 }
@@ -552,6 +574,15 @@ impl Episode {
             s.state = AvailabilityState::Waiting;
             s.next_delay = Some(delay);
         });
+        tracing::debug!(
+            phase = ?self.phase,
+            attempt = self.attempts,
+            cause = retry_trace_cause(&error),
+            status = error.status_code(),
+            close_code = error.gateway_close_code(),
+            delay_ms = delay.as_millis() as u64,
+            "read availability retry scheduled"
+        );
         self.waiting = Some(Instant::now());
         self.advised_wait = error.retry_after().unwrap_or_default();
         let cancelled = tokio::select! {
@@ -574,6 +605,12 @@ impl Episode {
         });
         if self.attempts > 1 {
             self.telemetry.update(|s| s.recoveries += 1);
+            tracing::debug!(
+                phase = ?self.phase,
+                attempts = self.attempts,
+                elapsed_ms = self.started.elapsed().as_millis() as u64,
+                "read availability recovered"
+            );
         }
     }
     fn end_wait(&mut self) {

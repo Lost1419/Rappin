@@ -144,3 +144,34 @@ pub async fn routed_mock(
     });
     (format!("http://{address}"), rx, task)
 }
+
+#[derive(Clone, Default)]
+pub struct TraceCapture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for TraceCapture {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl TraceCapture {
+    pub fn subscribe(&self) -> tracing::subscriber::DefaultGuard {
+        let capture = self.clone();
+        tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_writer(move || capture.clone())
+                .with_max_level(tracing::Level::DEBUG)
+                .with_ansi(false)
+                .finish(),
+        )
+    }
+
+    pub fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}

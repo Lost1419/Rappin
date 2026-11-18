@@ -1041,6 +1041,9 @@ impl Client {
                             });
                         }
                         warn!(
+                            method = label,
+                            route = %route,
+                            attempt = progress.attempts,
                             status = status.as_u16(),
                             delay_ms = delay.as_millis() as u64,
                             "API asked us to retry"

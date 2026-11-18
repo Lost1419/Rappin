@@ -926,7 +926,7 @@ pub enum GatewayError {
 }
 
 impl GatewayError {
-    fn reason(&self) -> &'static str {
+    pub(crate) fn reason(&self) -> &'static str {
         match self {
             Self::Disconnected => "peer_disconnected",
             Self::ConnectionReset => "connection_reset",

@@ -1107,9 +1107,12 @@ async fn gateway_preferred_keeps_polling_after_invalid_frames() {
     use rappin::gateway::GatewayRequestConfig;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
+    let capture = support::TraceCapture::default();
+    let _subscriber = capture.subscribe();
     for shared in [false, true] {
         for requests in [false, true] {
             for invalid in ["{", r#"{"op":"event","s":99,"d":{"id":"bad"}}"#] {
+                let reconnect = shared && !requests && invalid == "{";
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let address = listener.local_addr().unwrap();
                 let (send_invalid, wait_invalid) = oneshot::channel();
@@ -1134,6 +1137,26 @@ async fn gateway_preferred_keeps_polling_after_invalid_frames() {
                     wait_invalid.await.unwrap();
                     ws.send(Message::Text(invalid.into())).await.unwrap();
                     while ws.next().await.is_some() {}
+                    if reconnect {
+                        let (stream, _) = listener.accept().await.unwrap();
+                        let mut ws = accept_async(stream).await.unwrap();
+                        ws.send(Message::Text(
+                            json!({"op":"hello","heartbeat_interval":60000})
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                        ws.next().await.unwrap().unwrap();
+                        ws.send(Message::Text(
+                            json!({"op":"ready","seq":0,"requests":false})
+                                .to_string()
+                                .into(),
+                        ))
+                        .await
+                        .unwrap();
+                        while ws.next().await.is_some() {}
+                    }
                 });
                 let mut http = Http::new(vec![]).await;
                 let calls = Arc::new(AtomicUsize::new(0));
@@ -1193,6 +1216,9 @@ async fn gateway_preferred_keeps_polling_after_invalid_frames() {
                     .unwrap();
                 until(|| handle.transport_status().committed_cursor == 10).await;
                 assert_eq!(calls.load(Ordering::SeqCst), 1);
+                if reconnect {
+                    until(|| capture.text().contains("shared ingress gateway recovered")).await;
+                }
                 handle.stop();
                 tokio::time::timeout(Duration::from_secs(3), run)
                     .await
@@ -1206,6 +1232,13 @@ async fn gateway_preferred_keeps_polling_after_invalid_frames() {
             }
         }
     }
+    let trace = capture.text();
+    assert!(trace.lines().any(
+        |line| line.contains("shared ingress gateway switched to polling")
+            && line.contains("invalid_frame")
+            && line.contains("delay_secs=2")
+    ));
+    assert!(!trace.contains("id\":\"bad"));
 }
 
 #[cfg(feature = "gateway")]

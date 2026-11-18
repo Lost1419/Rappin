@@ -1,5 +1,11 @@
 # Read availability and role hierarchy
 
+With an application tracing subscriber, enable debug events for the `rappin`
+target to see when a read retry is scheduled and when an episode recovers.
+Shared ingress logs gateway fallback and recovery at info level, and repeated
+reconnects at debug level. HTTP retry warnings include the route template and
+attempt number. Retry events include classified causes and wait durations.
+
 ## Startup and intake availability
 
 `Bot::run` recovers transient startup and intake read failures by default, within

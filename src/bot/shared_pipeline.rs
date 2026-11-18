@@ -286,12 +286,17 @@ impl Bot {
                     .without_fallback().shared_delivery();
                 let mut after = last;
                 let mut failures = 0u32;
+                let mut reconnecting = false;
                 loop {
                     // Polling already supplies fallback and checkpoint authority.
                     // One read attempt keeps this source's retry ownership explicit.
                     match crate::client::single_attempt(gateway.poll(after)).await {
                         Ok(batch) => {
                             failures = 0;
+                            if reconnecting && bot.transport_status().active == Some(crate::EventTransport::Gateway) {
+                                reconnecting = false;
+                                tracing::info!("shared ingress gateway recovered");
+                            }
                             after = after.max(batch.last);
                             for event in batch.events {
                                 if input.polling_only() {continue;}
@@ -323,17 +328,28 @@ impl Bot {
                                 },
                                 _ => None,
                             };
-                            if error.is_unauthorized() || wait.is_none() {
+                            let Some(wait) = wait.filter(|_| !error.is_unauthorized()) else {
                                 let _ = tx.send(Err(error)).await;
                                 return;
-                            }
+                            };
+                            let cause = crate::availability::retry_trace_cause(&error);
+                            let close_code = error.gateway_close_code();
+                            let reason = match (close_code, cause) {
+                                (Some(4003), _) => crate::FallbackReason::AccessDenied,
+                                (_, "event_backpressure") => crate::FallbackReason::Backpressure,
+                                _ => crate::FallbackReason::Unavailable,
+                            };
                             bot.inner.telemetry.update(|status| {
                                 status.active = Some(crate::EventTransport::Polling);
-                                status.fallback = Some(if error.gateway_close_code() == Some(4003) {
-                                    crate::FallbackReason::AccessDenied
-                                } else if error.to_json()["reason"] == "event_backpressure" {crate::FallbackReason::Backpressure} else { crate::FallbackReason::Unavailable });
+                                status.fallback = Some(reason);
                             });
-                            tokio::time::sleep(std::time::Duration::from_secs(wait.unwrap())).await;
+                            if reconnecting {
+                                tracing::debug!(cause, close_code, delay_secs = wait, "shared ingress gateway reconnect scheduled");
+                            } else {
+                                tracing::info!(?reason, cause, close_code, delay_secs = wait, "shared ingress gateway switched to polling");
+                                reconnecting = true;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
                         }
                     }
                 }
