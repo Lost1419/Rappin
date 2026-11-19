@@ -1,4 +1,5 @@
 /target
+/.ci-logs/
 /state/
 /.rappin-voice/
 /node_modules/
