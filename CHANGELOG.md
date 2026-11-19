@@ -24,6 +24,7 @@ and rebuild instructions, including changes since 0.1.34 and 0.1.35.
 - Use the existing message and channel APIs for nonce sends and private channel audiences. Retain nonce deduplication receipts, returned allowlists and structured platform errors.
 - Publish typed slash options from command specs, parse positional and named form submissions, acknowledge unanswered slash commands, and support classic ephemeral button updates.
 - Dispatch typed message edits/deletions and bot membership notifications through native, cog and worker listeners. Update the bundled contract and capability availability.
+- Yapin currently restricts the 11 `bot_api_round2` operations to test servers: channel and category override reads and writes, `GET /channels/{id}/permissions/{target}`, `GET /servers/{id}/members/{uid}/permissions`, `GET /servers/{id}/roles/{rid}`, `PATCH /servers/{id}/roles` and `GET /resolve/{id}`. Outside test servers they answer `feature_off`, except `resolve`, which answers 404 for every ID. Their capability entries stay `test_servers_only`; all other operations responded in a live check on 2026-11-19 (API 1.5.0, build 5f9c034).
 
 ### Migration feedback
 
