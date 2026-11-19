@@ -59,7 +59,7 @@ Protocol 13 carries `RemoteError` with kind, message, HTTP status, retry hints,
 partial receipts and uncertain outcomes. Error JSON is redacted before crossing
 the parent/worker boundary. Rebuild both executables together. Unsupported
 protocol versions fail at candidate startup. The explicit
-[failure policy](https://github.com/Lost1419/Rappin/blob/dev/docs/handler-failures.md)
+[failure policy](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md)
 controls completion after command and button failures.
 Typed worker
 parse errors reach the parent policy, and only recognized input/check rejections

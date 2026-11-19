@@ -43,7 +43,7 @@ Only the root `dice` is advertised to Yapin; nested paths and aliases are local
 routing. Names are normalized to lowercase and paths have at most eight segments.
 Invalid arguments and denied checks complete after their error/usage reply
 succeeds. Failed replies and unexpected errors stop intake by default. The
-[handler failure policy](https://github.com/Lost1419/Rappin/blob/dev/docs/handler-failures.md) provides explicit completion
+[handler failure policy](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md) provides explicit completion
 callbacks and retains original and reply causes.
 The same specs can be registered with `CogBuilder::command_spec` or returned by
 `Cog::registered_commands`. Metadata, checks, and aliases follow cog replacement.
@@ -173,7 +173,7 @@ Polling is the default and needs no public HTTP endpoint. To prefer WebSocket
 delivery, enable the `gateway` feature and select the default gateway:
 
 ```toml
-rappin-rs = { git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "0.2.0-dev.3", features = ["gateway"] }
+rappin-rs = { version = "0.2.0", features = ["gateway"] }
 ```
 
 ```rust,no_run
@@ -287,7 +287,7 @@ work. Waits count toward the 128 requests per invocation budget. In-flight old
 workers can finish their existing waits during reload; subscriptions do not migrate
 into the new process. Structured errors and parent-owned permission lookups are
 available in protocol 13. Rebuild the parent and all workers together when migrating
-from 0.1 or an earlier 0.2.0 preview. Other versions fail during candidate startup.
+from 0.1 or a 0.2.0-dev prerelease. Other versions fail during candidate startup.
 All worker routes support structured errors, operation identities, UI callbacks
 and single-attempt API requests. The old capability-switch methods are removed.
 
@@ -296,6 +296,6 @@ Typed `command_spec` and `command_typed` routes share registration with runtime
 preparation schemas when available. Worker checks are deferred during preparation
 and run again before the handler. Custom checks implement one `CommandCheck::check` over `CommandContext`.
 
-See [hot-reloading](https://github.com/Lost1419/Rappin/blob/dev/docs/hot-reloading.md) and `examples/hot_cog_worker.rs`. There is no
+See [hot-reloading](https://github.com/Lost1419/Rappin/blob/main/docs/hot-reloading.md) and `examples/hot_cog_worker.rs`. There is no
 JavaScript-style manager hierarchy, hidden resource fetching, general middleware
 pipeline, or advanced voice player added by these APIs.

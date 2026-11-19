@@ -1,6 +1,6 @@
 # Troubleshooting paths
 
-These instructions describe the 0.2.0 preview. For a deployment on 0.1, use the
+These instructions describe Rappin 0.2. For a deployment on 0.1, use the
 contract for its installed version.
 
 ## Slow replies
@@ -137,7 +137,7 @@ API 1.4 computed permission reads can establish requester and bot access
 independently. Use `get_member_permissions` with the actual server/user/channel.
 A missing flag stays unknown. Rollout-related 403 responses concern availability.
 Resource lifecycle worker listeners require protocol 13. See the
-[API 1.4 guide](https://github.com/Lost1419/Rappin/blob/dev/docs/resources.md).
+[API 1.4 guide](https://github.com/Lost1419/Rappin/blob/main/docs/resources.md).
 
 ## API origin
 

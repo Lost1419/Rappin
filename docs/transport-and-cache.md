@@ -127,4 +127,4 @@ existing JSON without those fields continues to decode.
 Unchanged event checkpoints no longer trigger file writes. Advancing checkpoints
 still use atomic replacement and file synchronization after ordered handler
 completion. An unprocessed handler failure blocks progress at that event;
-the completed prefix can commit. See [handler failures](https://github.com/Lost1419/Rappin/blob/dev/docs/handler-failures.md).
+the completed prefix can commit. See [handler failures](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md).

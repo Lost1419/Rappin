@@ -18,7 +18,7 @@
 //!
 //! ## First bot
 //!
-//! The [tutorial](https://github.com/Lost1419/Rappin/blob/dev/docs/tutorial.md)
+//! The [tutorial](https://github.com/Lost1419/Rappin/blob/main/docs/tutorial.md)
 //! teaches commands, typed arguments, buttons, state and cogs in order.
 //!
 //! ```no_run

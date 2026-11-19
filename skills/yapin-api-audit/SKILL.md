@@ -10,15 +10,15 @@ chat tests or release publication; follow the user's actual requested scope.
 For a consumer compatibility question, determine the exact `rappin-rs` version
 from the application's lockfile or the user's selection. Do not silently compare
 against main/latest or upgrade the application. Read the public
-[support report](https://github.com/Lost1419/Rappin/blob/dev/docs/api-support.md) when operating from a repository
+[support report](https://github.com/Lost1419/Rappin/blob/main/docs/api-support.md) when operating from a repository
 checkout; standalone installations can use the bundled reviewed coverage below.
 The report is a dated source assessment, not a guarantee about live permissions.
 
 The scripts require Python 3.11+, use only its standard library, and need no Rust
 compiler. For a version-pinned source download and support matrix, read
 [release comparison and report usage](references/reports.md). The downloader
-verifies the crates.io checksum without building or executing the crate. For the
-unpublished 0.2.0 preview, record the checkout's commit, compare its `docs/openapi.json`
+verifies the crates.io checksum without building or executing the crate. For an
+unpublished development checkout, record the checkout's commit, compare its `docs/openapi.json`
 with a fresh snapshot, and review the source at that commit. Published-crate
 coverage assertions require matching registry and snapshot evidence.
 

@@ -1,9 +1,9 @@
 # Start a Rust bot project
 
-Install the development CLI, then create a project.
+Install the CLI, then create a project.
 
 ```sh
-cargo install --git https://github.com/Lost1419/Rappin --branch dev --features cli --locked
+cargo install rappin-rs --features cli --locked
 rappin init my-bot --human
 rappin init polling-bot --template basic --prefix '?'
 rappin init worker-bot --template worker --human
@@ -27,8 +27,8 @@ static prefixes with `prefixes`, or provide a database-backed resolver through
 `prefixes_with`. The [tutorial](tutorial.md) shows how to add commands and state.
 
 Generated projects require the generating CLI's Rust minimum and SDK version.
-Development versions use the GitHub `dev` dependency. Published stable versions
-use crates.io. Cargo builds can access the network. Tests compile every starter
+Published versions use crates.io; development builds from a `-dev.` version use
+the GitHub `dev` branch. Cargo builds can access the network. Tests compile every starter
 against the exact checkout under test with its declared features.
 
 The project includes an ignored `state/events.json` checkpoint. Give each cursor

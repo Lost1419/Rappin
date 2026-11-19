@@ -1,8 +1,8 @@
 # Migrate from 0.1 to 0.2.0
 
-This development branch contains breaking changes. Keep an existing deployment's
-dependency and worker binaries pinned while updating a separate checkout. Use
-the `dev` branch for the preview. Published 0.1 references remain version-specific.
+Rappin 0.2.0 contains breaking changes. Keep an existing deployment's
+dependency and worker binaries pinned while updating a separate checkout, then
+depend on `rappin-rs = "0.2.0"`. Published 0.1 references remain version-specific.
 If you're upgrading from 0.1.34 or 0.1.35, see the
 [late 0.1 migration notes](#migrate-features-added-in-0134-and-0135).
 

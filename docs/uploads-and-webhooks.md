@@ -57,7 +57,7 @@ base64/data URLs with
 not a failed write. Do not upload again just because no emoji is returned yet.
 
 The current platform schema documents a 2 MiB decoded upload limit.
-See the [dated API support report](https://github.com/Lost1419/Rappin/blob/dev/docs/api-support-0.1.28.md)
+See the [dated API support report](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.28.md)
 for the older release's limits.
 
 Create webhooks with `CreateBotWebhook::new(name)` and post a `WebhookMessage`.

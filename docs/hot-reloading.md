@@ -38,7 +38,7 @@ edition = "2021"
 default-run = "my-bot"
 
 [dependencies]
-rappin = { package = "rappin-rs", git = "https://github.com/Lost1419/Rappin", branch = "dev", version = "0.2.0-dev.3", features = ["hot-reload"] }
+rappin = { package = "rappin-rs", version = "0.2.0", features = ["hot-reload"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -242,7 +242,7 @@ Worker-local memory starts fresh each generation. Keep durable state in a databa
 
 Default limits are a five-minute build, ten-second startup, and 120-second handler invocation, including time queued behind another invocation in that worker. Customize the public `WorkerProject::{build_timeout, startup_timeout, handler_timeout}` fields before loading. IPC frames are limited to 1 MiB, with at most 128 API requests per invocation.
 
-Runtime crashes, protocol errors, and handler timeouts follow the bot's normal handler-error policy; they are not silently retried or automatically restarted. Reload the worker to recover an invalid connection. A timed-out write may already have reached the API, so check its outcome before retrying. Failed event batches retain the normal cursor/replay behavior. Fallible cog listeners propagate failures through the message or event failure policy; incomplete work retains its checkpoint barrier. All event/cog listeners return fallible results. See [handler failures](https://github.com/Lost1419/Rappin/blob/dev/docs/handler-failures.md) and [message gates](https://github.com/Lost1419/Rappin/blob/dev/docs/message-policy.md).
+Runtime crashes, protocol errors, and handler timeouts follow the bot's normal handler-error policy; they are not silently retried or automatically restarted. Reload the worker to recover an invalid connection. A timed-out write may already have reached the API, so check its outcome before retrying. Failed event batches retain the normal cursor/replay behavior. Fallible cog listeners propagate failures through the message or event failure policy; incomplete work retains its checkpoint barrier. All event/cog listeners return fallible results. See [handler failures](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md) and [message gates](https://github.com/Lost1419/Rappin/blob/main/docs/message-policy.md).
 
 ## Credential boundary
 
@@ -255,7 +255,7 @@ Worker code, dependencies, Cargo configuration, and build scripts must be truste
 Use `command_spec` / `WorkerContext::parse` for typed commands and live help
 metadata, `prompt_for_reply`, and `wait_for_event`. The parent registers prompt
 waiters before posting and owns the authenticated transport. See the
-[Rust workflow guide](https://github.com/Lost1419/Rappin/blob/dev/docs/rust-bots.md#hot-workers) for bounds, cancellation, and
+[Rust workflow guide](https://github.com/Lost1419/Rappin/blob/main/docs/rust-bots.md#hot-workers) for bounds, cancellation, and
 protocol compatibility. The worker example includes `roll` and `question`.
 
 ### Worker transport and command definitions
@@ -265,11 +265,11 @@ slash option declarations, typed change events, structured errors, message
 completion and operation IDs for checked message-command invocations. It also
 supports permission lookups, UI callbacks, public reads and bounded uploads. Upload chunks
 are 64 KiB, total upload data is bounded to 12 MiB and ordinary frames to 1 MiB.
-Rebuild the parent and every worker together when migrating from 0.1 or an earlier
-0.2.0 preview. Unsupported versions fail before routes are published.
+Rebuild the parent and every worker together when migrating from 0.1 or a
+0.2.0-dev prerelease. Unsupported versions fail before routes are published.
 
 During durable startup recovery, the parent can
-[resume a proven unfinished step](https://github.com/Lost1419/Rappin/blob/dev/docs/shared-ingress.md#resume-a-proven-unfinished-step)
+[resume a proven unfinished step](https://github.com/Lost1419/Rappin/blob/main/docs/shared-ingress.md#resume-a-proven-unfinished-step)
 from a worker command's journal. The continuation runs in the parent before
 intake opens, without dispatching the worker command again.
 

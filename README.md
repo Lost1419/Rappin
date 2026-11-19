@@ -1,46 +1,24 @@
 # Rappin 🦀
 
-[![crates.io prerelease 0.2.0-dev.3](https://img.shields.io/badge/crates.io-0.2.0--dev.3-orange)](https://crates.io/crates/rappin-rs/0.2.0-dev.3)
-[![Dev test suite](https://github.com/Lost1419/Rappin/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/Lost1419/Rappin/actions/workflows/ci.yml?query=branch%3Adev)
-[![Dev preview binaries](https://github.com/Lost1419/Rappin/actions/workflows/dev-preview.yml/badge.svg?branch=dev)](https://github.com/Lost1419/Rappin/actions/workflows/dev-preview.yml?query=branch%3Adev)
+[![Crates.io](https://img.shields.io/crates/v/rappin-rs.svg)](https://crates.io/crates/rappin-rs)
+[![Docs.rs](https://docs.rs/rappin-rs/badge.svg)](https://docs.rs/rappin-rs)
+[![CI](https://github.com/Lost1419/Rappin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Lost1419/Rappin/actions/workflows/ci.yml?query=branch%3Amain)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 An async Rust SDK and bot framework for [Yapin](https://www.yapin.gg).
 Build commands, buttons and forms, organize them into cogs, and use the API from
 native Rust handlers or reloadable Rust workers.
 
-**This branch contains the Rappin 0.2.0 development preview.** Follow the
-[migration guide](docs/migration-0.2.md) when moving an existing bot to this branch.
-The [published release](https://crates.io/crates/rappin-rs) has its own versioned reference.
-
-## Dev preview builds
-
-Pushes to `dev` that change files other than Markdown build a new preview.
-Open the latest successful **Preview binaries** run on the
-[dev preview workflow page](https://github.com/Lost1419/Rappin/actions/workflows/dev-preview.yml?query=branch%3Adev).
-The run summary links to the Linux x86-64, macOS ARM64 and Windows x86-64 downloads.
-With an authenticated GitHub CLI, download all three from the latest successful run.
-
-```sh
-run_id=$(gh run list --repo Lost1419/Rappin --workflow dev-preview.yml \
-  --branch dev --status success --limit 1 --json databaseId --jq '.[0].databaseId')
-test -n "$run_id" && gh run download "$run_id" --repo Lost1419/Rappin --dir rappin-preview
-```
-
-The Cargo version identifies the preview milestone (currently `0.2.0-dev.3`).
-`rappin --version` shows the checkout's short Git commit when available. For
-example, `rappin 0.2.0-dev.1 (3322694)` identifies one build of that milestone.
-GitHub retains the artifacts for 14 days. Each includes the full source commit,
-build date and SHA-256 checksum. To try one alongside an existing installation,
-extract the artifact and run the executable by its full path. On Unix, give the
-extracted executable permission to run with `chmod +x rappin`.
+Rappin 0.2.0 contains breaking changes from 0.1. Follow the
+[migration guide](docs/migration-0.2.md) when moving an existing bot to 0.2.
 
 ## Start a bot
 
 Requires **Rust 1.89+** and a bot token created in Yapin's developer settings.
-Add the bot to your server, then install the development CLI and create a project.
+Add the bot to your server, then install the CLI and create a project.
 
 ```sh
-cargo install --git https://github.com/Lost1419/Rappin --branch dev --features cli --locked
+cargo install rappin-rs --features cli --locked
 rappin init my-bot --human
 ```
 
@@ -140,4 +118,6 @@ See the [development guide](docs/development.md) for tests, documentation checks
 minimum Rust verification and smaller local builds. Technical release notes live
 in the [changelog](CHANGELOG.md).
 
-Licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
+## License
+
+Licensed under either [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.

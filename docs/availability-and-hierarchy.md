@@ -46,7 +46,7 @@ The transport's `availability` policy applies to startup `GET /me`, the initial 
 probe when there is no saved cursor, and subsequent polling/gateway reads. It
 does not retry cog loading, command synchronization, handlers, cursor writes or
 mutations. Successfully read batches still use the ordered completion/checkpoint
-policy described in [handler failures](https://github.com/Lost1419/Rappin/blob/dev/docs/handler-failures.md).
+policy described in [handler failures](https://github.com/Lost1419/Rappin/blob/main/docs/handler-failures.md).
 
 One episode covers a read and its recovery attempts. The first attempt counts;
 a successful read ends the episode and the next read gets a new budget. The
@@ -276,5 +276,5 @@ deletion or the enclosing command; reconcile the resulting role state first.
 
 No optional feature is required for native policies; `gateway` enables WebSocket
 intake and `hot-reload` enables worker composition. See the existing
-[capability bindings](https://github.com/Lost1419/Rappin/blob/dev/docs/capability-bindings.md) and [hot reload](https://github.com/Lost1419/Rappin/blob/dev/docs/hot-reloading.md)
+[capability bindings](https://github.com/Lost1419/Rappin/blob/main/docs/capability-bindings.md) and [hot reload](https://github.com/Lost1419/Rappin/blob/main/docs/hot-reloading.md)
 guides for registration and failure dispositions.

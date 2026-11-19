@@ -6,7 +6,7 @@ project enables the `gateway` and optional `derive` features and prints startup 
 
 ## 1. Get a response
 
-Install the development CLI and create a project using the commands in the
+Install the CLI and create a project using the commands in the
 [README](../README.md#start-a-bot). Create a bot in Yapin's developer settings,
 add it to your server, and set `YAPPER_BOT_TOKEN` in the bot process environment.
 Run `cargo run` in the generated directory. Send `!ping` and expect `pong`.
@@ -168,7 +168,7 @@ Worker command specs support the same argument metadata, aliases and groups.
 Built-in checks run through the parent-authenticated API. Custom checks need a
 worker implementation. Read-only preparation reports worker checks as deferred.
 These specs require protocol 13. Build the parent and workers from the same
-development revision. Compilation executes trusted build scripts and procedural macros.
+Rappin version. Compilation executes trusted build scripts and procedural macros.
 
 ## 8. Understand completion before deploying
 

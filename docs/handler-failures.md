@@ -4,7 +4,7 @@ Rappin distinguishes a completed rejection from an unfinished invocation. Native
 and worker commands/buttons share this policy on polling and WebSocket intake.
 Only the ordered completed prefix of events can be checkpointed.
 For a shared pre-dispatch gate or natural-language listener, use the additive
-[server-message policy](https://github.com/Lost1419/Rappin/blob/dev/docs/message-policy.md).
+[server-message policy](https://github.com/Lost1419/Rappin/blob/main/docs/message-policy.md).
 
 ## Defaults and classification
 

@@ -10,9 +10,9 @@ exposes `get_message_emojis`; rich send/edit/history preserve the new component 
 
 ## Agent skills
 
-Use [rappin](https://github.com/Lost1419/Rappin/blob/dev/skills/rappin/SKILL.md) for CLI/MCP operations,
-[rappin-bot-dev](https://github.com/Lost1419/Rappin/blob/dev/skills/rappin-bot-dev/SKILL.md) for Rust bot implementation,
-and [rappin-diagnostics](https://github.com/Lost1419/Rappin/blob/dev/skills/rappin-diagnostics/SKILL.md) for incidents.
+Use [rappin](https://github.com/Lost1419/Rappin/blob/main/skills/rappin/SKILL.md) for CLI/MCP operations,
+[rappin-bot-dev](https://github.com/Lost1419/Rappin/blob/main/skills/rappin-bot-dev/SKILL.md) for Rust bot implementation,
+and [rappin-diagnostics](https://github.com/Lost1419/Rappin/blob/main/skills/rappin-diagnostics/SKILL.md) for incidents.
 Each entrypoint links to task-specific references; load only the relevant ones.
 Install or refresh the complete skill folder in the agent's configured skill
 directory, including `references` and any `assets`. Updating this repository
@@ -21,7 +21,7 @@ to the application's selected dependency; CLI discovery describes its installed
 binary. Skill updates do not require changing an application's SDK dependency.
 
 For platform compatibility checks, use the public
-[yapin-api-audit](https://github.com/Lost1419/Rappin/blob/dev/skills/yapin-api-audit/SKILL.md) skill. It compares official
+[yapin-api-audit](https://github.com/Lost1419/Rappin/blob/main/skills/yapin-api-audit/SKILL.md) skill. It compares official
 contracts with a selected published crate and generates version-specific support
 reports. See [API support by release](api-support.md) for the initial reviewed
 matrix and its coverage limits. The skill requires Python 3.11+ and no bot token.

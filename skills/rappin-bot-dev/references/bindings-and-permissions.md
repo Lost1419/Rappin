@@ -48,7 +48,7 @@ computed member permissions, resource resolution, explicit override routes and
 role lookup/reordering. `ComputedPermissionsPolicy` supplies fresh channel access
 for each requested actor and preserves absent flags as Unknown. Compose other
 checks with application policy. Check endpoint rollout and keep platform 403
-causes. See [API 1.4 resources](https://github.com/Lost1419/Rappin/blob/dev/docs/resources.md).
+causes. See [API 1.4 resources](https://github.com/Lost1419/Rappin/blob/main/docs/resources.md).
 
 Resource lifecycle listeners use `on_resource_event` natively or
 `Listener::ResourceEvent` in workers. Both the parent and worker use protocol 13.

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — Unreleased
+## 0.2.0 — 2026-11-19
 
 See the [0.1 to 0.2.0 migration guide](docs/migration-0.2.md) for updated APIs
 and rebuild instructions, including changes since 0.1.34 and 0.1.35.
