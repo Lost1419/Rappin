@@ -74,11 +74,6 @@ fn files(options: &Options) -> Result<BTreeMap<&'static str, String>> {
         Template::Gateway => r#", features = ["gateway", "derive"]"#,
         Template::Worker => r#", features = ["gateway", "hot-reload", "derive"]"#,
     };
-    let source = if env!("CARGO_PKG_VERSION").contains("-dev.") {
-        ", git = \"https://github.com/Lost1419/Rappin\", branch = \"dev\""
-    } else {
-        ""
-    };
     let manifest = format!(
         r#"[package]
 name = "{name}"
@@ -88,7 +83,7 @@ rust-version = "{rust_version}"
 default-run = "{name}"
 
 [dependencies]
-rappin = {{ package = "rappin-rs", version = "{version}"{source}{features} }}
+rappin = {{ package = "rappin-rs", version = "{version}"{features} }}
 tokio = {{ version = "1", features = ["macros", "rt-multi-thread"] }}
 tracing-subscriber = "0.3"
 "#,

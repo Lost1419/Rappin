@@ -3,9 +3,9 @@ run-name: 'Test suite · ${{ github.head_ref || github.ref_name }} · #${{ githu
 
 on:
   push:
-    branches: [ main, master, dev ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main, master, dev ]
+    branches: [ main, master ]
   workflow_dispatch:
     inputs:
       full_suite:
@@ -206,11 +206,7 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - name: Check development consumers
-        if: github.ref == 'refs/heads/dev' || github.base_ref == 'dev' || github.head_ref == 'dev'
-        run: cargo test --locked --all-features --test beginner_test --test derive_test
       - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2
-        if: github.ref != 'refs/heads/dev' && github.base_ref != 'dev' && github.head_ref != 'dev'
         with:
           feature-group: all-features
 

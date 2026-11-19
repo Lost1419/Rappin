@@ -113,9 +113,15 @@ fn every_generated_template_compiles_offline_with_its_declared_features() {
         );
         // Compile generated code against the exact checkout under test, without registry publication.
         let dependency = generated["dependencies"]["rappin"].as_table_mut().unwrap();
-        for key in ["git", "branch", "version"] {
-            dependency.remove(key);
-        }
+        assert_eq!(
+            dependency.get("version").and_then(|v| v.as_str()),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
+        assert!(
+            !dependency.contains_key("git") && !dependency.contains_key("branch"),
+            "starters depend on crates.io for every version"
+        );
+        dependency.remove("version");
         dependency.insert("path".into(), env!("CARGO_MANIFEST_DIR").into());
         std::fs::write(&manifest, toml::to_string_pretty(&generated).unwrap()).unwrap();
         std::fs::copy(

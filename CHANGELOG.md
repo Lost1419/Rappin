@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- `rappin init` always depends on the exact SDK version from crates.io. Prerelease (`-dev.`) builds no longer point new projects at a GitHub branch.
+- Development moved from the `dev` branch to `main`; 0.1.x is archived on `release/0.1.x`.
+
 ## 0.2.0 — 2026-11-19
 
 See the [0.1 to 0.2.0 migration guide](docs/migration-0.2.md) for updated APIs

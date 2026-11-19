@@ -27,8 +27,8 @@ static prefixes with `prefixes`, or provide a database-backed resolver through
 `prefixes_with`. The [tutorial](tutorial.md) shows how to add commands and state.
 
 Generated projects require the generating CLI's Rust minimum and SDK version.
-Published versions use crates.io; development builds from a `-dev.` version use
-the GitHub `dev` branch. Cargo builds can access the network. Tests compile every starter
+Every version, prereleases included, depends on the exact SDK version from crates.io.
+Cargo builds can access the network. Tests compile every starter
 against the exact checkout under test with its declared features.
 
 The project includes an ignored `state/events.json` checkpoint. Give each cursor

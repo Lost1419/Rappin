@@ -39,7 +39,7 @@ CI pins third-party actions to full commit SHAs and grants read-only repository
 contents access. The weekly scheduled security job audits both lockfiles without
 starting the platform test matrix. GitHub loads schedules from the default
 branch, so the schedule takes effect when this workflow reaches that branch.
-The audit also runs on ordinary code changes to `dev`.
+The audit also runs on ordinary code changes to `main`.
 
 Markdown-only pushes and pull requests use the documentation checks when their
 diff is available. A manual CI dispatch also defaults to documentation checks.

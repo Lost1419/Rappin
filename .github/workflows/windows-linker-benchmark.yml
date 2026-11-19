@@ -3,7 +3,7 @@ name: Windows linker benchmark
 on:
   workflow_dispatch:
   push:
-    branches: [dev]
+    branches: [main]
     paths: [.github/workflows/windows-linker-benchmark.yml]
 
 permissions:
