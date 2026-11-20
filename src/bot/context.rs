@@ -272,9 +272,27 @@ impl MessageContext {
     ///     Ok(())
     /// }
     /// ```
+    ///
+    /// If Yapin rejects the reply because the original message is gone (for example a
+    /// moderator or proxy deleted it first), the content is sent once more as a plain
+    /// message. The rejected reply was not applied, so this never duplicates it.
     pub async fn reply(&self, content: impl Into<String>) -> Result<Message> {
         let msg = CreateMessage::reply(content, self.event.id);
-        self.client.send_message(self.event.channel_id, &msg).await
+        self.send_reply(msg).await
+    }
+
+    async fn send_reply(&self, mut msg: CreateMessage) -> Result<Message> {
+        match self.client.send_message(self.event.channel_id, &msg).await {
+            Err(error) if reply_target_rejected(&error) => {
+                tracing::info!(
+                    event_id = %self.event.id,
+                    "reply target is gone; sending without reply_to"
+                );
+                msg.reply_to = None;
+                self.client.send_message(self.event.channel_id, &msg).await
+            }
+            other => other,
+        }
     }
 
     /// Replies with a fully customized message (e.g. with embeds or buttons).
@@ -287,9 +305,14 @@ impl MessageContext {
     ///     Ok(())
     /// }
     /// ```
+    ///
+    /// When this method fills in the reply target, it falls back to a plain send if the
+    /// original message is gone, as [`reply`](Self::reply) does. An explicit
+    /// `reply_to` set by the caller is never dropped.
     pub async fn reply_with(&self, mut message: CreateMessage) -> Result<Message> {
         if message.reply_to.is_none() {
             message.reply_to = Some(self.event.id);
+            return self.send_reply(message).await;
         }
         self.client
             .send_message(self.event.channel_id, &message)
@@ -827,4 +850,10 @@ impl InteractionContext {
         let callback = InteractionCallback::update_layout(components);
         self.respond_callback(&callback).await
     }
+}
+
+/// Yapin rejected a send because its `reply_to` target no longer exists in the channel.
+/// A 4xx rejection means the send was not applied, so resending without the target is safe.
+pub(crate) fn reply_target_rejected(error: &crate::Error) -> bool {
+    matches!(error.status_code(), Some(400 | 404 | 422)) && error.to_string().contains("reply_to")
 }

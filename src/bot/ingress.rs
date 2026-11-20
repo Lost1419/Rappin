@@ -71,6 +71,12 @@ pub struct IngressConfig {
     /// Maximum canonical event size, 1 byte through 16 MiB; default 1 MiB.
     pub max_event_bytes: usize,
     /// Per-storage-operation deadline, positive and at most 120 seconds; default 2 seconds.
+    ///
+    /// A timeout is terminal: `bot.run()` returns an `ingress_storage` error, even though the
+    /// timed-out write may still commit afterwards. The SDK doesn't retry it, because a late
+    /// commit could land after the retry and reorder receipts. Hosted databases with occasional
+    /// slow commits need more headroom (for example 10 seconds); keep it below your shutdown
+    /// drain so a stalled write can't outlive the process.
     pub persistence_timeout: Duration,
     /// Whether contradictory deliveries stop immediately or retain completed work for polling evidence.
     pub conflict_policy: IngressConflictPolicy,
@@ -448,8 +454,9 @@ pub trait IngressStore: Send + Sync + 'static {
     /// bot lease, compare the original bot ID, event ID, canonical fingerprint,
     /// stage, error and source against durable state. Recheck matching journal
     /// evidence for the binding and step. Reject stale evidence, any existing
-    /// recovery attempt for this event, conflicting/retired records and records
-    /// covered by the checkpoint. Keep the attempt durable across restarts,
+    /// recovery attempt for this event (except one that
+    /// [`RecoveryStep::may_reclaim`] accepts, which the store replaces),
+    /// conflicting/retired records and records covered by the checkpoint. Keep the attempt durable across restarts,
     /// including when the caller observes cancellation or a storage timeout.
     /// Keep the original receipt and checkpoint. Before approving retirement
     /// after a recovery attempt, reconcile its evidence as well as the original

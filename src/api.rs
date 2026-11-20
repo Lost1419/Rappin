@@ -1108,6 +1108,15 @@ pub trait ApiExt: Api {
     }
     /// Read a page of messages with lossless UI component trees. Limit must be 1 through 100; before and after are mutually exclusive.
     ///
+    /// Paging (Yapin API 1.5.0 contract): a page holds at most `limit` messages (1 through
+    /// 100; Yapin's default is 50) and is always ordered oldest first. `before` and `after`
+    /// are exclusive `created_at` bounds and can't be combined. Without `after`, Yapin
+    /// returns the most recent messages, older than `before` when it is set; with `after`,
+    /// it reads forward from that time. To walk back through history, pass the first
+    /// message's `created_at` as the next `before`; to walk forward, pass the last
+    /// message's `created_at` as the next `after`. A short page means the window is
+    /// exhausted. Without Read Message History the page is empty.
+    ///
     /// # Example
     ///
     /// ```no_run

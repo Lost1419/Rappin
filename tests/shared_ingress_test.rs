@@ -312,7 +312,10 @@ impl IngressStore for Store {
         step: &RecoveryStep,
     ) -> Result<()> {
         let mut attempt = self.recovery_attempt.lock().unwrap();
-        if attempt.is_some() {
+        if attempt
+            .as_ref()
+            .is_some_and(|(_, existing)| !step.may_reclaim(existing))
+        {
             return Err(Error::Config("recovery already attempted".into()));
         }
         let data = self.data.lock().unwrap();
@@ -795,6 +798,8 @@ struct RecoverFollowUp {
     fingerprint: String,
     has_proof: bool,
     wrong_identity: bool,
+    retry_safe: bool,
+    failures_left: AtomicUsize,
     calls: AtomicUsize,
 }
 
@@ -815,13 +820,17 @@ impl IngressStepRecovery for RecoverFollowUp {
         if self.wrong_identity {
             record.event.data["content"] = json!("different retained event");
         }
-        RecoveryStep::new(
+        let step = RecoveryStep::new(
             &record,
             OperationId::new("effect/v1")?,
             OperationId::new("follow-up")?,
             OperationId::new(format!("journal/{}", original.event.id))?,
-        )
-        .map(Some)
+        )?;
+        Ok(Some(if self.retry_safe {
+            step.allow_retry()
+        } else {
+            step
+        }))
     }
 
     async fn resume(
@@ -834,7 +843,12 @@ impl IngressStepRecovery for RecoverFollowUp {
         let (claimed, claimed_step) = attempt.as_ref().expect("attempt must be durable first");
         assert_eq!(claimed.event.id, original.event.id);
         assert_eq!(claimed_step, step);
+        drop(attempt);
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.failures_left.load(Ordering::SeqCst) > 0 {
+            self.failures_left.fetch_sub(1, Ordering::SeqCst);
+            return Err(Error::Config("transient recovery failure".into()));
+        }
         Ok(())
     }
 }
@@ -874,6 +888,8 @@ async fn recovery_resumes_only_proven_step_and_never_repeats_an_unfinished_attem
             fingerprint: canonical_event_fingerprint(&original).unwrap(),
             has_proof,
             wrong_identity,
+            retry_safe: false,
+            failures_left: AtomicUsize::new(0),
             calls: AtomicUsize::new(0),
         });
         let restart = |http: &Http| {
@@ -917,6 +933,78 @@ async fn recovery_resumes_only_proven_step_and_never_repeats_an_unfinished_attem
             hook.calls.load(Ordering::SeqCst),
             usize::from(has_proof && !wrong_identity)
         );
+        assert_eq!(http.posts.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn failed_recovery_attempt_reruns_only_when_the_step_is_retry_safe() {
+    for retry_safe in [false, true] {
+        let mut http = Http::new(vec![]).await;
+        let store = Arc::new(Store::default());
+        let original = event(10, "effect");
+        let bot = builder(&http)
+            .configure(|settings| settings.persistence.store = Some(store.clone()))
+            .command("effect", "make a failed receipt", |_| async {
+                Err(Error::Config("failed original workflow".into()))
+            })
+            .build()
+            .unwrap();
+        let ingress = bot.handle().ingress().unwrap();
+        let run = tokio::spawn(bot.run());
+        ingress.wait_ready().await.unwrap();
+        http.next()
+            .await
+            .send(json!({"events":[original],"last":10}))
+            .unwrap();
+        assert!(run.await.unwrap().is_err());
+
+        let hook = Arc::new(RecoverFollowUp {
+            store: store.clone(),
+            fingerprint: canonical_event_fingerprint(&original).unwrap(),
+            has_proof: true,
+            wrong_identity: false,
+            retry_safe,
+            failures_left: AtomicUsize::new(1),
+            calls: AtomicUsize::new(0),
+        });
+        let restart = |http: &Http| {
+            builder(http)
+                .configure(|settings| {
+                    settings.persistence.store = Some(store.clone());
+                    settings.persistence.step_recovery = Some(hook.clone());
+                })
+                .command("effect", "never replay", |_| async {
+                    panic!("original command replayed")
+                })
+                .build()
+                .unwrap()
+        };
+        // The first claimed attempt fails part-way and stays durable.
+        assert!(restart(&http).run().await.is_err());
+        assert_eq!(hook.calls.load(Ordering::SeqCst), 1);
+
+        let bot = restart(&http);
+        let handle = bot.handle();
+        let ingress = handle.ingress().unwrap();
+        if retry_safe {
+            let run = tokio::spawn(bot.run());
+            ingress.wait_ready().await.unwrap();
+            assert_eq!(
+                ingress.receipt(10).unwrap().status().stage,
+                ReceiptStage::Completed
+            );
+            handle.stop();
+            run.await.unwrap().unwrap();
+            assert_eq!(hook.calls.load(Ordering::SeqCst), 2);
+        } else {
+            assert!(bot.run().await.is_err());
+            assert_eq!(hook.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                store.data.lock().unwrap().records[0].status.stage,
+                ReceiptStage::Failed
+            );
+        }
         assert_eq!(http.posts.load(Ordering::SeqCst), 0);
     }
 }
@@ -1058,6 +1146,8 @@ use rappin::{*, hot_reload::WorkerCog};
         fingerprint: canonical_event_fingerprint(&original).unwrap(),
         has_proof: true,
         wrong_identity: false,
+        retry_safe: false,
+        failures_left: AtomicUsize::new(0),
         calls: AtomicUsize::new(0),
     });
     let bot = builder(&http)

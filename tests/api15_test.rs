@@ -275,6 +275,37 @@ async fn slash_auto_ack_uses_original_callback_and_does_not_duplicate_a_reply() 
 }
 
 #[tokio::test]
+async fn reply_to_a_deleted_message_falls_back_to_one_plain_send() {
+    let message = json!({"id":Uuid::nil(),"channel_id":Uuid::nil(),"author_id":Uuid::nil(),
+        "created_at":"2026-11-19T00:00:00Z","content":"done"});
+    let (url, mut requests, server) = support::mock(vec![
+        support::response(
+            400,
+            json!({"error":"reply_to is not a message in this channel","code":"invalid_body"}),
+        ),
+        support::response(200, json!({"message": message})),
+    ])
+    .await;
+    let bot = Bot::builder("fixture")
+        .base_url(url)
+        .command("reply", "", |ctx| async move { ctx.reply("done").await })
+        .build()
+        .unwrap();
+    bot.cache()
+        .set_me(serde_json::from_value(support::profile()).unwrap())
+        .await;
+    bot.process_event(serde_json::from_value(support::event(1, "reply")).unwrap())
+        .await
+        .unwrap();
+    let first = requests.recv().await.unwrap();
+    let second = requests.recv().await.unwrap();
+    assert!(first.contains(r#""reply_to""#));
+    assert!(second.starts_with("POST /channels/"));
+    assert!(!second.contains(r#""reply_to""#));
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn ephemeral_update_uses_reply_id_and_rejects_layouts_before_io() {
     let (url, mut requests, server) = support::mock(vec![support::response(200, json!({}))]).await;
     let client = Client::builder("fixture").base_url(url).build();

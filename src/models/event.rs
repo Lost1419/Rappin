@@ -53,6 +53,9 @@ impl Event {
     /// assert!(matches!(event.parse_data().unwrap(), rappin::EventData::Test(_)));
     /// let future: rappin::Event = serde_json::from_value(serde_json::json!({"id":11,"type":"future_event","data":{}})).unwrap();
     /// assert!(matches!(future.parse_data().unwrap(), rappin::EventData::Unknown { .. }));
+    /// let slash: rappin::Event = serde_json::from_value(serde_json::json!({"id":12,"type":"command","data":{"id":"i","token":"t","command":"ping"}})).unwrap();
+    /// let rappin::EventData::Interaction(command) = slash.parse_data().unwrap() else { panic!("slash command") };
+    /// assert_eq!(command.kind.as_deref(), Some("command"));
     /// ```
     pub fn parse_data(&self) -> Result<EventData, serde_json::Error> {
         if let Some(resource) = crate::ResourceEvent::from_event(self)
@@ -83,6 +86,25 @@ impl Event {
                 Err(e) => {
                     tracing::warn!(
                         "Failed to parse 'interaction' event: {}. Falling back to Unknown.",
+                        e
+                    );
+                    Ok(EventData::Unknown {
+                        kind: self.kind.clone(),
+                        data: self.data.clone(),
+                    })
+                }
+            },
+            // Slash commands arrive as their own kind with an interaction payload; mark the kind so
+            // callers can tell them from buttons, as `UiInteraction::from_event` does.
+            "command" => match InteractionEvent::deserialize(&self.data) {
+                Ok(mut inter) => {
+                    inter.kind = Some("command".into());
+                    inter.created_at = inter.created_at.or(self.created_at);
+                    Ok(EventData::Interaction(inter))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse 'command' event: {}. Falling back to Unknown.",
                         e
                     );
                     Ok(EventData::Unknown {

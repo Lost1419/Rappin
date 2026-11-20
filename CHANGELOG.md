@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- `Event::parse_data` decodes slash `command` events as `EventData::Interaction` with `kind` set to `"command"`, instead of `Unknown`.
+- `MessageContext::reply`, `reply_with` and the worker equivalents send once as a plain message when Yapin rejects the reply because the original message is gone. An explicit `reply_to` is never dropped.
+- Add `RemoteError::is_known_unapplied()` for telling rejected writes from uncertain ones.
+- Add `RecoveryStep::allow_retry()` and `RecoveryStep::may_reclaim()`, so stores can re-run a step marked safe to repeat after a failed or cancelled attempt. Steps stay single-attempt by default.
+- Document `get_messages` ordering and paging, and that `IngressConfig::persistence_timeout` is terminal.
+
 ## 0.2.0 — 2026-11-19
 
 See the [0.1 to 0.2.0 migration guide](docs/migration-0.2.md) for updated APIs

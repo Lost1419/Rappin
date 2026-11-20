@@ -36,6 +36,13 @@ transport/database error, partial write or unknown mutation into a typed denial
 to keep intake alive. An API 403 might concern the bot's access rather than the
 requester's, so HTTP statuses are not automatically user rejections.
 
+`RemoteError::is_known_unapplied()` reports whether the failing write is known not
+to have taken effect (a 4xx rejection or a local refusal), as opposed to an
+uncertain outcome. It describes only that write, so check your own journal for
+earlier effects before returning `Handled`. `reply` and `reply_with` already handle
+the most common case: when the original message was deleted before the reply,
+they send the content once as a plain message.
+
 ## Explicit completion callbacks
 
 `BotBuilder::on_command_failure` and `on_button_failure` receive a context and

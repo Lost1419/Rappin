@@ -448,7 +448,7 @@ impl WorkerContext {
     pub async fn reply(&self, content: impl Into<String>) -> Result<()> {
         let content = content.into();
         if let Some(message) = self.event.message() {
-            self.send(
+            self.send_reply(
                 message.channel_id,
                 CreateMessage::reply(content, message.id),
             )
@@ -477,8 +477,21 @@ impl WorkerContext {
             .ok_or_else(|| Error::Config("reply_with requires a message event".into()))?;
         if message.reply_to.is_none() {
             message.reply_to = Some(event.id);
+            return self.send_reply(event.channel_id, message).await;
         }
         self.send(event.channel_id, message).await
+    }
+
+    /// Send a reply, falling back to a plain send once if Yapin rejects the reply target.
+    async fn send_reply(&self, channel: uuid::Uuid, mut message: CreateMessage) -> Result<Message> {
+        match self.send(channel, message.clone()).await {
+            Err(error) if crate::bot::context::reply_target_rejected(&error) => {
+                tracing::info!("reply target is gone; sending without reply_to");
+                message.reply_to = None;
+                self.send(channel, message).await
+            }
+            other => other,
+        }
     }
     /// Submit a callback for the original interaction.
     ///

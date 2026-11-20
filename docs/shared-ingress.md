@@ -147,8 +147,9 @@ The worker protocol is unchanged.
 3. Implement `IngressStore::begin_step_recovery` to compare the retained receipt
    and journal evidence in one durable transaction, then claim one attempt for
    the event under the same exclusive bot lease used for intake. Reject a
-   pre-existing attempt even if the proposed step or evidence ID changed. Keep
-   the old receipt and checkpoint until the new step is confirmed.
+   pre-existing attempt even if the proposed step or evidence ID changed, unless
+   `step.may_reclaim(&existing)` returns true. Keep the old receipt and
+   checkpoint until the new step is confirmed.
 4. Implement `resume` to recheck application authority and execute only the
    planned step using the parent's client. On success,
    `IngressStore::finish_step_recovery` atomically archives the original receipt
@@ -156,7 +157,11 @@ The worker protocol is unchanged.
    ordered polling checkpoint still needs to cover the event.
 
 A crash, callback error or uncertain completion write leaves the attempt for
-explicit reconciliation. Include both the original execution and the recovery
+explicit reconciliation. The exception is a step the plan marked with
+`RecoveryStep::allow_retry()`, for work that is safe to repeat, such as confirming
+a commit or discarding a response. `may_reclaim` lets the store replace that
+unfinished attempt, so the next startup runs the same step again without an
+operator. Include both the original execution and the recovery
 attempt when assessing retirement. Load the store before deciding whether a
 completion write committed. Repolling or restarting cannot authorize a second attempt.
 Polling-only admission permits these continuations only for events originally

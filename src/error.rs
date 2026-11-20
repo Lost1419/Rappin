@@ -36,6 +36,26 @@ impl std::fmt::Display for RemoteError {
 }
 impl std::error::Error for RemoteError {}
 impl RemoteError {
+    /// The failing write is known not to have taken effect: Yapin rejected it (4xx) or
+    /// the SDK refused it before sending. Uncertain outcomes (timeouts, 5xx, partial
+    /// writes) return `false`. This describes only the operation that failed; a handler
+    /// may have made other writes earlier, so check your own journal before treating a
+    /// whole invocation as safe to complete.
+    ///
+    /// ```rust
+    /// use rappin::Error;
+    /// let rejected = Error::Api { status: 400, message: "reply_to is not a message in this channel".into(), retry_after: None };
+    /// assert!(rejected.to_remote().is_known_unapplied());
+    /// let uncertain = Error::Api { status: 502, message: "Bad gateway".into(), retry_after: None };
+    /// assert!(!uncertain.to_remote().is_known_unapplied());
+    /// ```
+    pub fn is_known_unapplied(&self) -> bool {
+        matches!(
+            self.details.get("outcome").and_then(|v| v.as_str()),
+            Some("rejected" | "not_applied")
+        )
+    }
+
     /// Recover a bounded report after a worker boundary or failure callback.
     /// # Example
     ///
