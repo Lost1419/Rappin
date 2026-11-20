@@ -684,7 +684,7 @@ async fn run_inner(args: Args, ctx: &Context) -> Result<Value> {
             }
             if let Some(client) = &ctx.client {
                 v["active_base_url"] = client.active_base_url().into();
-                v["last_request"]=client.last_request().map(|r|json!({"method":r.method,"route":r.route,"status":r.status,"duration_ms":r.duration.as_secs_f64()*1000.0,"rate_limit_wait_ms":r.rate_limit_wait.as_secs_f64()*1000.0,"attempts":r.attempts,"api_version":r.api_version,"api_build":r.api_build})).unwrap_or(Value::Null);
+                v["last_request"]=client.last_request().map(|r|json!({"method":r.method,"route":r.route,"status":r.status,"duration_ms":r.duration.as_secs_f64()*1000.0,"rate_limit_wait_ms":r.rate_limit_wait.as_secs_f64()*1000.0,"attempts":r.attempts,"origin":r.origin,"api_version":r.api_version,"api_build":r.api_build})).unwrap_or(Value::Null);
             }
             if !offline {
                 let public = ctx.public_client();

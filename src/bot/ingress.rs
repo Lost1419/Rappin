@@ -73,8 +73,9 @@ pub struct IngressConfig {
     /// Per-storage-operation deadline, positive and at most 120 seconds; default 2 seconds.
     ///
     /// A timeout is terminal: `bot.run()` returns an `ingress_storage` error, even though the
-    /// timed-out write may still commit afterwards. The SDK doesn't retry it, because a late
-    /// commit could land after the retry and reorder receipts. Hosted databases with occasional
+    /// timed-out write may still commit afterwards. The SDK only retries (once) for stores that
+    /// return true from [`IngressStore::guards_stale_writes`], because otherwise a late commit
+    /// could land after the retry and reorder receipts. Hosted databases with occasional
     /// slow commits need more headroom (for example 10 seconds); keep it below your shutdown
     /// drain so a stalled write can't outlive the process.
     pub persistence_timeout: Duration,
@@ -335,6 +336,11 @@ pub struct IngressRecord {
     #[serde(default)]
     /// Original verified source, when saved by the store.
     pub source: Option<IngressSource>,
+    #[serde(default)]
+    /// Write order for this event's record, increasing with every transition. Stores that
+    /// [guard stale writes](IngressStore::guards_stale_writes) keep the highest revision and
+    /// ignore older ones. Records saved before this field existed load as 0.
+    pub revision: u64,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -389,6 +395,23 @@ pub trait IngressStore: Send + Sync + 'static {
     /// }
     /// ```
     async fn load(&self, bot_id: Uuid) -> Result<IngressRecovery>;
+    /// Whether this store ignores writes that arrive out of order. Return `true` only if
+    /// [`record`](Self::record) never replaces a stored record with one whose
+    /// [`revision`](IngressRecord::revision) is lower or equal for the same bot and event,
+    /// and [`checkpoint`](Self::checkpoint) never lowers a stored checkpoint. The SDK then
+    /// retries a timed-out record or checkpoint write once, because a late commit of the
+    /// first attempt can no longer overwrite newer state. Defaults to `false`: a timeout
+    /// ends the run, as before.
+    ///
+    /// ```rust
+    /// use rappin::IngressStore;
+    /// fn retries_timeouts(store: &dyn IngressStore) -> bool {
+    ///     store.guards_stale_writes()
+    /// }
+    /// ```
+    fn guards_stale_writes(&self) -> bool {
+        false
+    }
     /// Atomically persist an event/stage transition; Started must be durable before any handler/collector/ack effects.
     ///
     /// # Example
@@ -568,6 +591,7 @@ struct Claim {
     retirement: Option<EventRetirement>,
     conflict: bool,
     pending_since: Option<tokio::time::Instant>,
+    revision: u64,
     status: watch::Sender<ReceiptStatus>,
 }
 struct State {
@@ -1380,6 +1404,7 @@ impl EventIngress {
                     retirement: None,
                     conflict: false,
                     pending_since: None,
+                    revision: 0,
                     status: tx,
                 },
             );
@@ -1472,21 +1497,44 @@ impl EventIngress {
             })
         })
     }
+    /// Persist an idempotent write, retrying it once after a timeout when the store
+    /// guarantees a late first attempt can't overwrite newer state.
+    async fn persist_guarded<T, F, Fut>(
+        &self,
+        phase: &str,
+        store: &Arc<dyn IngressStore>,
+        write: F,
+    ) -> Result<T>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        if store.guards_stale_writes() {
+            match tokio::time::timeout(self.0.config.persistence_timeout, write()).await {
+                Ok(result) => return self.persist(phase, std::future::ready(result)).await,
+                Err(_) => tracing::warn!(
+                    phase,
+                    "ingress store write timed out; retrying once because the store rejects stale writes"
+                ),
+            }
+        }
+        self.persist(phase, write()).await
+    }
     pub(super) async fn transition(
         &self,
         event: &Event,
         stage: ReceiptStage,
         error: Option<RemoteError>,
     ) -> Result<()> {
-        let (bot_id, mut status, source) = {
-            let s = self.0.state.lock().unwrap();
-            let status = s
+        let (bot_id, mut status, source, revision) = {
+            let mut s = self.0.state.lock().unwrap();
+            let claim = s
                 .claims
-                .get(&event.id)
-                .ok_or_else(|| Error::Config("ingress claim missing".into()))?
-                .status
-                .borrow()
-                .clone();
+                .get_mut(&event.id)
+                .ok_or_else(|| Error::Config("ingress claim missing".into()))?;
+            claim.revision += 1;
+            let revision = claim.revision;
+            let status = claim.status.borrow().clone();
             (
                 s.bot_id
                     .ok_or_else(|| Error::Config("ingress identity unavailable".into()))?,
@@ -1498,21 +1546,23 @@ impl EventIngress {
                         Some(claim.source)
                     }
                 }),
+                revision,
             )
         };
         status.stage = stage;
         status.error = error;
         if let Some(store) = &self.0.store {
             status.durability = AdmissionDurability::Durable;
-            self.persist(
-                &format!("{stage:?}").to_lowercase(),
-                store.record(IngressRecord {
-                    bot_id,
-                    event: event.clone(),
-                    status: status.clone(),
-                    source,
-                }),
-            )
+            let record = IngressRecord {
+                bot_id,
+                event: event.clone(),
+                status: status.clone(),
+                source,
+                revision,
+            };
+            self.persist_guarded(&format!("{stage:?}").to_lowercase(), store, || {
+                store.record(record.clone())
+            })
             .await?;
         }
         // Publish queue ownership only after the owner has entered the shared
@@ -1684,6 +1734,7 @@ impl EventIngress {
             if owner && self.polling_only() && record.source != Some(IngressSource::Polling) {
                 return Err(Error::validation("ingress.recovery","unconfirmed early-source claims require assessment before enabling polling-only admission"));
             }
+            let revision = record.revision;
             let mut status = record.status;
             status.committed = false;
             status.durability = AdmissionDurability::Durable;
@@ -1730,6 +1781,7 @@ impl EventIngress {
                             .get(&id)
                             .filter(|r| r.state == EventRetirementState::Approved)
                             .map(|_| tokio::time::Instant::now()),
+                        revision,
                         status: tx,
                     },
                 )
@@ -1849,6 +1901,17 @@ impl EventIngress {
                 self.ensure_claim_active(original.event.id)?;
                 hook.resume(client, original, &step).await?;
                 let mut completed = original.clone();
+                completed.revision = original.revision + 1;
+                if let Some(claim) = self
+                    .0
+                    .state
+                    .lock()
+                    .unwrap()
+                    .claims
+                    .get_mut(&original.event.id)
+                {
+                    claim.revision = claim.revision.max(completed.revision);
+                }
                 completed.status.stage = ReceiptStage::Completed;
                 completed.status.error = None;
                 completed.status.durability = AdmissionDurability::Durable;
@@ -1990,7 +2053,7 @@ impl EventIngress {
             cursor.save(last).await?;
         }
         if let Some(store) = &self.0.store {
-            self.persist("checkpoint", store.checkpoint(bot, last))
+            self.persist_guarded("checkpoint", store, || store.checkpoint(bot, last))
                 .await?;
         }
         let mut s = self.0.state.lock().unwrap();
@@ -2243,6 +2306,7 @@ mod recovery_state_tests {
                         event: original.clone(),
                         source: Some(source),
                         status: status.clone(),
+                        revision: 0,
                     }],
                     ..Default::default()
                 };

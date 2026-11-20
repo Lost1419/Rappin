@@ -3,9 +3,9 @@ run-name: 'Test suite · ${{ github.head_ref || github.ref_name }} · #${{ githu
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       full_suite:
@@ -20,6 +20,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Rustdoc coverage flags and cargo-fuzz depend on nightly; pin it so a new nightly
+  # can't break CI unannounced. Bump deliberately (see docs/development.md).
+  PINNED_NIGHTLY: nightly-2026-11-19
 
 jobs:
   changes:
@@ -162,7 +165,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
-          toolchain: nightly
+          toolchain: ${{ env.PINNED_NIGHTLY }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
       - name: Measure public items and examples
@@ -179,7 +182,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
-          toolchain: nightly
+          toolchain: ${{ env.PINNED_NIGHTLY }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: fuzz
@@ -251,10 +254,11 @@ jobs:
           key: ${{ runner.os == 'Windows' && 'msvc-lld' || '' }}
 
       - name: Check format
+        if: runner.os == 'Linux'
         run: cargo fmt --all --check
 
       - name: Clippy check
-        run: cargo clippy --workspace --all-features --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-features --all-targets -- -D warnings
 
       - name: Install nextest on macOS
         if: runner.os == 'macOS'
@@ -282,10 +286,8 @@ jobs:
           RAPPIN_TEST_WORKER_TARGET: ${{ runner.temp }}/rappin-test-workers
         run: cargo nextest run --locked --workspace --all-features --all-targets
 
-      - name: Check examples
-        run: cargo check --examples
-
       - name: Check public documentation
+        if: runner.os == 'Linux'
         env:
           RUSTDOCFLAGS: -D warnings -D missing_docs
         run: cargo doc --locked --all-features --no-deps
@@ -294,6 +296,7 @@ jobs:
         run: cargo test --locked --all-features --doc
 
       - name: Check minimal documentation examples
+        if: runner.os == 'Linux'
         run: cargo test --locked --no-default-features --doc
 
       - name: Check README and every guide
@@ -306,11 +309,9 @@ jobs:
         run: |
           cargo package --workspace --locked --offline --all-features
           rappin_package_version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
-          # The development derive crate is packaged together and is not published yet.
+          # Check the SDK package against the derive package built here, not crates.io,
+          # because a version bump is checked before the derive crate is published.
           cargo check --offline --all-features --all-targets --manifest-path "target/package/rappin-rs-$rappin_package_version/Cargo.toml" --target-dir target --config "patch.crates-io.rappin-rs-derive.path=\"$PWD/target/package/rappin-rs-derive-$rappin_package_version\""
-
-      - name: Check minimal library
-        run: cargo check --no-default-features
 
   audit:
     needs: changes

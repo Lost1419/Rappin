@@ -7,7 +7,6 @@ autobins = false
 description = "Fast, idiomatic Rust client and bot framework for Yapin’ (yapin.gg)"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Lost1419/Rappin"
-homepage = "https://github.com/Lost1419/Rappin"
 readme = "README.md"
 keywords = ["yapin", "bot", "api", "chat", "async"]
 categories = ["api-bindings", "asynchronous"]

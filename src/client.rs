@@ -939,6 +939,7 @@ impl Client {
                 "OTHER"
             };
             let observation = crate::diagnostics::RequestObservation {
+                origin: base.clone(),
                 method: label.into(),
                 route: route.clone(),
                 status,
@@ -972,7 +973,11 @@ impl Client {
                 Err(_) => false,
             };
             if unavailable && self.inner.failover.activate(&base) {
-                tracing::warn!("dedicated bot API unavailable; using website API for ten minutes");
+                tracing::warn!(
+                    from = %base,
+                    to = %self.active_base_url(),
+                    "dedicated bot API unavailable; using website API for ten minutes"
+                );
                 if matches!(*method, Method::GET | Method::HEAD) && retries > 0 {
                     retries -= 1;
                     base = self.active_base_url();
@@ -2946,6 +2951,8 @@ mod failover_tests {
             .unwrap_err();
         assert_eq!(err.status_code(), Some(504));
         assert_eq!(client.last_request().unwrap().attempts, 1);
+        // The failing attempt reports the origin it used.
+        assert_eq!(client.last_request().unwrap().origin, fallback);
         assert!(a.recv().await.unwrap().starts_with("GET /me "));
         assert!(b
             .recv()

@@ -11,9 +11,12 @@ lockfile selects compatible dependencies; downstream applications control their 
 lockfiles and Cargo resolver. If a newer transitive dependency raises its minimum
 Rust version, select a compatible version or use Cargo's MSRV-aware resolution.
 
-Stable Linux, macOS and Windows jobs run tests, examples, Clippy and documentation
-examples. Nightly rustdoc measures item and eligible-example coverage; both must be
-100%. `scripts/check-doc-coverage.py` fails on missing/malformed coverage as well
+Stable Linux, macOS and Windows jobs run Clippy, every test target (including
+examples and benches) and the all-feature documentation examples. Checks that don't
+depend on the platform run once, on Linux: formatting, rustdoc warnings, minimal
+documentation examples, the guide checks and the package check. The Rust 1.89 jobs
+cover the minimal build. Nightly rustdoc measures item and eligible-example coverage;
+both must be 100%. `scripts/check-doc-coverage.py` fails on missing/malformed coverage as well
 as uncovered items. Rustdoc's eligible-example denominator excludes some item kinds;
 it is not a claim that every field has a separate executable example.
 
@@ -25,13 +28,18 @@ cargo clippy --locked --all-features --all-targets -- -D warnings
 cargo test --locked --all-features --doc
 cargo test --locked --no-default-features --doc
 python3 scripts/check-guides.py
-cargo +nightly rustdoc --locked --all-features --lib -- -Z unstable-options --coverage --output-format json
+cargo +nightly-2026-11-19 rustdoc --locked --all-features --lib -- -Z unstable-options --coverage --output-format json
 python3 scripts/check-doc-coverage.py target/doc/rappin.json
 ```
 
 Coverage JSON and normal rustdoc JSON both use `target/doc/rappin.json`; run the
 checker immediately after the coverage command. Nightly is a maintenance tool,
 not a requirement for applications using the SDK.
+
+CI pins nightly through `PINNED_NIGHTLY` in `.github/workflows/ci.yml`, because rustdoc's
+coverage flags have changed between nightlies before (`--show-coverage` became
+`--coverage`). To move it, install the new date locally, run the coverage command and
+the fuzz smoke with it, then update the variable and the commands in this guide.
 
 ## Dependency audits
 
@@ -72,8 +80,8 @@ The actual private IPC framing reader is covered by in-crate property tests.
 ```sh
 cargo install cargo-fuzz --locked --version 0.13.2
 mkdir -p fuzz/corpus/events fuzz/corpus/arguments
-cargo +nightly fuzz run events fuzz/corpus/events fuzz/seeds/events -- -max_total_time=60 -max_len=8192 -rss_limit_mb=1024
-cargo +nightly fuzz run arguments fuzz/corpus/arguments fuzz/seeds/arguments -- -max_total_time=60 -max_len=8192 -rss_limit_mb=1024
+cargo +nightly-2026-11-19 fuzz run events fuzz/corpus/events fuzz/seeds/events -- -max_total_time=60 -max_len=8192 -rss_limit_mb=1024
+cargo +nightly-2026-11-19 fuzz run arguments fuzz/corpus/arguments fuzz/seeds/arguments -- -max_total_time=60 -max_len=8192 -rss_limit_mb=1024
 ```
 
 CI runs 15 seconds per target; longer local runs provide more exploration. Preserve

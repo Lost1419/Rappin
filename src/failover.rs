@@ -15,11 +15,19 @@ impl Failover {
         }
     }
     pub(crate) fn base(&self, primary: &str) -> String {
-        let until = self.until.lock().unwrap_or_else(|p| p.into_inner());
-        if until.is_some_and(|until| until > Instant::now())
-            && let Some(fallback) = &self.fallback
-        {
-            return fallback.clone();
+        let mut until = self.until.lock().unwrap_or_else(|p| p.into_inner());
+        match *until {
+            Some(deadline) if deadline > Instant::now() => {
+                if let Some(fallback) = &self.fallback {
+                    return fallback.clone();
+                }
+            }
+            Some(_) => {
+                // Log the switch back once, so both directions show up in the logs.
+                *until = None;
+                tracing::info!(origin = %primary, "returning to the dedicated bot API");
+            }
+            None => {}
         }
         primary.to_owned()
     }
@@ -68,5 +76,7 @@ mod tests {
         );
         *state.until.lock().unwrap() = Some(Instant::now() - Duration::from_secs(1));
         assert_eq!(state.base(crate::DEFAULT_API_BASE), crate::DEFAULT_API_BASE);
+        // Expiry is observed once, then the switch-back state is cleared.
+        assert!(state.until.lock().unwrap().is_none());
     }
 }

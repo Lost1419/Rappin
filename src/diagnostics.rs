@@ -303,6 +303,9 @@ pub struct RequestObservation {
     pub api_version: Option<String>,
     /// Build response header, when supplied by the API.
     pub api_build: Option<String>,
+    /// API base URL this attempt used: the dedicated bot API, or the website API while
+    /// failover is active. Record it with uncertain writes to see which origin they hit.
+    pub origin: String,
 }
 
 #[derive(Clone)]

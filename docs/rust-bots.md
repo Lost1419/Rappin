@@ -227,8 +227,9 @@ async fn monitor(handle: BotHandle) {
 ```
 
 `Client::last_request()`/`subscribe_requests()` report method, sanitized route
-shape, status, attempts, time waiting on rate limits, and elapsed execution through
-response headers. These are latest-value watch streams; intermediate observations
+shape, status, attempts, time waiting on rate limits, elapsed execution through
+response headers, and the API origin the attempt used (the website API while failover
+is active). These are latest-value watch streams; intermediate observations
 can coalesce. Route diagnostics omit IDs, query strings, and callback tokens.
 Elapsed REST time includes retries but excludes reading/deserializing the final
 body. Heartbeat RTT is WebSocket-only and clears on disconnect. Neither measures

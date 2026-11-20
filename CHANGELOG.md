@@ -6,7 +6,9 @@
 - `MessageContext::reply`, `reply_with` and the worker equivalents send once as a plain message when Yapin rejects the reply because the original message is gone. An explicit `reply_to` is never dropped.
 - Add `RemoteError::is_known_unapplied()` for telling rejected writes from uncertain ones.
 - Add `RecoveryStep::allow_retry()` and `RecoveryStep::may_reclaim()`, so stores can re-run a step marked safe to repeat after a failed or cancelled attempt. Steps stay single-attempt by default.
-- Document `get_messages` ordering and paging, and that `IngressConfig::persistence_timeout` is terminal.
+- Add `IngressRecord::revision` and `IngressStore::guards_stale_writes()`. Stores that keep the highest revision and never lower the checkpoint get one retry of a timed-out record or checkpoint write, instead of the run ending. Other stores keep the terminal timeout.
+- Add `RequestObservation::origin`, add from/to origins to the failover warning, and log the return to the dedicated bot API.
+- Document `get_messages` ordering and paging, and that `IngressConfig::persistence_timeout` is terminal unless the store guards stale writes.
 
 ## 0.2.0 — 2026-11-19
 

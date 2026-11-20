@@ -9,9 +9,12 @@ different versions.
 | 0.1.29 | API 1.3.0, captured 8 November 2026 UTC | [All 76 operations](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.29.md) | [JSON](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.29.json) |
 | 0.1.28 | API 1.3.0, captured 8 November 2026 UTC | [Feature support](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.28.md) | [JSON](https://github.com/Lost1419/Rappin/blob/main/docs/api-support-0.1.28.json) |
 
-The [0.1.35 changelog](../CHANGELOG.md#0135--2026-11-14) records the stable November
-additions and observed rollout responses. The versioned reports above use the
-release and snapshot listed in each row.
+For 0.2.x, the [0.2.0 changelog](../CHANGELOG.md#yapin-api-150) covers API 1.5.0 support.
+It also records which operations Yapin currently restricts to test servers, from a
+live check on 19 November 2026. No per-operation report has been published for
+0.2.x yet. The [0.1.35 changelog](../CHANGELOG.md#0135--2026-11-14) records the
+earlier November additions. The versioned reports above use the release and snapshot
+listed in each row.
 
 The 0.1.29 report assesses all 76 documented operations; the earlier 0.1.28 report
 reviews nine selected features. Operation coverage describes the stated primary

@@ -119,6 +119,30 @@ precede Started can reenter normal dispatch automatically. Started/Failed
 records block startup unless an opt-in step continuation or an approved
 [operator retirement](draining-and-retirement.md) resolves the barrier.
 
+## Slow store writes
+
+Every store call is bounded by `IngressConfig::persistence_timeout`, which defaults to 2 seconds.
+By default a timeout ends `bot.run()`, because the timed-out write can still commit
+later. Retrying could then let that late commit overwrite a newer receipt.
+
+A store can opt in to one retry by returning `true` from
+`IngressStore::guards_stale_writes`. It must then ignore any `record` whose
+`IngressRecord::revision` is not higher than the stored one for the same bot and
+event, and never lower the stored checkpoint. In SQL:
+
+```sql
+INSERT INTO ingress_record (bot_id, event_id, record, revision)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (bot_id, event_id) DO UPDATE
+SET record = EXCLUDED.record, revision = EXCLUDED.revision
+WHERE ingress_record.revision < EXCLUDED.revision;
+
+UPDATE ingress_checkpoint SET checkpoint = GREATEST(checkpoint, $2) WHERE bot_id = $1;
+```
+
+Records saved before revisions existed load as revision 0, and later transitions
+count up from there.
+
 ## Resume a proven unfinished step
 
 Configure `settings.persistence.step_recovery` with an `Arc<dyn IngressStepRecovery>`

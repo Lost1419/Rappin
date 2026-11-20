@@ -288,9 +288,32 @@ struct Store {
     block_confirmation: AtomicBool,
     confirmation_waiting: Notify,
     release_confirmation: Notify,
+    guard_stale: AtomicBool,
+    stall_started: AtomicBool,
+    late_write: Mutex<Option<IngressRecord>>,
+    stale_rejected: AtomicUsize,
+}
+impl Store {
+    fn write(&self, record: IngressRecord) {
+        let mut data = self.data.lock().unwrap();
+        if self.guard_stale.load(Ordering::SeqCst)
+            && data
+                .records
+                .iter()
+                .any(|r| r.event.id == record.event.id && r.revision >= record.revision)
+        {
+            self.stale_rejected.fetch_add(1, Ordering::SeqCst);
+            return;
+        }
+        data.records.retain(|r| r.event.id != record.event.id);
+        data.records.push(record);
+    }
 }
 #[async_trait::async_trait]
 impl IngressStore for Store {
+    fn guards_stale_writes(&self) -> bool {
+        self.guard_stale.load(Ordering::SeqCst)
+    }
     async fn load(&self, _: Uuid) -> Result<IngressRecovery> {
         Ok(self.data.lock().unwrap().clone())
     }
@@ -301,9 +324,20 @@ impl IngressStore for Store {
             self.queued.notify_one();
             self.release.notified().await;
         }
-        let mut data = self.data.lock().unwrap();
-        data.records.retain(|r| r.event.id != record.event.id);
-        data.records.push(record);
+        if record.status.stage == ReceiptStage::Started
+            && self.stall_started.swap(false, Ordering::SeqCst)
+        {
+            // Model a commit that lands after the caller gave up: the stalled write
+            // reaches storage only after the next, newer transition.
+            *self.late_write.lock().unwrap() = Some(record);
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            unreachable!("the SDK times out first");
+        }
+        let completed = record.status.stage == ReceiptStage::Completed;
+        self.write(record);
+        if completed && let Some(late) = self.late_write.lock().unwrap().take() {
+            self.write(late);
+        }
         Ok(())
     }
     async fn begin_step_recovery(
@@ -1006,6 +1040,56 @@ async fn failed_recovery_attempt_reruns_only_when_the_step_is_retry_safe() {
             );
         }
         assert_eq!(http.posts.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn timed_out_record_write_is_retried_only_for_stores_that_reject_stale_writes() {
+    for guard in [false, true] {
+        let mut http = Http::new(vec![]).await;
+        let store = Arc::new(Store::default());
+        store.guard_stale.store(guard, Ordering::SeqCst);
+        store.stall_started.store(true, Ordering::SeqCst);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = calls.clone();
+        let bot = builder(&http)
+            .configure(|settings| {
+                settings.persistence.store = Some(store.clone());
+                let mut config = IngressConfig::default();
+                config.persistence_timeout = Duration::from_millis(200);
+                settings.persistence.ingress = Some(config);
+            })
+            .command("effect", "count", move |_| {
+                let c = c.clone();
+                async move {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            })
+            .build()
+            .unwrap();
+        let handle = bot.handle();
+        let ingress = handle.ingress().unwrap();
+        let run = tokio::spawn(bot.run());
+        ingress.wait_ready().await.unwrap();
+        http.next()
+            .await
+            .send(json!({"events":[event(10, "effect")],"last":10}))
+            .unwrap();
+        if guard {
+            until(|| store.data.lock().unwrap().polling_checkpoint == Some(10)).await;
+            handle.stop();
+            run.await.unwrap().unwrap();
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            // The late Started write arrived after Completed and was ignored.
+            assert!(store.late_write.lock().unwrap().is_none());
+            assert_eq!(store.stale_rejected.load(Ordering::SeqCst), 1);
+        } else {
+            let error = run.await.unwrap().unwrap_err();
+            // The timeout stays terminal: the run ends with the storage cause.
+            assert!(error.to_json().to_string().contains("ingress_storage"));
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+        }
     }
 }
 
