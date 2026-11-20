@@ -1516,7 +1516,7 @@ dependencies = [
 
 [[package]]
 name = "rappin-rs"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -1552,7 +1552,7 @@ dependencies = [
 
 [[package]]
 name = "rappin-rs-derive"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

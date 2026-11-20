@@ -38,7 +38,7 @@ edition = "2021"
 default-run = "my-bot"
 
 [dependencies]
-rappin = { package = "rappin-rs", version = "0.2.0", features = ["hot-reload"] }
+rappin = { package = "rappin-rs", version = "0.2.1", features = ["hot-reload"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -260,7 +260,7 @@ protocol compatibility. The worker example includes `roll` and `question`.
 
 ### Worker transport and command definitions
 
-Rappin 0.2.0 requires protocol 13 for both the parent and every worker. It carries
+Rappin 0.2.x requires protocol 13 for both the parent and every worker. It carries
 slash option declarations, typed change events, structured errors, message
 completion and operation IDs for checked message-command invocations. It also
 supports permission lookups, UI callbacks, public reads and bounded uploads. Upload chunks

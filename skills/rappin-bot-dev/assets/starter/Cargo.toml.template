@@ -5,6 +5,6 @@ edition = "2021"
 rust-version = "1.89"
 
 [dependencies]
-rappin-rs = { version = "0.2.0", features = ["gateway", "derive"] }
+rappin-rs = { version = "0.2.1", features = ["gateway", "derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = "0.3"

@@ -173,7 +173,7 @@ Polling is the default and needs no public HTTP endpoint. To prefer WebSocket
 delivery, enable the `gateway` feature and select the default gateway:
 
 ```toml
-rappin-rs = { version = "0.2.0", features = ["gateway"] }
+rappin-rs = { version = "0.2.1", features = ["gateway"] }
 ```
 
 ```rust,no_run

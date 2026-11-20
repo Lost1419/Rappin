@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 — 2026-11-19
+
+Compatible with 0.2.0. Every addition is opt-in or a fix.
 
 - `Event::parse_data` decodes slash `command` events as `EventData::Interaction` with `kind` set to `"command"`, instead of `Unknown`.
 - `MessageContext::reply`, `reply_with` and the worker equivalents send once as a plain message when Yapin rejects the reply because the original message is gone. An explicit `reply_to` is never dropped.
