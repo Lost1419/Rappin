@@ -58,6 +58,27 @@ cargo audit
 cargo audit --no-fetch --file fuzz/Cargo.lock
 ```
 
+## Daily Yapin API watch
+
+`.github/workflows/yapin-api-watch.yml` runs every day at 19:00 UTC (12:00 MST) and on
+manual dispatch. It snapshots Yapin's public contract with `skills/yapin-api-audit`,
+then compares it with the previous day's snapshot (kept in the Actions cache) and with
+the bundled `docs/openapi.json`. The run summary lists both results. A live change, such
+as new spec entries, changed guide text, a new changelog entry, or a new API or SDK
+version, opens an issue titled "Yapin API contract changed", or comments on that issue
+if it's still open. A new build hash on its own doesn't count. The snapshot and the JSON
+reports are kept as a run artifact for 30 days.
+
+When the cache holds no previous snapshot (on the first run, or after GitHub evicts it),
+the run becomes the new baseline and only reports drift from the bundled spec.
+Pull requests that touch the watch run its offline tests and a live dry run. They never
+open issues or replace the cached baseline. The classification logic lives in
+`.github/scripts/yapin_api_watch.py`:
+
+```sh
+python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+```
+
 ## Offline randomized checks
 
 `tests/properties_test.rs` checks quoted argument round trips and UTF-8 offsets,
