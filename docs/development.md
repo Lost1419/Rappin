@@ -69,8 +69,12 @@ version, opens an issue titled "Yapin API contract changed", or comments on that
 if it's still open. A new build hash on its own doesn't count. The snapshot and the JSON
 reports are kept as a run artifact for 30 days.
 
-When the cache holds no previous snapshot (on the first run, or after GitHub evicts it),
-the run becomes the new baseline and only reports drift from the bundled spec.
+The new snapshot becomes the cached baseline only after any change notification has
+succeeded. If opening or commenting on the issue fails, the next run (or a re-run)
+reports the same change again instead of losing it. When the cache holds no previous
+snapshot (on the first run, or after GitHub evicts it), the run becomes the new baseline
+and only reports drift from the bundled spec. Specification extensions (`x-*`) are
+reported as structural changes but are never listed as operations.
 Pull requests that touch the watch run its offline tests and a live dry run. They never
 open issues or replace the cached baseline. The classification logic lives in
 `.github/scripts/yapin_api_watch.py`:

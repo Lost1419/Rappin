@@ -38,6 +38,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       changed: ${{ steps.check.outputs.changed }}
+      artifact: ${{ steps.artifact.outputs.name }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -48,13 +49,14 @@ jobs:
       - name: Offline watch tests
         run: python -B -m unittest discover -s .github/scripts -p 'test_*.py'
       # The previous snapshot lives in the Actions cache: each run restores the
-      # newest one and saves its own under a new key. PR runs never touch it.
+      # newest one, and the save-baseline job stores this run's snapshot only after
+      # any change notification succeeded. PR runs never touch it.
       - name: Restore the previous snapshot
         if: github.event_name != 'pull_request'
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ${{ env.PREVIOUS }}
-          key: yapin-api-snapshot-${{ github.run_id }}
+          key: yapin-api-snapshot-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: yapin-api-snapshot-
       - name: Snapshot the public contract
         run: python -B skills/yapin-api-audit/scripts/audit.py snapshot --out "$CURRENT" > /dev/null
@@ -65,22 +67,18 @@ jobs:
           --current "$CURRENT" --previous "$PREVIOUS" --bundled docs/openapi.json
           --out "$REPORT"
           --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+      # Named per attempt so "Re-run all jobs" uploads a fresh artifact, while
+      # "Re-run failed jobs" keeps this job's output and finds the original one.
+      - name: Name the report artifact
+        id: artifact
+        run: echo "name=yapin-api-watch-report-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: yapin-api-watch-report
+          name: ${{ steps.artifact.outputs.name }}
           path: |
             ${{ env.REPORT }}
             ${{ env.CURRENT }}
           retention-days: 30
-      - name: Make this snapshot the next baseline
-        if: github.event_name != 'pull_request'
-        run: rm -rf "$PREVIOUS" && mv "$CURRENT" "$PREVIOUS"
-      - name: Save the baseline
-        if: github.event_name != 'pull_request'
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
-        with:
-          path: ${{ env.PREVIOUS }}
-          key: yapin-api-snapshot-${{ github.run_id }}
 
   notify:
     name: Open or update the change issue
@@ -93,7 +91,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: yapin-api-watch-report
+          name: ${{ needs.check.outputs.artifact }}
           path: report
       - name: Comment on the open issue, or open one
         env:
@@ -109,3 +107,27 @@ jobs:
           else
             gh issue create --title "$TITLE" --body-file "$body"
           fi
+
+  # Advancing the baseline is the last step. If the notification failed, the old
+  # baseline stays, so the next run (or a re-run) reports the same change again
+  # instead of losing it. A failure here at worst repeats a notification.
+  save-baseline:
+    name: Save this snapshot as the next baseline
+    needs: [ check, notify ]
+    if: >-
+      ${{ !cancelled() && github.event_name != 'pull_request'
+      && needs.check.result == 'success'
+      && (needs.notify.result == 'success' || needs.notify.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: ${{ needs.check.outputs.artifact }}
+          path: yapin-watch
+      - name: Make this snapshot the next baseline
+        run: rm -rf "$PREVIOUS" && mv "$CURRENT" "$PREVIOUS" && test -f "$PREVIOUS/manifest.json"
+      - uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ env.PREVIOUS }}
+          key: yapin-api-snapshot-${{ github.run_id }}-${{ github.run_attempt }}
