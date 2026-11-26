@@ -220,14 +220,15 @@ def report(release_root, snapshot, reviews):
             if 'notes' in row:
                 row['notes'] = 'Unknown for this evidence selection; reassess before use.'
     operations = []
-    for path, definition in sorted(spec['paths'].items()):
+    for path, definition in sorted(audit.path_items(spec).items()):
         for method in sorted(audit.METHODS & definition.keys()):
             associated = [r['id'] for r in features if any(
                 op['path'] == path and op['method'].lower() == method for op in r.get('operations', []))]
             reviewed = next((r for r in operation_reviews if r['path'] == path
                              and r['method'].lower() == method), None)
             operation = {'path': path, 'method': method.upper(),
-                         'operation_id': definition[method].get('operationId'),
+                         'operation_id': definition[method].get('operationId')
+                         if isinstance(definition[method], dict) else None,
                          'status': 'unknown', 'reviewed_feature_ids': associated}
             if reviewed:
                 operation.update(reviewed)

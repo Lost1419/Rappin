@@ -38,6 +38,22 @@ class AuditTests(unittest.TestCase):
         self.assertEqual(report['changed_schemas'], ['Override'])
         self.assertEqual(report['changed_operations'][0]['coverage'], 'unassessed')
 
+    def test_paths_extensions_are_diffed_but_not_treated_as_operations(self):
+        newer = copy.deepcopy(self.spec)
+        newer['paths']['x-release'] = '2026-11'
+        newer['paths']['x-owners'] = ['bots']
+        newer['paths']['/messages']['x-internal'] = True
+        newer['paths']['/messages']['post']['description'] = 'changed'
+        report = audit.compare(self.file('before.json', self.spec), self.file('after.json', newer))
+        self.assertEqual({change['pointer'] for change in report['changes']}, {
+            '/paths/x-release', '/paths/x-owners', '/paths/~1messages/x-internal',
+            '/paths/~1messages/post/description'})
+        self.assertEqual([(row['path'], row['method']) for row in report['changed_operations']],
+                         [('/messages', 'POST')])
+        removed = audit.compare(self.file('newer.json', newer), self.file('older.json', self.spec))
+        self.assertEqual(len(removed['changes']), 4)
+        self.assertEqual(len(removed['changed_operations']), 1)
+
     def test_nested_types_order_additions_and_removals(self):
         self.assertTrue(audit.differences({'x': [True]}, {'x': [1]}))
         self.assertTrue(audit.differences({'x': [1]}, {'x': [1.0]}))

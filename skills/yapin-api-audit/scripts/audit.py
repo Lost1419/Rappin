@@ -163,6 +163,16 @@ def differences(old, new, path=''):
     return [change]
 
 
+def path_items(spec):
+    """Path Item Objects in a Paths Object, skipping `x-` specification extensions.
+
+    Extensions may hold any JSON value, so they are not operations. They still take
+    part in the structural diff, which reports every member of the document.
+    """
+    return {path: item for path, item in spec['paths'].items()
+            if not path.startswith('x-') and isinstance(item, dict)}
+
+
 def compare(baseline, current):
     old, old_evidence, old_provenance = load(baseline)
     new, new_evidence, new_provenance = load(current)
@@ -171,13 +181,16 @@ def compare(baseline, current):
         raise ValueError('both inputs must be OpenAPI documents')
     changes = differences(old, new)
     operations = []
-    for path in sorted(old['paths'].keys() | new['paths'].keys()):
-        before, after = old['paths'].get(path, {}), new['paths'].get(path, {})
+    old_items, new_items = path_items(old), path_items(new)
+    for path in sorted(old_items.keys() | new_items.keys()):
+        before, after = old_items.get(path, {}), new_items.get(path, {})
         for method in sorted(METHODS & (before.keys() | after.keys())):
             a, b = before.get(method, MISSING), after.get(method, MISSING)
             if differences(a, b):
+                operation = b if b is not MISSING else a
                 operations.append({'path': path, 'method': method.upper(),
-                                   'operation_id': (b if b is not MISSING else a).get('operationId'),
+                                   'operation_id': operation.get('operationId')
+                                   if isinstance(operation, dict) else None,
                                    'coverage': 'unassessed'})
     old_schemas = old.get('components', {}).get('schemas', {})
     new_schemas = new.get('components', {}).get('schemas', {})
