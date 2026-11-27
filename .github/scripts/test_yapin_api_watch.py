@@ -80,6 +80,48 @@ class WatchTests(unittest.TestCase):
         self.assertIn('Live contract changed', issue)
         self.assertIn('/paths/~1messages/post/description', issue)
 
+    def promote(self, candidate, baseline):
+        outputs = self.root / 'promote-output'
+        outputs.write_text('')
+        argv = ['promote', '--candidate', str(candidate), '--baseline', str(baseline)]
+        with patch.dict(os.environ, {'GITHUB_OUTPUT': str(outputs), 'GITHUB_STEP_SUMMARY': ''}):
+            self.assertEqual(watch.main(argv), 0)
+        return outputs.read_text()
+
+    def baseline_time(self, path):
+        return watch.fetched_at(path)
+
+    def test_rerun_of_an_older_run_never_replaces_a_newer_baseline(self):
+        # Cache holds C (2026-11-28); a late re-run of the 2026-11-27 run offers B.
+        baseline = self.root / 'baseline'
+        self.snapshot('2026-11-28', build='ccc').rename(baseline)
+        older = self.snapshot('2026-11-27', build='bbb')
+        self.assertEqual(self.promote(older, baseline), 'promoted=false\n')
+        self.assertEqual(self.baseline_time(baseline), '2026-11-28T19:00:00+00:00')
+        self.assertTrue(older.exists())
+
+    def test_newer_or_first_snapshot_becomes_the_baseline(self):
+        baseline = self.root / 'baseline'
+        first = self.snapshot('2026-11-26')
+        self.assertEqual(self.promote(first, baseline), 'promoted=true\n')
+        self.assertEqual(self.baseline_time(baseline), '2026-11-26T19:00:00+00:00')
+        newer = self.snapshot('2026-11-27')
+        self.assertEqual(self.promote(newer, baseline), 'promoted=true\n')
+        self.assertEqual(self.baseline_time(baseline), '2026-11-27T19:00:00+00:00')
+        self.assertFalse(newer.exists())
+
+    def test_same_time_is_not_promoted_and_untimed_snapshots_are_refused(self):
+        baseline = self.root / 'baseline'
+        self.snapshot('2026-11-27').rename(baseline)
+        same = self.snapshot('2026-11-27-copy')
+        (same / 'manifest.json').write_text((baseline / 'manifest.json').read_text())
+        self.assertEqual(self.promote(same, baseline), 'promoted=false\n')
+        untimed = self.snapshot('untimed')
+        (untimed / 'manifest.json').write_text('{"sources": {}}')
+        with self.assertRaises(ValueError):
+            watch.promote(untimed, baseline)
+        self.assertEqual(self.baseline_time(baseline), '2026-11-27T19:00:00+00:00')
+
     def test_long_entry_lists_are_truncated(self):
         items = [f'changed /p/{n}' for n in range(watch.LIST_LIMIT + 5)]
         lines = watch.bullet_list(items)

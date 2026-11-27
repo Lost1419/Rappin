@@ -71,7 +71,9 @@ reports are kept as a run artifact for 30 days.
 
 The new snapshot becomes the cached baseline only after any change notification has
 succeeded. If opening or commenting on the issue fails, the next run (or a re-run)
-reports the same change again instead of losing it. When the cache holds no previous
+reports the same change again instead of losing it. The baseline also only moves
+forward in time: a late re-run of an older run leaves a newer cached snapshot in place.
+When the cache holds no previous
 snapshot (on the first run, or after GitHub evicts it), the run becomes the new baseline
 and only reports drift from the bundled spec. Specification extensions (`x-*`) are
 reported as structural changes but are never listed as operations.
